@@ -1,0 +1,27 @@
+---
+description: Keep AGENTS.md updated when making structural or architectural changes
+alwaysApply: true
+---
+
+# AGENTS.md Maintenance
+
+Read `AGENTS.md` at the repo root before making non-trivial changes. It is the source of truth for project structure, conventions, and what is mocked vs real.
+
+## You MUST update AGENTS.md in the same commit when you:
+
+- Add a route group, major route, or restructure `app/`
+- Add a top-level folder or new `lib/` subdirectory
+- Change auth, session handling, or `proxy.ts`
+- Add or modify DB schema, RLS, or migrations
+- Add a new external service or environment variable
+- Change project conventions (naming, server/client patterns)
+- Wire a previously mocked feature to real data (update the mocked-vs-real matrix)
+- Add a new server action domain or shadcn component category
+
+## You do NOT need to update AGENTS.md for:
+
+Bug fixes, styling tweaks, copy changes, or refactors that preserve existing structure.
+
+## How to update
+
+Edit the relevant section in `AGENTS.md` in place. Remove stale info. Do not append changelogs.
