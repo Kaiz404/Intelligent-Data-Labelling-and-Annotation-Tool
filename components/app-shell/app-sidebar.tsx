@@ -27,8 +27,10 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { navSections } from "@/lib/nav";
+import { cn } from "@/lib/utils";
 
 type AppSidebarProps = {
   userEmail?: string | null;
@@ -37,6 +39,43 @@ type AppSidebarProps = {
 function getInitials(email: string) {
   const local = email.split("@")[0] ?? "";
   return local.slice(0, 2).toUpperCase() || "U";
+}
+
+function SidebarBrand() {
+  const { state } = useSidebar();
+  const isCollapsed = state === "collapsed";
+
+  return (
+    <Link
+      href="/dashboard"
+      aria-label="SmartAnnoTool"
+      className="flex flex-col items-center py-2.5 px-2.5"
+    >
+      <div className="relative shrink-0" aria-hidden="true">
+        <div
+          className="flex h-9 w-12 items-center justify-center rounded-sm border border-dashed border-muted-foreground/40 bg-background"
+        >
+          <span className="text-[10px] font-bold leading-none tracking-[0.22em] text-foreground">
+            S A T
+          </span>
+        </div>
+        <MousePointer2
+          className="absolute -bottom-2 -right-2 size-4 fill-background text-muted-foreground"
+          strokeWidth={1.5}
+        />
+      </div>
+      <span
+        className={cn(
+          "overflow-hidden whitespace-nowrap text-base font-bold text-primary transition-all duration-200 ease-linear",
+          isCollapsed
+            ? "mt-0 max-h-0 opacity-0 -translate-y-1"
+            : "mt-2 max-h-10 opacity-100 translate-y-0"
+        )}
+      >
+        SmartAnnoTool
+      </span>
+    </Link>
+  );
 }
 
 export function AppSidebar({ userEmail }: AppSidebarProps) {
@@ -48,23 +87,7 @@ export function AppSidebar({ userEmail }: AppSidebarProps) {
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader className="border-b border-sidebar-border">
-        <Link
-          href="/dashboard"
-          className="flex items-center gap-3 px-2 py-1 group-data-[collapsible=icon]:justify-center"
-        >
-          <div
-            className="flex size-10 shrink-0 flex-col items-center justify-center rounded-md border border-dashed border-primary/40 bg-primary/5 text-[9px] font-bold leading-tight text-primary"
-            aria-hidden="true"
-          >
-            <span>S</span>
-            <span>A</span>
-            <span>T</span>
-            <MousePointer2 className="mt-0.5 size-3" />
-          </div>
-          <span className="text-lg font-bold text-primary group-data-[collapsible=icon]:hidden">
-            SmartAnnoTool
-          </span>
-        </Link>
+        <SidebarBrand />
       </SidebarHeader>
 
       <SidebarContent>

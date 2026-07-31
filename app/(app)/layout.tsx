@@ -18,7 +18,7 @@ async function AppSidebarWithUser() {
 
 function SidebarFallback() {
   return (
-    <div className="hidden w-64 border-r p-4 md:block">
+    <div className="hidden w-64 border-r bg-sidebar p-4 md:block">
       <Skeleton className="h-10 w-full" />
       <Skeleton className="mt-6 h-40 w-full" />
     </div>
@@ -36,7 +36,7 @@ export default function AppLayout({
         <Suspense fallback={<SidebarFallback />}>
           <AppSidebarWithUser />
         </Suspense>
-        <SidebarInset className="flex flex-col bg-muted">{children}</SidebarInset>
+        <SidebarInset className="flex flex-col">{children}</SidebarInset>
       </SidebarProvider>
     </TooltipProvider>
   );
