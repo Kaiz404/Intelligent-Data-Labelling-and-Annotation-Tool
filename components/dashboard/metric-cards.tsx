@@ -22,7 +22,7 @@ export function MetricCards() {
         const Icon = metricIcons[metric.id];
 
         return (
-          <Card key={metric.id} className="shadow-sm">
+          <Card key={metric.id}>
             <CardContent className="p-5">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Icon

@@ -27,7 +27,7 @@ export function RecentProjectsTable({ projects }: RecentProjectsTableProps) {
 
   return (
     <>
-      <Card className="shadow-sm">
+      <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
           <CardTitle className="text-lg font-semibold">Recent Projects</CardTitle>
           <Button

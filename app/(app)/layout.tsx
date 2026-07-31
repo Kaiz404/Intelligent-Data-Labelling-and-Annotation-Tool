@@ -36,7 +36,7 @@ export default function AppLayout({
         <Suspense fallback={<SidebarFallback />}>
           <AppSidebarWithUser />
         </Suspense>
-        <SidebarInset className="flex flex-col">{children}</SidebarInset>
+        <SidebarInset className="flex flex-col bg-muted">{children}</SidebarInset>
       </SidebarProvider>
     </TooltipProvider>
   );
