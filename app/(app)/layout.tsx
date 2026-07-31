@@ -1,32 +1,43 @@
-import { AuthButton } from "@/components/auth-button";
-import { ThemeSwitcher } from "@/components/theme-switcher";
-import Link from "next/link";
 import { Suspense } from "react";
+import { connection } from "next/server";
+import { AppSidebar } from "@/components/app-shell/app-sidebar";
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { Skeleton } from "@/components/ui/skeleton";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { createClient } from "@/lib/supabase/server";
 
-export default function AppLayout({ children }: { children: React.ReactNode }) {
+async function AppSidebarWithUser() {
+  await connection();
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  return <AppSidebar userEmail={user?.email} />;
+}
+
+function SidebarFallback() {
   return (
-    <main className="min-h-screen flex flex-col">
-      <nav className="w-full border-b border-b-foreground/10">
-        <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-5 text-sm">
-          <div className="flex items-center gap-6 font-medium">
-            <Link href="/dashboard">Annotate</Link>
-            <Link
-              href="/projects"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              Projects
-            </Link>
-          </div>
-          <div className="flex items-center gap-4">
-            <ThemeSwitcher />
-            <Suspense>
-              <AuthButton />
-            </Suspense>
-          </div>
-        </div>
-      </nav>
+    <div className="hidden w-64 border-r p-4 md:block">
+      <Skeleton className="h-10 w-full" />
+      <Skeleton className="mt-6 h-40 w-full" />
+    </div>
+  );
+}
 
-      <div className="mx-auto w-full max-w-5xl flex-1 p-5">{children}</div>
-    </main>
+export default function AppLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <TooltipProvider>
+      <SidebarProvider>
+        <Suspense fallback={<SidebarFallback />}>
+          <AppSidebarWithUser />
+        </Suspense>
+        <SidebarInset className="flex flex-col">{children}</SidebarInset>
+      </SidebarProvider>
+    </TooltipProvider>
   );
 }
