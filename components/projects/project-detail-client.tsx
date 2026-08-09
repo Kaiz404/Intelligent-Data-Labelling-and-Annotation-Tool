@@ -248,7 +248,11 @@ export function ProjectDetailClient({
         </div>
       )}
 
-      <UploadImagesDialog open={isUploadOpen} onOpenChange={setIsUploadOpen} />
+      <UploadImagesDialog
+        open={isUploadOpen}
+        onOpenChange={setIsUploadOpen}
+        projectId={project.id}
+      />
     </div>
   );
 }

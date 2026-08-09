@@ -76,12 +76,13 @@ data_annotation_tool/
 │   ├── auth/               # Auth-specific shared UI
 │   ├── dashboard/          # Dashboard widgets
 │   └── projects/           # Project browser, detail, upload, etc.
-├── hooks/                  # Shared React hooks (e.g. use-mobile)
+├── hooks/                  # Shared React hooks (use-mobile, use-upload-queue)
 ├── lib/
 │   ├── actions/            # Server actions ("use server")
 │   ├── mock/               # Hardcoded / placeholder data
 │   ├── supabase/           # client.ts, server.ts, proxy.ts
 │   ├── types/              # Manual TypeScript types (not Supabase codegen)
+│   ├── uploads/            # Chunked upload provider (mock now; S3 stub for handoff)
 │   ├── format.ts           # Formatting helpers
 │   ├── nav.ts              # Sidebar navigation config
 │   ├── unsplash.ts         # Unsplash API for sample images
@@ -104,6 +105,7 @@ data_annotation_tool/
 | Server mutation / form handler | `lib/actions/<domain>.ts` |
 | Shared types | `lib/types/<domain>.ts` |
 | Placeholder data | `lib/mock/<name>.ts` — remove when wired to real data |
+| Upload provider / chunking | `lib/uploads/` — keep UI on `UploadProvider` interface |
 | Supabase client usage (browser) | `createClient()` from `lib/supabase/client.ts` |
 | Supabase client usage (server) | `createClient()` from `lib/supabase/server.ts` |
 | Sidebar nav item | `lib/nav.ts` |
@@ -196,7 +198,7 @@ Manual types in `lib/types/projects.ts`. **No Supabase codegen** (`database.type
 | Projects list / create / star | **Real** | Supabase `projects` table + `lib/actions/projects.ts` |
 | Project detail — metadata | **Real** | Supabase `projects` |
 | Project detail — images | **Mock** | Unsplash API (`lib/unsplash.ts`) + `lib/mock/image-metadata.ts` |
-| Upload images dialog | **Mock** | `lib/mock/image-metadata.ts` (`MOCK_UPLOAD_FILES`) |
+| Upload images dialog | **Mock (S3-ready)** | UI + queue in `components/projects/upload-images-dialog.tsx` + `hooks/use-upload-queue.ts`; provider = `createMockUploader()` via `lib/uploads/uploader.ts`. Swap to `createS3Uploader()` when AWS is wired — see handoff notes in `lib/uploads/s3-uploader.ts` |
 | Dashboard metrics (total/annotated/unannotated) | **Mock** | `lib/mock/dashboard-metrics.ts` |
 | Sidebar storage widget ("10 GB / 100 GB") | **Mock** | Hardcoded in `app-sidebar.tsx` |
 | Nav: Datasets, Annotate, Recent Files, Starred, Recycle Bin, Settings, Get Help | **Placeholder** | `disabled: true` in `lib/nav.ts` |
@@ -286,6 +288,24 @@ Current actions: `lib/actions/projects.ts`
 4. Call `revalidatePath()` for affected routes
 5. Use `redirect()` or return data — throw `Error` on failure
 6. Document the action in this section
+
+---
+
+## Uploads (chunked / S3 handoff)
+
+Bulk image upload is designed for **direct-to-S3 multipart**, not proxying bytes through Next.js.
+
+| Piece | Role |
+|-------|------|
+| `components/projects/upload-images-dialog.tsx` | Figma-aligned modal UI |
+| `hooks/use-upload-queue.ts` | Queue, concurrency, pause/retry/cancel |
+| `lib/uploads/types.ts` | `UploadProvider` + queue item fields (`uploadId`, `key`, `completedParts`) |
+| `lib/uploads/chunk.ts` | Byte-range splitting (`splitFileIntoChunks`, `sliceChunk`) |
+| `lib/uploads/mock-uploader.ts` | Dev simulation of chunked progress |
+| `lib/uploads/s3-uploader.ts` | **Stub + implementation checklist** for the AWS teammate |
+| `lib/uploads/uploader.ts` | `createUploadProvider()` — flip mock → S3 here |
+
+**To wire S3 later:** implement `createS3Uploader()` per comments in `s3-uploader.ts`, then change `createUploadProvider()` to return it. Add server routes for create / presign-parts / complete / abort multipart. Do not put AWS secrets in `NEXT_PUBLIC_*`.
 
 ---
 

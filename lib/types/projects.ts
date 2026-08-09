@@ -20,8 +20,15 @@ export type ProjectImage = {
   thumbnailUrl: string | null;
 };
 
-export type UploadStatus = "Uploading" | "Completed" | "Failed";
+/** @deprecated Prefer `UploadStatus` / `UploadQueueItem` from `@/lib/uploads/types`. */
+export type UploadStatus =
+  | "Queued"
+  | "Uploading"
+  | "Paused"
+  | "Completed"
+  | "Failed";
 
+/** @deprecated Prefer `UploadQueueItem` from `@/lib/uploads/types`. */
 export type UploadFile = {
   id: string;
   fileName: string;

@@ -1,4 +1,5 @@
 import type { ImageStatus, ProjectImage } from "@/lib/types/projects";
+import type { UploadQueueItem } from "@/lib/uploads/types";
 
 const statusPattern: ImageStatus[] = [
   "In Progress",
@@ -42,47 +43,57 @@ export function buildProjectImages(
   });
 }
 
-export const MOCK_UPLOAD_FILES = [
+import type { UploadQueueItem } from "@/lib/uploads/types";
+
+/** Demo seed for the upload modal (no File handles — re-add files to actually upload). */
+export const MOCK_UPLOAD_FILES: UploadQueueItem[] = [
   {
     id: "upload-1",
     fileName: "street_0001.jpg",
-    sizeMb: 2.4,
-    status: "Uploading" as const,
+    sizeBytes: 2.4 * 1024 * 1024,
+    mimeType: "image/jpeg",
+    status: "Uploading",
     progress: 64,
   },
   {
     id: "upload-2",
     fileName: "street_0002.jpg",
-    sizeMb: 1.8,
-    status: "Completed" as const,
+    sizeBytes: 1.8 * 1024 * 1024,
+    mimeType: "image/jpeg",
+    status: "Completed",
     progress: 100,
   },
   {
     id: "upload-3",
     fileName: "street_0003.jpg",
-    sizeMb: 4.9,
-    status: "Uploading" as const,
+    sizeBytes: 4.9 * 1024 * 1024,
+    mimeType: "image/jpeg",
+    status: "Uploading",
     progress: 80,
   },
   {
     id: "upload-4",
     fileName: "street_0004.jpg",
-    sizeMb: 6.1,
-    status: "Failed" as const,
+    sizeBytes: 6.1 * 1024 * 1024,
+    mimeType: "image/jpeg",
+    status: "Failed",
     progress: 18,
+    error: "Simulated chunk upload failure",
   },
   {
     id: "upload-5",
     fileName: "street_0005.jpg",
-    sizeMb: 3.6,
-    status: "Completed" as const,
+    sizeBytes: 3.6 * 1024 * 1024,
+    mimeType: "image/jpeg",
+    status: "Completed",
     progress: 100,
   },
   {
     id: "upload-6",
     fileName: "street_0006.jpg",
-    sizeMb: 12,
-    status: "Uploading" as const,
+    sizeBytes: 12 * 1024 * 1024,
+    mimeType: "image/jpeg",
+    status: "Uploading",
     progress: 90,
   },
 ];
