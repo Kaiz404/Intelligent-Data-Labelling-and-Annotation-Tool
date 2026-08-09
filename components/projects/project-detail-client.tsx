@@ -240,6 +240,7 @@ export function ProjectDetailClient({
             <ImageCard
               key={image.id}
               image={image}
+              projectId={project.id}
               isSelected={selectedImageIds.includes(image.id)}
               onSelectionChange={handleSelectionChange}
               unsplashError={unsplashError}

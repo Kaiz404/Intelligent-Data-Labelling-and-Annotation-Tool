@@ -18,6 +18,8 @@ export type ProjectImage = {
   status: ImageStatus;
   progress: number;
   thumbnailUrl: string | null;
+  /** Higher-res URL for the annotation canvas when available. */
+  imageUrl: string | null;
 };
 
 /** @deprecated Prefer `UploadStatus` / `UploadQueueItem` from `@/lib/uploads/types`. */

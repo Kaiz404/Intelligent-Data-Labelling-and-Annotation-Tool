@@ -36,7 +36,7 @@ Image annotation workspace for managing projects and annotating image datasets.
 - Root layout metadata title: **"Annotate"**
 - Sidebar brand label: **"SmartAnnoTool"** (SAT logo)
 
-**Product status:** UI is ahead of backend integration. Projects and auth are wired to Supabase; images, uploads, dashboard metrics, and several nav items are still mocked or placeholder.
+**Product status:** UI is ahead of backend integration. Projects and auth are wired to Supabase; images, annotation boxes, uploads, dashboard metrics, and several nav items are still mocked or placeholder.
 
 ---
 
@@ -47,6 +47,7 @@ Image annotation workspace for managing projects and annotating image datasets.
 | Framework | Next.js 16 (App Router) | `cacheComponents: true` in `next.config.ts` |
 | Runtime | React 19, TypeScript 5 | Strict mode, `@/*` path alias |
 | Auth + DB | Supabase (`@supabase/ssr`, `@supabase/supabase-js`) | Cookie-based sessions |
+| Annotation canvas | `konva` + `react-konva` | Bounding boxes; canvas is client-only (`dynamic(..., { ssr: false })`) |
 | Styling | Tailwind CSS v4 | CSS-first config in `app/globals.css` — **no `tailwind.config.*`** |
 | Components | shadcn/ui (New York style) | Radix primitives, `lucide-react` icons |
 | Theming | `next-themes` | Light / dark / system via `ThemeProvider` in root layout |
@@ -65,6 +66,7 @@ data_annotation_tool/
 │   │   ├── dashboard/
 │   │   ├── projects/
 │   │   │   └── [id]/
+│   │   │       └── annotate/[imageId]/
 │   │   └── layout.tsx
 │   ├── auth/               # Auth pages + route handlers
 │   ├── globals.css         # Tailwind v4 + design tokens
@@ -73,12 +75,14 @@ data_annotation_tool/
 ├── components/
 │   ├── ui/                 # shadcn primitives — do not put feature logic here
 │   ├── app-shell/          # Sidebar, header
+│   ├── annotate/           # Annotation workspace (toolbar, Konva canvas, side panel)
 │   ├── auth/               # Auth-specific shared UI
 │   ├── dashboard/          # Dashboard widgets
 │   └── projects/           # Project browser, detail, upload, etc.
 ├── hooks/                  # Shared React hooks (use-mobile, use-upload-queue)
 ├── lib/
 │   ├── actions/            # Server actions ("use server")
+│   ├── annotations/        # Client annotation persistence helpers (sessionStorage)
 │   ├── mock/               # Hardcoded / placeholder data
 │   ├── supabase/           # client.ts, server.ts, proxy.ts
 │   ├── types/              # Manual TypeScript types (not Supabase codegen)
@@ -120,6 +124,7 @@ data_annotation_tool/
 | `/dashboard` | `app/(app)/dashboard/page.tsx` | Yes |
 | `/projects` | `app/(app)/projects/page.tsx` | Yes |
 | `/projects/[id]` | `app/(app)/projects/[id]/page.tsx` | Yes |
+| `/projects/[id]/annotate/[imageId]` | `app/(app)/projects/[id]/annotate/[imageId]/page.tsx` | Yes |
 | `/auth/login` | `app/auth/login/page.tsx` | No |
 | `/auth/sign-up` | `app/auth/sign-up/page.tsx` | No |
 | `/auth/sign-up-success` | `app/auth/sign-up-success/page.tsx` | No |
@@ -177,7 +182,7 @@ Request → proxy.ts → lib/supabase/proxy.ts (updateSession)
 
 ### Types
 
-Manual types in `lib/types/projects.ts`. **No Supabase codegen** (`database.types.ts` does not exist). When schema stabilizes, consider adding `supabase gen types`.
+Manual types in `lib/types/projects.ts` and `lib/types/annotations.ts` (`BoundingBox`, `AnnotationLabel`). **No Supabase codegen** (`database.types.ts` does not exist). When schema stabilizes, consider adding `supabase gen types`.
 
 ### Supabase folder is gitignored
 
@@ -198,10 +203,13 @@ Manual types in `lib/types/projects.ts`. **No Supabase codegen** (`database.type
 | Projects list / create / star | **Real** | Supabase `projects` table + `lib/actions/projects.ts` |
 | Project detail — metadata | **Real** | Supabase `projects` |
 | Project detail — images | **Mock** | Unsplash API (`lib/unsplash.ts`) + `lib/mock/image-metadata.ts` |
+| Annotation workspace UI + bbox editor | **Mock** | `components/annotate/` + `konva`/`react-konva`; boxes in React state + `sessionStorage` (`lib/annotations/storage.ts`); labels from `lib/mock/annotation-labels.ts` |
+| AI Annotate | **Placeholder** | Toolbar button stub (“Coming soon”) |
 | Upload images dialog | **Mock (S3-ready)** | UI + queue in `components/projects/upload-images-dialog.tsx` + `hooks/use-upload-queue.ts`; provider = `createMockUploader()` via `lib/uploads/uploader.ts`. Swap to `createS3Uploader()` when AWS is wired — see handoff notes in `lib/uploads/s3-uploader.ts` |
 | Dashboard metrics (total/annotated/unannotated) | **Mock** | `lib/mock/dashboard-metrics.ts` |
 | Sidebar storage widget ("10 GB / 100 GB") | **Mock** | Hardcoded in `app-sidebar.tsx` |
-| Nav: Datasets, Annotate, Recent Files, Starred, Recycle Bin, Settings, Get Help | **Placeholder** | `disabled: true` in `lib/nav.ts` |
+| Nav: Datasets, Recent Files, Starred, Recycle Bin, Settings, Get Help | **Placeholder** | `disabled: true` in `lib/nav.ts` |
+| Nav: Annotate | **Enabled (entry hub)** | Links to `/projects`; open a project image to reach `/projects/[id]/annotate/[imageId]` |
 
 ---
 

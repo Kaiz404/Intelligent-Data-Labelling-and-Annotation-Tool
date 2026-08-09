@@ -26,10 +26,12 @@ export function buildProjectImages(
   return Array.from({ length: count }, (_, index) => {
     const status = statusPattern[index % statusPattern.length];
     const photo = photos[index];
-    const thumbnailUrl =
-      unsplashError
-        ? null
-        : (photo?.urls?.small ?? photo?.urls?.regular ?? null);
+    const thumbnailUrl = unsplashError
+      ? null
+      : (photo?.urls?.small ?? photo?.urls?.regular ?? null);
+    const imageUrl = unsplashError
+      ? null
+      : (photo?.urls?.regular ?? photo?.urls?.small ?? null);
 
     return {
       id: `image-${index + 1}`,
@@ -39,11 +41,10 @@ export function buildProjectImages(
       status,
       progress: statusProgress[status],
       thumbnailUrl,
+      imageUrl,
     };
   });
 }
-
-import type { UploadQueueItem } from "@/lib/uploads/types";
 
 /** Demo seed for the upload modal (no File handles — re-add files to actually upload). */
 export const MOCK_UPLOAD_FILES: UploadQueueItem[] = [

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { MoreHorizontal } from "lucide-react";
 import { formatFileSize } from "@/lib/format";
 import type { ImageStatus, ProjectImage } from "@/lib/types/projects";
@@ -11,6 +12,7 @@ import { cn } from "@/lib/utils";
 
 type ImageCardProps = {
   image: ProjectImage;
+  projectId: string;
   isSelected: boolean;
   onSelectionChange: (imageId: string, isSelected: boolean) => void;
   unsplashError?: string | null;
@@ -26,26 +28,35 @@ function statusClass(status: ImageStatus) {
 
 export function ImageCard({
   image,
+  projectId,
   isSelected,
   onSelectionChange,
   unsplashError,
 }: ImageCardProps) {
+  const annotateHref = `/projects/${projectId}/annotate/${image.id}`;
+
   return (
     <Card className="overflow-hidden shadow-sm">
       <div className="relative aspect-[4/3] bg-muted">
-        {image.thumbnailUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={image.thumbnailUrl}
-            alt={image.fileName}
-            className="size-full object-cover"
-          />
-        ) : (
-          <div className="flex size-full items-center justify-center text-xs text-muted-foreground">
-            {unsplashError ? "No preview" : "Loading..."}
-          </div>
-        )}
-        <div className="absolute left-2 top-2">
+        <Link
+          href={annotateHref}
+          className="absolute inset-0 z-0"
+          aria-label={`Annotate ${image.fileName}`}
+        >
+          {image.thumbnailUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={image.thumbnailUrl}
+              alt={image.fileName}
+              className="size-full object-cover"
+            />
+          ) : (
+            <div className="flex size-full items-center justify-center text-xs text-muted-foreground">
+              {unsplashError ? "No preview" : "Loading..."}
+            </div>
+          )}
+        </Link>
+        <div className="absolute left-2 top-2 z-10">
           <Checkbox
             checked={isSelected}
             onCheckedChange={(checked) =>
@@ -59,14 +70,19 @@ export function ImageCard({
           type="button"
           variant="ghost"
           size="icon"
-          className="absolute right-2 top-2 size-8 bg-background/80"
+          className="absolute right-2 top-2 z-10 size-8 bg-background/80"
           aria-label={`Menu for ${image.fileName}`}
         >
           <MoreHorizontal className="size-4" />
         </Button>
       </div>
       <CardContent className="space-y-2 p-3">
-        <p className="truncate text-sm font-medium">{image.fileName}</p>
+        <Link
+          href={annotateHref}
+          className="block truncate text-sm font-medium hover:underline"
+        >
+          {image.fileName}
+        </Link>
         <Badge
           variant="outline"
           className={cn("text-xs", statusClass(image.status))}

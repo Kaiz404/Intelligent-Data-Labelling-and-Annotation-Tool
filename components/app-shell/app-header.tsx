@@ -18,7 +18,32 @@ type BreadcrumbSegment = {
   href?: string;
 };
 
-function buildBreadcrumbs(pathname: string): BreadcrumbSegment[] {
+type AppHeaderProps = {
+  projectName?: string;
+  projectId?: string;
+  fileName?: string;
+  segments?: BreadcrumbSegment[];
+};
+
+function buildBreadcrumbs(
+  pathname: string,
+  options: {
+    projectName?: string;
+    projectId?: string;
+    fileName?: string;
+  },
+): BreadcrumbSegment[] {
+  if (options.projectName && options.fileName && options.projectId) {
+    return [
+      { label: "Projects", href: "/projects" },
+      {
+        label: options.projectName,
+        href: `/projects/${options.projectId}`,
+      },
+      { label: options.fileName },
+    ];
+  }
+
   if (pathname === "/dashboard") {
     return [{ label: "Dashboard" }];
   }
@@ -27,24 +52,41 @@ function buildBreadcrumbs(pathname: string): BreadcrumbSegment[] {
     return [{ label: "Projects" }];
   }
 
+  const annotateMatch = pathname.match(
+    /^\/projects\/([^/]+)\/annotate\/([^/]+)$/,
+  );
+  if (annotateMatch) {
+    return [
+      { label: "Projects", href: "/projects" },
+      {
+        label: options.projectName ?? "Project",
+        href: `/projects/${annotateMatch[1]}`,
+      },
+      { label: options.fileName ?? "Image" },
+    ];
+  }
+
   const projectMatch = pathname.match(/^\/projects\/([^/]+)$/);
   if (projectMatch) {
     return [
       { label: "Projects", href: "/projects" },
-      { label: "Project" },
+      { label: options.projectName ?? "Project" },
     ];
   }
 
   return [{ label: "Dashboard", href: "/dashboard" }];
 }
 
-export function AppHeader({ projectName }: { projectName?: string }) {
+export function AppHeader({
+  projectName,
+  projectId,
+  fileName,
+  segments: segmentsProp,
+}: AppHeaderProps) {
   const pathname = usePathname();
-  const segments = buildBreadcrumbs(pathname);
-
-  if (projectName && segments.length > 1) {
-    segments[segments.length - 1] = { label: projectName };
-  }
+  const segments =
+    segmentsProp ??
+    buildBreadcrumbs(pathname, { projectName, projectId, fileName });
 
   return (
     <header className="flex h-14 shrink-0 items-center gap-2 border-b bg-card px-4">

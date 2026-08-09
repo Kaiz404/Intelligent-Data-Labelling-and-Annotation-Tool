@@ -37,9 +37,8 @@ export const navSections: NavSection[] = [
       },
       {
         label: "Annotate",
-        href: "#",
+        href: "/projects",
         icon: Route,
-        disabled: true,
       },
     ],
   },

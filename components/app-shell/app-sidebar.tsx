@@ -99,9 +99,15 @@ export function AppSidebar({ userEmail }: AppSidebarProps) {
                 {section.items.map((item) => {
                   const isActive =
                     !item.disabled &&
-                    (item.href === "/dashboard"
-                      ? pathname === "/dashboard"
-                      : pathname.startsWith(item.href));
+                    (item.label === "Annotate"
+                      ? pathname.includes("/annotate/")
+                      : item.href === "/dashboard"
+                        ? pathname === "/dashboard"
+                        : item.href === "/projects"
+                          ? (pathname === "/projects" ||
+                              /^\/projects\/[^/]+$/.test(pathname)) &&
+                            !pathname.includes("/annotate/")
+                          : pathname.startsWith(item.href));
 
                   return (
                     <SidebarMenuItem key={item.label}>
