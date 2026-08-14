@@ -69,6 +69,7 @@ data_annotation_tool/
 │   │   │       └── annotate/[imageId]/
 │   │   └── layout.tsx
 │   ├── auth/               # Auth pages + route handlers
+│   ├── api/uploads/        # Authenticated S3 multipart orchestration routes
 │   ├── globals.css         # Tailwind v4 + design tokens
 │   ├── layout.tsx          # Root layout (font, theme)
 │   └── page.tsx            # Public landing page
@@ -133,6 +134,10 @@ data_annotation_tool/
 | `/auth/error` | `app/auth/error/page.tsx` | No |
 | `/auth/confirm` | `app/auth/confirm/route.ts` | Route handler (OTP verify) |
 | `/auth/oauth` | `app/auth/oauth/route.ts` | Route handler (OAuth exchange) |
+| `/api/uploads/create` | `app/api/uploads/create/route.ts` | Route handler (start S3 multipart upload) |
+| `/api/uploads/presign-parts` | `app/api/uploads/presign-parts/route.ts` | Route handler (issue presigned S3 part URLs) |
+| `/api/uploads/complete` | `app/api/uploads/complete/route.ts` | Route handler (complete S3 multipart upload) |
+| `/api/uploads/abort` | `app/api/uploads/abort/route.ts` | Route handler (abort S3 multipart upload) |
 
 **Route group `(app)`:** Wraps dashboard and projects in the sidebar shell (`app/(app)/layout.tsx`). URLs are `/dashboard`, `/projects` — the group name is omitted from the path.
 
@@ -205,7 +210,7 @@ Manual types in `lib/types/projects.ts` and `lib/types/annotations.ts` (`Boundin
 | Project detail — images | **Mock** | Unsplash API (`lib/unsplash.ts`) + `lib/mock/image-metadata.ts` |
 | Annotation workspace UI + bbox editor | **Mock** | `components/annotate/` + `konva`/`react-konva`; boxes in React state + `sessionStorage` (`lib/annotations/storage.ts`); labels from `lib/mock/annotation-labels.ts` |
 | AI Annotate | **Placeholder** | Toolbar button stub (“Coming soon”) |
-| Upload images dialog | **Mock (S3-ready)** | UI + queue in `components/projects/upload-images-dialog.tsx` + `hooks/use-upload-queue.ts`; provider = `createMockUploader()` via `lib/uploads/uploader.ts`. Swap to `createS3Uploader()` when AWS is wired — see handoff notes in `lib/uploads/s3-uploader.ts` |
+| Upload images dialog | **Mock client / S3 API ready** | UI + queue in `components/projects/upload-images-dialog.tsx` + `hooks/use-upload-queue.ts`; provider still uses `createMockUploader()` via `lib/uploads/uploader.ts`. Authenticated S3 lifecycle routes exist under `app/api/uploads/`; wire `createS3Uploader()` to use them. |
 | Dashboard metrics (total/annotated/unannotated) | **Mock** | `lib/mock/dashboard-metrics.ts` |
 | Sidebar storage widget ("10 GB / 100 GB") | **Mock** | Hardcoded in `app-sidebar.tsx` |
 | Nav: Datasets, Recent Files, Starred, Recycle Bin, Settings, Get Help | **Placeholder** | `disabled: true` in `lib/nav.ts` |
@@ -311,9 +316,10 @@ Bulk image upload is designed for **direct-to-S3 multipart**, not proxying bytes
 | `lib/uploads/chunk.ts` | Byte-range splitting (`splitFileIntoChunks`, `sliceChunk`) |
 | `lib/uploads/mock-uploader.ts` | Dev simulation of chunked progress |
 | `lib/uploads/s3-uploader.ts` | **Stub + implementation checklist** for the AWS teammate |
+| `lib/uploads/s3-server.ts` | Server-only S3 client, request validation, ownership checks, and multipart lifecycle helpers |
 | `lib/uploads/uploader.ts` | `createUploadProvider()` — flip mock → S3 here |
 
-**To wire S3 later:** implement `createS3Uploader()` per comments in `s3-uploader.ts`, then change `createUploadProvider()` to return it. Add server routes for create / presign-parts / complete / abort multipart. Do not put AWS secrets in `NEXT_PUBLIC_*`.
+**S3 API:** `POST /api/uploads/create`, `/presign-parts`, `/complete`, and `/abort` authenticate the user and verify project ownership before operating on keys constrained to `projects/{projectId}/images/{uuid}/...`. They use `@aws-sdk/client-s3` with short-lived presigned part URLs. The browser must upload directly to S3; never proxy file bytes through Next.js. The APIs do not yet persist `images` metadata, so cross-refresh resume and project-image listing remain to be wired with the `images` table.
 
 ---
 
@@ -327,6 +333,8 @@ From `.env.example`:
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase publishable/anon key |
 | `UNSPLASH_ACCESS_KEY` | Sample images for project detail (mock) |
 | `UNSPLASH_SECRET_KEY` | Unsplash API secret |
+| `AWS_REGION` | AWS region for server-side S3 multipart orchestration |
+| `AWS_S3_BUCKET` | S3 bucket for project image objects |
 
 Copy `.env.example` → `.env` for local development. Never commit `.env`.
 
