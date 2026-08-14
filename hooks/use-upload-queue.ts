@@ -178,6 +178,7 @@ export function useUploadQueue({
               progress: event.progress,
               status: "Uploading",
               completedParts: event.completedParts,
+              completedPartETags: event.completedPartETags,
               uploadId: event.uploadId,
               key: event.key,
             });

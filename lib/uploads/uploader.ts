@@ -1,13 +1,13 @@
 import type { UploadProvider } from "@/lib/uploads/types";
-import { createMockUploader } from "@/lib/uploads/mock-uploader";
+import { createS3Uploader } from "@/lib/uploads/s3-uploader";
 
 /**
  * Factory for the active upload backend.
  *
- * Handoff: replace the mock return with `createS3Uploader()` once AWS wiring
- * lands (see `lib/uploads/s3-uploader.ts` for the step-by-step checklist).
+ * The browser uploads file bytes directly to S3 through short-lived presigned
+ * URLs. The application server only authorizes and orchestrates the multipart
+ * lifecycle.
  */
 export function createUploadProvider(): UploadProvider {
-  // TODO(s3): return createS3Uploader() when backend routes + IAM are ready.
-  return createMockUploader();
+  return createS3Uploader();
 }

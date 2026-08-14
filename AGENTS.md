@@ -210,7 +210,7 @@ Manual types in `lib/types/projects.ts` and `lib/types/annotations.ts` (`Boundin
 | Project detail — images | **Mock** | Unsplash API (`lib/unsplash.ts`) + `lib/mock/image-metadata.ts` |
 | Annotation workspace UI + bbox editor | **Mock** | `components/annotate/` + `konva`/`react-konva`; boxes in React state + `sessionStorage` (`lib/annotations/storage.ts`); labels from `lib/mock/annotation-labels.ts` |
 | AI Annotate | **Placeholder** | Toolbar button stub (“Coming soon”) |
-| Upload images dialog | **Mock client / S3 API ready** | UI + queue in `components/projects/upload-images-dialog.tsx` + `hooks/use-upload-queue.ts`; provider still uses `createMockUploader()` via `lib/uploads/uploader.ts`. Authenticated S3 lifecycle routes exist under `app/api/uploads/`; wire `createS3Uploader()` to use them. |
+| Upload images dialog | **S3 upload / mock image listing** | UI + queue in `components/projects/upload-images-dialog.tsx` + `hooks/use-upload-queue.ts`; `createS3Uploader()` uploads directly to S3 through authenticated lifecycle APIs. The project image grid still uses Unsplash mock data until `images` metadata is wired. |
 | Dashboard metrics (total/annotated/unannotated) | **Mock** | `lib/mock/dashboard-metrics.ts` |
 | Sidebar storage widget ("10 GB / 100 GB") | **Mock** | Hardcoded in `app-sidebar.tsx` |
 | Nav: Datasets, Recent Files, Starred, Recycle Bin, Settings, Get Help | **Placeholder** | `disabled: true` in `lib/nav.ts` |
@@ -315,11 +315,11 @@ Bulk image upload is designed for **direct-to-S3 multipart**, not proxying bytes
 | `lib/uploads/types.ts` | `UploadProvider` + queue item fields (`uploadId`, `key`, `completedParts`) |
 | `lib/uploads/chunk.ts` | Byte-range splitting (`splitFileIntoChunks`, `sliceChunk`) |
 | `lib/uploads/mock-uploader.ts` | Dev simulation of chunked progress |
-| `lib/uploads/s3-uploader.ts` | **Stub + implementation checklist** for the AWS teammate |
+| `lib/uploads/s3-uploader.ts` | Browser-side multipart client: chunking, presigned PUTs, retry, progress, pause/resume, complete and abort |
 | `lib/uploads/s3-server.ts` | Server-only S3 client, request validation, ownership checks, and multipart lifecycle helpers |
 | `lib/uploads/uploader.ts` | `createUploadProvider()` — flip mock → S3 here |
 
-**S3 API:** `POST /api/uploads/create`, `/presign-parts`, `/complete`, and `/abort` authenticate the user and verify project ownership before operating on keys constrained to `projects/{projectId}/images/{uuid}/...`. They use `@aws-sdk/client-s3` with short-lived presigned part URLs. The browser must upload directly to S3; never proxy file bytes through Next.js. The APIs do not yet persist `images` metadata, so cross-refresh resume and project-image listing remain to be wired with the `images` table.
+**S3 API:** `POST /api/uploads/create`, `/presign-parts`, `/complete`, and `/abort` authenticate the user and verify project ownership before operating on keys constrained to `projects/{projectId}/images/{uuid}/...`. They use `@aws-sdk/client-s3` with short-lived presigned part URLs. `createS3Uploader()` sends browser chunks directly to S3, retries failed part PUTs up to three times, and preserves `uploadId`, key, part numbers, and ETags in queue state for same-page pause/resume. Never proxy file bytes through Next.js. The APIs do not yet persist `images` metadata, so cross-refresh resume and project-image listing remain to be wired with the `images` table.
 
 ---
 

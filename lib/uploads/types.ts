@@ -22,13 +22,19 @@ export type FileChunk = {
   size: number;
 };
 
+/** A completed S3 multipart part, retained so the upload can be completed after resume. */
+export type CompletedUploadPart = {
+  partNumber: number;
+  eTag: string;
+};
+
 /**
  * Queue item shown in the upload modal.
  *
  * When wiring S3:
  * - `uploadId` ← CreateMultipartUpload
  * - `key` ← object key in the bucket
- * - `completedParts` ← [{ PartNumber, ETag }, ...] for CompleteMultipartUpload
+ * - `completedParts` / `completedPartETags` ← completed multipart state for resume
  */
 export type UploadQueueItem = {
   id: string;
@@ -48,6 +54,8 @@ export type UploadQueueItem = {
   key?: string;
   /** 1-based part numbers already uploaded successfully (resume support). */
   completedParts?: number[];
+  /** ETags for completed parts; required by CompleteMultipartUpload. */
+  completedPartETags?: CompletedUploadPart[];
 };
 
 export type UploadProgressEvent = {
@@ -56,6 +64,7 @@ export type UploadProgressEvent = {
   totalBytes: number;
   progress: number;
   completedParts?: number[];
+  completedPartETags?: CompletedUploadPart[];
   uploadId?: string;
   key?: string;
 };
