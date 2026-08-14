@@ -4,8 +4,6 @@ import {
   readJson,
 } from "@/lib/uploads/s3-server";
 
-export const runtime = "nodejs";
-
 export async function POST(request: Request) {
   try {
     await abortMultipartUpload(await readJson(request));
