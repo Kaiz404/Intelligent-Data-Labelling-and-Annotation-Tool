@@ -6,7 +6,7 @@ import { ImageCard } from "@/components/projects/image-card";
 import {
   reverseSortDirection,
   SortOrderButton,
-  type SortDirection,
+  type SortDirection
 } from "@/components/projects/sort-order-button";
 import { UploadImagesDialog } from "@/components/projects/upload-images-dialog";
 import { Button } from "@/components/ui/button";
@@ -16,12 +16,12 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
+  SelectValue
 } from "@/components/ui/select";
 import {
   Tooltip,
   TooltipContent,
-  TooltipTrigger,
+  TooltipTrigger
 } from "@/components/ui/tooltip";
 import type { ImageStatus, Project, ProjectImage } from "@/lib/types/projects";
 
@@ -29,7 +29,7 @@ const imageStatusFilters = [
   "All",
   "In Progress",
   "Annotated",
-  "Unannotated",
+  "Unannotated"
 ] as const;
 
 const imageSortOptions = ["Date Added", "Name", "Status"] as const;
@@ -42,7 +42,7 @@ type ImageFilterOption = (typeof imageFilterOptions)[number];
 const defaultImageSortDirections: Record<ImageSortOption, SortDirection> = {
   "Date Added": "ascending",
   Name: "ascending",
-  Status: "ascending",
+  Status: "ascending"
 };
 
 type ProjectDetailClientProps = {
@@ -54,7 +54,7 @@ type ProjectDetailClientProps = {
 export function ProjectDetailClient({
   project,
   images,
-  unsplashError,
+  unsplashError
 }: ProjectDetailClientProps) {
   const [selectedImageIds, setSelectedImageIds] = useState<string[]>([]);
   const [search, setSearch] = useState("");
@@ -62,7 +62,7 @@ export function ProjectDetailClient({
   const [statusFilter, setStatusFilter] = useState<ImageStatusFilter>("All");
   const [sortBy, setSortBy] = useState<ImageSortOption>("Date Added");
   const [sortDirection, setSortDirection] = useState<SortDirection>(
-    defaultImageSortDirections["Date Added"],
+    defaultImageSortDirections["Date Added"]
   );
   const [isUploadOpen, setIsUploadOpen] = useState(false);
 
@@ -71,15 +71,13 @@ export function ProjectDetailClient({
 
     return images
       .filter((image) =>
-        image.fileName.toLowerCase().includes(normalizedSearch),
+        image.fileName.toLowerCase().includes(normalizedSearch)
       )
       .filter((image) =>
-        statusFilter === "All" ? true : image.status === statusFilter,
+        statusFilter === "All" ? true : image.status === statusFilter
       )
       .filter((image) =>
-        filterBy === "Selected"
-          ? selectedImageIds.includes(image.id)
-          : true,
+        filterBy === "Selected" ? selectedImageIds.includes(image.id) : true
       )
       .sort((first, second) => {
         let comparison = 0;
@@ -101,7 +99,7 @@ export function ProjectDetailClient({
     selectedImageIds,
     sortBy,
     sortDirection,
-    statusFilter,
+    statusFilter
   ]);
 
   function handleSortChange(nextSortBy: ImageSortOption) {
@@ -113,7 +111,7 @@ export function ProjectDetailClient({
     setSelectedImageIds((currentIds) =>
       isSelected
         ? [...currentIds, imageId]
-        : currentIds.filter((id) => id !== imageId),
+        : currentIds.filter((id) => id !== imageId)
     );
   }
 
@@ -148,8 +146,12 @@ export function ProjectDetailClient({
             <p className="text-xs text-muted-foreground">{unsplashError}</p>
           ) : null}
         </div>
-        <Button variant="outline" onClick={() => setIsUploadOpen(true)}>
-          <Upload className="size-4" />
+        <Button
+          variant="outline"
+          onClick={() => setIsUploadOpen(true)}
+          className="text-primary border-primary hover:text-primary"
+        >
+          <Upload className="size-4 text-primary" />
           Upload Images
         </Button>
       </div>
@@ -188,9 +190,7 @@ export function ProjectDetailClient({
             <span className="text-muted-foreground">Status:</span>
             <Select
               value={statusFilter}
-              onValueChange={(v) =>
-                setStatusFilter(v as ImageStatusFilter)
-              }
+              onValueChange={(v) => setStatusFilter(v as ImageStatusFilter)}
             >
               <SelectTrigger className="w-[140px]">
                 <SelectValue />

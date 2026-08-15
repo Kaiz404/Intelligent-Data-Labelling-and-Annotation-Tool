@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Folder, MoreHorizontal, Plus } from "lucide-react";
+import { Folder, MoreHorizontal, MoreVertical, Plus } from "lucide-react";
 import { useState } from "react";
 import { CreateProjectDialog } from "@/components/projects/create-project-dialog";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ import {
   TableCell,
   TableHead,
   TableHeader,
-  TableRow,
+  TableRow
 } from "@/components/ui/table";
 import { relativeTimeFromDate } from "@/lib/format";
 import type { Project } from "@/lib/types/projects";
@@ -29,10 +29,12 @@ export function RecentProjectsTable({ projects }: RecentProjectsTableProps) {
     <>
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
-          <CardTitle className="text-lg font-semibold">Recent Projects</CardTitle>
+          <CardTitle className="text-lg font-semibold">
+            Recent Projects
+          </CardTitle>
           <Button
             variant="outline"
-            className="border-primary text-primary hover:bg-primary/5"
+            className="border-primary text-primary hover:text-primary"
             onClick={() => setIsCreateOpen(true)}
           >
             <Plus className="size-4" />
@@ -47,17 +49,19 @@ export function RecentProjectsTable({ projects }: RecentProjectsTableProps) {
           ) : (
             <Table>
               <TableHeader>
-                <TableRow>
+                <TableRow className="bg-muted">
                   <TableHead>Project Name</TableHead>
-                  <TableHead className="w-24">Images</TableHead>
-                  <TableHead className="w-48">Progress</TableHead>
-                  <TableHead className="w-36">Last Modified</TableHead>
+                  <TableHead className="w-30 text-center">Images</TableHead>
+                  <TableHead className="w-70">Progress</TableHead>
+                  <TableHead className="w-50 text-center">
+                    Last Modified
+                  </TableHead>
                   <TableHead className="w-12" />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {projects.map((project) => (
-                  <TableRow key={project.id}>
+                  <TableRow className="hover:bg-muted/50" key={project.id}>
                     <TableCell>
                       <Link
                         href={`/projects/${project.id}`}
@@ -74,14 +78,16 @@ export function RecentProjectsTable({ projects }: RecentProjectsTableProps) {
                         </div>
                       </Link>
                     </TableCell>
-                    <TableCell>0</TableCell>
+                    <TableCell className="text-center">0</TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
                         <Progress value={0} className="h-2" />
-                        <span className="text-xs text-muted-foreground">0%</span>
+                        <span className="text-xs text-muted-foreground">
+                          0%
+                        </span>
                       </div>
                     </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
+                    <TableCell className="text-center text-sm text-muted-foreground">
                       {relativeTimeFromDate(project.updated_at)}
                     </TableCell>
                     <TableCell>
@@ -91,7 +97,7 @@ export function RecentProjectsTable({ projects }: RecentProjectsTableProps) {
                         className="size-8"
                         aria-label={`Actions for ${project.name}`}
                       >
-                        <MoreHorizontal className="size-4" />
+                        <MoreVertical className="size-4" />
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -99,7 +105,7 @@ export function RecentProjectsTable({ projects }: RecentProjectsTableProps) {
               </TableBody>
             </Table>
           )}
-          <div className="border-t px-6 py-3 text-center">
+          <div className="border-t px-6 py-3 text-center hover:bg-muted/50">
             <Link
               href="/projects"
               className="text-sm text-primary hover:underline"

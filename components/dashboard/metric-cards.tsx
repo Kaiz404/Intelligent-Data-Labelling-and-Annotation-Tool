@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 const metricIcons = {
   total: ImageIcon,
   annotated: CheckCircle2,
-  unannotated: XCircle,
+  unannotated: XCircle
 };
 
 export function MetricCards() {
@@ -23,43 +23,45 @@ export function MetricCards() {
 
         return (
           <Card key={metric.id}>
-            <CardContent className="p-5">
+            <CardContent className="p-8">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Icon
                   className={cn(
-                    "size-4",
-                    metric.id === "annotated" && "text-emerald-600",
+                    "size-6",
+                    metric.id === "annotated" && "text-[#4CAF50]",
                     metric.id === "unannotated" && "text-destructive",
-                    metric.id === "total" && "text-primary",
+                    metric.id === "total" && "text-primary"
                   )}
                 />
-                <span>{metric.label}</span>
+                <span className="text-foreground">{metric.label}</span>
               </div>
               <div className="mt-3 flex items-baseline gap-2">
                 <span className="text-3xl font-semibold tracking-tight">
                   {numberFormatter.format(metric.value)}
                 </span>
-                {metric.helper ? (
-                  <span className="text-xs text-emerald-600">{metric.helper}</span>
+
+                {typeof metric.progress === "number" ? (
+                  <div className="ml-2 flex flex-1 items-baseline gap-2">
+                    <Progress
+                      value={metric.progress}
+                      className={cn(
+                        "h-2 flex-1",
+                        metric.progressVariant === "destructive" &&
+                          "[&>div]:bg-destructive",
+                        metric.progressVariant === "success" &&
+                          "[&>div]:bg-[#4CAF50]"
+                      )}
+                    />
+                    <span className="text-xs text-muted-foreground">
+                      {metric.progress}%
+                    </span>
+                  </div>
+                ) : metric.helper ? (
+                  <span className="text-xs text-[#4CAF50]">
+                    {metric.helper}
+                  </span>
                 ) : null}
               </div>
-              {typeof metric.progress === "number" ? (
-                <div className="mt-4 flex items-center gap-3">
-                  <Progress
-                    value={metric.progress}
-                    className={cn(
-                      "h-2",
-                      metric.progressVariant === "destructive" &&
-                        "[&>div]:bg-destructive",
-                      metric.progressVariant === "success" &&
-                        "[&>div]:bg-emerald-500",
-                    )}
-                  />
-                  <span className="text-xs text-muted-foreground">
-                    {metric.progress}%
-                  </span>
-                </div>
-              ) : null}
             </CardContent>
           </Card>
         );

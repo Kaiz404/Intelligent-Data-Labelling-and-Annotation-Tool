@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { MoreHorizontal } from "lucide-react";
+import { MoreHorizontal, MoreVertical } from "lucide-react";
 import { formatFileSize } from "@/lib/format";
 import type { ImageStatus, ProjectImage } from "@/lib/types/projects";
 import { Badge } from "@/components/ui/badge";
@@ -22,7 +22,7 @@ function statusClass(status: ImageStatus) {
   return {
     "In Progress": "bg-primary/10 text-primary border-primary/20",
     Annotated: "bg-emerald-500/10 text-emerald-700 border-emerald-500/20",
-    Unannotated: "bg-destructive/10 text-destructive border-destructive/20",
+    Unannotated: "bg-destructive/10 text-destructive border-destructive/20"
   }[status];
 }
 
@@ -31,12 +31,12 @@ export function ImageCard({
   projectId,
   isSelected,
   onSelectionChange,
-  unsplashError,
+  unsplashError
 }: ImageCardProps) {
   const annotateHref = `/projects/${projectId}/annotate/${image.id}`;
 
   return (
-    <Card className="overflow-hidden shadow-sm">
+    <Card className="group overflow-hidden shadow-sm">
       <div className="relative aspect-[4/3] bg-muted">
         <Link
           href={annotateHref}
@@ -56,24 +56,26 @@ export function ImageCard({
             </div>
           )}
         </Link>
-        <div className="absolute left-2 top-2 z-10">
+
+        <div className="pointer-events-none absolute left-2 top-2 z-10 opacity-0 transition-opacity duration-200 group-hover:pointer-events-auto group-hover:opacity-100">
           <Checkbox
             checked={isSelected}
             onCheckedChange={(checked) =>
               onSelectionChange(image.id, checked === true)
             }
             aria-label={`Select ${image.fileName}`}
-            className="bg-background"
+            className="bg-background size-6 m-1"
           />
         </div>
+
         <Button
           type="button"
           variant="ghost"
           size="icon"
-          className="absolute right-2 top-2 z-10 size-8 bg-background/80"
+          className="absolute right-3 top-3 z-10 size-6 bg-background opacity-0 transition-opacity duration-200 group-hover:opacity-100"
           aria-label={`Menu for ${image.fileName}`}
         >
-          <MoreHorizontal className="size-4" />
+          <MoreVertical className="size-4" />
         </Button>
       </div>
       <CardContent className="space-y-2 p-3">
