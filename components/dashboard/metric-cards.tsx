@@ -1,8 +1,7 @@
 "use client";
 
 import { CheckCircle2, ImageIcon, XCircle } from "lucide-react";
-import { getDashboardMetrics } from "@/lib/mock/dashboard-metrics";
-import { numberFormatter } from "@/lib/format";
+import { numberFormatter, toPercent } from "@/lib/format";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
@@ -13,8 +12,42 @@ const metricIcons = {
   unannotated: XCircle
 };
 
-export function MetricCards() {
-  const metrics = getDashboardMetrics();
+type MetricCardsProps = {
+  total: number;
+  annotated: number;
+  unannotated: number;
+};
+
+type Metric = {
+  id: keyof typeof metricIcons;
+  label: string;
+  value: number;
+  progress?: number;
+  progressVariant?: "success" | "destructive";
+};
+
+export function MetricCards({
+  total,
+  annotated,
+  unannotated,
+}: MetricCardsProps) {
+  const metrics: Metric[] = [
+    { id: "total" as const, label: "Total Images", value: total },
+    {
+      id: "annotated" as const,
+      label: "Annotated",
+      value: annotated,
+      progress: toPercent(annotated, total),
+      progressVariant: "success" as const,
+    },
+    {
+      id: "unannotated" as const,
+      label: "Unannotated",
+      value: unannotated,
+      progress: toPercent(unannotated, total),
+      progressVariant: "destructive" as const,
+    },
+  ];
 
   return (
     <div className="grid gap-4 md:grid-cols-3">
@@ -56,10 +89,6 @@ export function MetricCards() {
                       {metric.progress}%
                     </span>
                   </div>
-                ) : metric.helper ? (
-                  <span className="text-xs text-[#4CAF50]">
-                    {metric.helper}
-                  </span>
                 ) : null}
               </div>
             </CardContent>

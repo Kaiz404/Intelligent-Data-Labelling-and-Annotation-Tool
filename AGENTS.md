@@ -36,7 +36,7 @@ Image annotation workspace for managing projects and annotating image datasets.
 - Root layout metadata title: **"Annotate"**
 - Sidebar brand label: **"SmartAnnoTool"** (SAT logo)
 
-**Product status:** UI is ahead of backend integration. Projects and auth are wired to Supabase; images, annotation boxes, uploads, dashboard metrics, and several nav items are still mocked or placeholder.
+**Product status:** UI is ahead of backend integration. Projects, auth, image metadata, direct S3 image uploads, and image-count metrics are real; annotation boxes and several nav items are still mocked or placeholder.
 
 ---
 
@@ -87,10 +87,10 @@ data_annotation_tool/
 │   ├── mock/               # Hardcoded / placeholder data
 │   ├── supabase/           # client.ts, server.ts, proxy.ts
 │   ├── types/              # Manual TypeScript types (not Supabase codegen)
-│   ├── uploads/            # Chunked upload provider (mock now; S3 stub for handoff)
+│   ├── uploads/            # Direct-to-S3 multipart upload provider
 │   ├── format.ts           # Formatting helpers
+│   ├── images.ts           # Supabase image queries + signed S3 read URLs
 │   ├── nav.ts              # Sidebar navigation config
-│   ├── unsplash.ts         # Unsplash API for sample images
 │   └── utils.ts            # cn() — clsx + tailwind-merge
 ├── supabase/               # Local Supabase CLI config + migrations (GITIGNORED — see below)
 ├── proxy.ts                # Auth session proxy entry (replaces middleware.ts)
@@ -179,11 +179,21 @@ Request → proxy.ts → lib/supabase/proxy.ts (updateSession)
 - `description` text (nullable)
 - `starred` boolean (default false)
 - `created_at`, `updated_at` timestamptz
-- `user_id` UUID → `auth.users(id)`
+- `user_id` UUID (NOT NULL) → `auth.users(id)` — canonical ownership field
+- Legacy `owner_id` remains populated on older rows but is not used by app queries or RLS.
 
-**`images` table:** Referenced in migrations (UUID PK) but **not used by app code yet**.
+**`images` table:**
+- `id` UUID (PK)
+- `project_id` UUID → `projects(id)` (ON DELETE CASCADE)
+- `name` text (NOT NULL)
+- `object_key` text (NOT NULL, UNIQUE) — private S3 key, never an expiring URL
+- `content_type` text (`image/jpeg` or `image/png`)
+- `size_bytes` bigint (> 0)
+- `created_at`, `modified_at` timestamptz
+- `annotation` jsonb (existing column; annotation UI still uses session storage)
+- Legacy nullable `notes` and `url` columns remain but are not used by the app.
 
-**RLS:** Users can only SELECT/INSERT/UPDATE/DELETE their own projects (`auth.uid() = user_id`).
+**RLS:** Users can only SELECT/INSERT/UPDATE/DELETE their own projects (`auth.uid() = user_id`). Image policies grant the same operations only when the parent project belongs to the current user.
 
 ### Types
 
@@ -207,11 +217,11 @@ Manual types in `lib/types/projects.ts` and `lib/types/annotations.ts` (`Boundin
 | User auth (sign up, login, OAuth, reset) | **Real** | Supabase Auth |
 | Projects list / create / star | **Real** | Supabase `projects` table + `lib/actions/projects.ts` |
 | Project detail — metadata | **Real** | Supabase `projects` |
-| Project detail — images | **Mock** | Unsplash API (`lib/unsplash.ts`) + `lib/mock/image-metadata.ts` |
-| Annotation workspace UI + bbox editor | **Mock** | `components/annotate/` + `konva`/`react-konva`; boxes in React state + `sessionStorage` (`lib/annotations/storage.ts`); labels from `lib/mock/annotation-labels.ts` |
+| Project detail — images | **Real** | Supabase `images` metadata + private S3 objects loaded with short-lived signed GET URLs from `lib/images.ts` |
+| Annotation workspace UI + bbox editor | **Real images / mock annotations** | Images come from Supabase + S3; boxes remain in React state + `sessionStorage` (`lib/annotations/storage.ts`); labels come from `lib/mock/annotation-labels.ts` |
 | AI Annotate | **Placeholder** | Toolbar button stub (“Coming soon”) |
-| Upload images dialog | **S3 upload / mock image listing** | UI + queue in `components/projects/upload-images-dialog.tsx` + `hooks/use-upload-queue.ts`; `createS3Uploader()` uploads directly to S3 through authenticated lifecycle APIs. The project image grid still uses Unsplash mock data until `images` metadata is wired. |
-| Dashboard metrics (total/annotated/unannotated) | **Mock** | `lib/mock/dashboard-metrics.ts` |
+| Upload images dialog | **Real** | UI + queue in `components/projects/upload-images-dialog.tsx` + `hooks/use-upload-queue.ts`; `createS3Uploader()` uploads directly to S3, and successful completion persists an `images` row before refreshing the project grid. |
+| Dashboard metrics (total/annotated/unannotated) | **Real** | RLS-filtered Supabase `images` rows aggregated by `lib/images.ts` |
 | Sidebar storage widget ("10 GB / 100 GB") | **Mock** | Hardcoded in `app-sidebar.tsx` |
 | Nav: Datasets, Recent Files, Starred, Recycle Bin, Settings, Get Help | **Placeholder** | `disabled: true` in `lib/nav.ts` |
 | Nav: Annotate | **Enabled (entry hub)** | Links to `/projects`; open a project image to reach `/projects/[id]/annotate/[imageId]` |
@@ -314,12 +324,11 @@ Bulk image upload is designed for **direct-to-S3 multipart**, not proxying bytes
 | `hooks/use-upload-queue.ts` | Queue, concurrency, pause/retry/cancel |
 | `lib/uploads/types.ts` | `UploadProvider` + queue item fields (`uploadId`, `key`, `completedParts`) |
 | `lib/uploads/chunk.ts` | Byte-range splitting (`splitFileIntoChunks`, `sliceChunk`) |
-| `lib/uploads/mock-uploader.ts` | Dev simulation of chunked progress |
 | `lib/uploads/s3-uploader.ts` | Browser-side multipart client: chunking, presigned PUTs, retry, progress, pause/resume, complete and abort |
 | `lib/uploads/s3-server.ts` | Server-only S3 client, request validation, ownership checks, and multipart lifecycle helpers |
-| `lib/uploads/uploader.ts` | `createUploadProvider()` — flip mock → S3 here |
+| `lib/uploads/uploader.ts` | `createUploadProvider()` — returns the active S3 provider |
 
-**S3 API:** `POST /api/uploads/create`, `/presign-parts`, `/complete`, and `/abort` authenticate the user and verify project ownership before operating on keys constrained to `projects/{projectId}/images/{uuid}/...`. They use `@aws-sdk/client-s3` with short-lived presigned part URLs. `createS3Uploader()` sends browser chunks directly to S3, retries failed part PUTs up to three times, and preserves `uploadId`, key, part numbers, and ETags in queue state for same-page pause/resume. Never proxy file bytes through Next.js. The APIs do not yet persist `images` metadata, so cross-refresh resume and project-image listing remain to be wired with the `images` table.
+**S3 API:** `POST /api/uploads/create`, `/presign-parts`, `/complete`, and `/abort` authenticate the user and verify project ownership before operating on keys constrained to `projects/{projectId}/images/{uuid}/...`. They use `@aws-sdk/client-s3` with short-lived presigned part URLs. `createS3Uploader()` sends browser chunks directly to S3, retries failed part PUTs up to three times, and preserves `uploadId`, key, part numbers, and ETags in queue state for same-page pause/resume. Never proxy file bytes through Next.js. Completion persists image metadata in Supabase; if that insert fails, the completed S3 object is deleted to avoid an orphan. Project reads generate one-hour signed GET URLs from stored object keys. The bucket CORS policy must allow GET and PUT from the app origin and expose `ETag`. Cross-refresh multipart resume is not yet implemented.
 
 ---
 
@@ -331,8 +340,6 @@ From `.env.example`:
 |----------|---------|
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase publishable/anon key |
-| `UNSPLASH_ACCESS_KEY` | Sample images for project detail (mock) |
-| `UNSPLASH_SECRET_KEY` | Unsplash API secret |
 | `AWS_REGION` | AWS region for server-side S3 multipart orchestration |
 | `AWS_S3_BUCKET` | S3 bucket for project image objects |
 

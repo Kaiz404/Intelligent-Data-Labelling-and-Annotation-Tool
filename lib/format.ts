@@ -27,10 +27,6 @@ export function relativeTimeFromDate(dateString: string) {
   return `${daysAgo} ${daysAgo === 1 ? "day" : "days"} ago`;
 }
 
-export function formatFileSize(sizeMb: number) {
-  return `${sizeMb.toFixed(sizeMb % 1 === 0 ? 0 : 1)} MB`;
-}
-
 export function formatBytes(bytes: number) {
   if (bytes <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"] as const;

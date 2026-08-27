@@ -21,7 +21,6 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { MOCK_UPLOAD_FILES } from "@/lib/mock/image-metadata";
 import { formatBytes } from "@/lib/format";
 import { useUploadQueue } from "@/hooks/use-upload-queue";
 import type { UploadQueueItem, UploadTab } from "@/lib/uploads/types";
@@ -54,6 +53,7 @@ type UploadImagesDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectId: string;
+  onUploadComplete?: () => void;
 };
 
 function statusLabel(status: UploadQueueItem["status"]) {
@@ -101,6 +101,7 @@ export function UploadImagesDialog({
   open,
   onOpenChange,
   projectId,
+  onUploadComplete,
 }: UploadImagesDialogProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [activeTab, setActiveTab] = useState<UploadTab>("All");
@@ -126,7 +127,7 @@ export function UploadImagesDialog({
     toggleSelectAll,
   } = useUploadQueue({
     projectId,
-    initialItems: MOCK_UPLOAD_FILES,
+    onUploadComplete,
   });
 
   const filtered = useMemo(() => {

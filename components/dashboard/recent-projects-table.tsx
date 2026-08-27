@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Folder, MoreHorizontal, MoreVertical, Plus } from "lucide-react";
+import { Folder, MoreVertical, Plus } from "lucide-react";
 import { useState } from "react";
 import { CreateProjectDialog } from "@/components/projects/create-project-dialog";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,7 @@ import {
   TableHeader,
   TableRow
 } from "@/components/ui/table";
-import { relativeTimeFromDate } from "@/lib/format";
+import { relativeTimeFromDate, toPercent } from "@/lib/format";
 import type { Project } from "@/lib/types/projects";
 
 type RecentProjectsTableProps = {
@@ -78,12 +78,24 @@ export function RecentProjectsTable({ projects }: RecentProjectsTableProps) {
                         </div>
                       </Link>
                     </TableCell>
-                    <TableCell className="text-center">0</TableCell>
+                    <TableCell className="text-center">
+                      {project.image_count ?? 0}
+                    </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        <Progress value={0} className="h-2" />
+                        <Progress
+                          value={toPercent(
+                            project.annotated_count ?? 0,
+                            project.image_count ?? 0,
+                          )}
+                          className="h-2"
+                        />
                         <span className="text-xs text-muted-foreground">
-                          0%
+                          {toPercent(
+                            project.annotated_count ?? 0,
+                            project.image_count ?? 0,
+                          )}
+                          %
                         </span>
                       </div>
                     </TableCell>

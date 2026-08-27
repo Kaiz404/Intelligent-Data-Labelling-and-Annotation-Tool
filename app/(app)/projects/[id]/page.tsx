@@ -1,7 +1,6 @@
 import { AppHeader } from "@/components/app-shell/app-header";
 import { ProjectDetailClient } from "@/components/projects/project-detail-client";
-import { buildProjectImages } from "@/lib/mock/image-metadata";
-import { fetchProjectSamplePhotos } from "@/lib/unsplash";
+import { fetchProjectImages } from "@/lib/images";
 import { createClient } from "@/lib/supabase/server";
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
@@ -20,21 +19,13 @@ async function ProjectDetailContent({ id }: { id: string }) {
     notFound();
   }
 
-  const { photos, error: unsplashError } = await fetchProjectSamplePhotos(
-    project.name,
-    12,
-  );
-  const images = buildProjectImages(12, photos, unsplashError);
+  const images = await fetchProjectImages(project.id);
 
   return (
     <>
       <AppHeader projectName={project.name} />
       <div className="flex-1 p-4 md:p-6">
-        <ProjectDetailClient
-          project={project}
-          images={images}
-          unsplashError={unsplashError}
-        />
+        <ProjectDetailClient project={project} images={images} />
       </div>
     </>
   );

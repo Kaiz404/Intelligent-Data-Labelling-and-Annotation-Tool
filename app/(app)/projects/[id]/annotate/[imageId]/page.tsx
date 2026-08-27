@@ -1,8 +1,7 @@
 import { AppHeader } from "@/components/app-shell/app-header";
 import { AnnotationWorkspace } from "@/components/annotate/annotation-workspace";
-import { buildProjectImages } from "@/lib/mock/image-metadata";
+import { fetchProjectImages } from "@/lib/images";
 import { createClient } from "@/lib/supabase/server";
-import { fetchProjectSamplePhotos } from "@/lib/unsplash";
 import { connection } from "next/server";
 import { notFound, redirect } from "next/navigation";
 import { Suspense } from "react";
@@ -26,11 +25,7 @@ async function AnnotateContent({
     notFound();
   }
 
-  const { photos, error: unsplashError } = await fetchProjectSamplePhotos(
-    project.name,
-    12,
-  );
-  const images = buildProjectImages(12, photos, unsplashError);
+  const images = await fetchProjectImages(project.id);
 
   if (images.length === 0) {
     redirect(`/projects/${projectId}`);

@@ -1,6 +1,7 @@
 import { AppHeader } from "@/components/app-shell/app-header";
 import { MetricCards } from "@/components/dashboard/metric-cards";
 import { RecentProjectsTable } from "@/components/dashboard/recent-projects-table";
+import { fetchImageStats } from "@/lib/images";
 import { createClient } from "@/lib/supabase/server";
 import { connection } from "next/server";
 import { Suspense } from "react";
@@ -23,10 +24,22 @@ async function DashboardContent() {
     );
   }
 
+  const projectRows = projects ?? [];
+  const stats = await fetchImageStats();
+  const projectsWithStats = projectRows.map((project) => ({
+    ...project,
+    image_count: stats.byProject[project.id]?.total ?? 0,
+    annotated_count: stats.byProject[project.id]?.annotated ?? 0,
+  }));
+
   return (
     <div className="space-y-6">
-      <MetricCards />
-      <RecentProjectsTable projects={projects ?? []} />
+      <MetricCards
+        total={stats.total}
+        annotated={stats.annotated}
+        unannotated={stats.unannotated}
+      />
+      <RecentProjectsTable projects={projectsWithStats} />
     </div>
   );
 }

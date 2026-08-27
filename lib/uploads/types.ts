@@ -72,6 +72,7 @@ export type UploadProgressEvent = {
 export type UploadResult = {
   fileId: string;
   key: string;
+  imageId: string;
   uploadId?: string;
 };
 
@@ -85,7 +86,6 @@ export type UploadStartContext = {
 /**
  * Pluggable upload backend.
  *
- * Swap `createMockUploader()` for `createS3Uploader()` in `createUploadProvider()`.
  * Implementations must upload in chunks (see `lib/uploads/chunk.ts`) so large
  * batches (multi-GB) stay memory-safe and resumable.
  */

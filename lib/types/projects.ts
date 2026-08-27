@@ -6,6 +6,8 @@ export type Project = {
   created_at: string;
   updated_at: string;
   user_id: string | null;
+  image_count?: number;
+  annotated_count?: number;
 };
 
 export type ImageStatus = "In Progress" | "Annotated" | "Unannotated";
@@ -13,30 +15,13 @@ export type ImageStatus = "In Progress" | "Annotated" | "Unannotated";
 export type ProjectImage = {
   id: string;
   fileName: string;
-  sizeMb: number;
+  sizeBytes: number;
   capturedAt: string;
   status: ImageStatus;
   progress: number;
   thumbnailUrl: string | null;
   /** Higher-res URL for the annotation canvas when available. */
   imageUrl: string | null;
-};
-
-/** @deprecated Prefer `UploadStatus` / `UploadQueueItem` from `@/lib/uploads/types`. */
-export type UploadStatus =
-  | "Queued"
-  | "Uploading"
-  | "Paused"
-  | "Completed"
-  | "Failed";
-
-/** @deprecated Prefer `UploadQueueItem` from `@/lib/uploads/types`. */
-export type UploadFile = {
-  id: string;
-  fileName: string;
-  sizeMb: number;
-  status: UploadStatus;
-  progress: number;
 };
 
 export type ProjectDraft = {

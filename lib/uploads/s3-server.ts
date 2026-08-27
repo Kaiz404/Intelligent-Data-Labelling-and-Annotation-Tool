@@ -2,6 +2,8 @@ import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
   CreateMultipartUploadCommand,
+  DeleteObjectCommand,
+  GetObjectCommand,
   S3Client,
   UploadPartCommand,
 } from "@aws-sdk/client-s3";
@@ -25,20 +27,22 @@ export class UploadApiError extends Error {
 function getS3Config() {
   const region = process.env.AWS_REGION;
   const bucket = process.env.AWS_S3_BUCKET;
+  const accessKeyId = process.env.AWS_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
 
-  if (!region || !bucket) {
+  if (!region || !bucket || !accessKeyId || !secretAccessKey) {
     throw new UploadApiError(
-      "S3 uploads are not configured. Set AWS_REGION and AWS_S3_BUCKET.",
+      "S3 uploads are not configured. Set AWS_REGION, AWS_S3_BUCKET, AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY.",
       503,
     );
   }
 
-  return { region, bucket };
+  return { region, bucket, accessKeyId, secretAccessKey };
 }
 
 function getS3Client() {
-  const { region } = getS3Config();
-  return new S3Client({ region });
+  const { region, accessKeyId, secretAccessKey } = getS3Config();
+  return new S3Client({ region, credentials: { accessKeyId, secretAccessKey } });
 }
 
 function requireString(value: unknown, name: string) {
@@ -98,7 +102,7 @@ export async function requireOwnedProject(projectId: unknown) {
     throw new UploadApiError("Project not found.", 404);
   }
 
-  return { projectId: id, userId: user.id };
+  return { projectId: id, userId: user.id, supabase };
 }
 
 export function projectIdFromObjectKey(key: unknown) {
@@ -203,9 +207,23 @@ export async function presignParts(input: Record<string, unknown>) {
 
 export async function completeMultipartUpload(input: Record<string, unknown>) {
   const { key, projectId } = projectIdFromObjectKey(input.key);
-  await requireOwnedProject(projectId);
+  const { supabase } = await requireOwnedProject(projectId);
   const uploadId = requireString(input.uploadId, "uploadId");
+  const fileName = requireString(input.fileName, "fileName");
+  const contentType = requireString(input.contentType, "contentType");
+  const sizeBytes = input.sizeBytes;
 
+  if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
+    throw new UploadApiError("Only JPEG and PNG files are supported.", 400);
+  }
+  if (
+    typeof sizeBytes !== "number" ||
+    !Number.isSafeInteger(sizeBytes) ||
+    sizeBytes <= 0 ||
+    sizeBytes > MAX_FILE_SIZE_BYTES
+  ) {
+    throw new UploadApiError("sizeBytes must be between 1 byte and 15 GB.", 400);
+  }
   if (!Array.isArray(input.parts) || !input.parts.length) {
     throw new UploadApiError("parts must be a non-empty array.", 400);
   }
@@ -221,13 +239,17 @@ export async function completeMultipartUpload(input: Record<string, unknown>) {
     };
   });
 
-  if (parts.length > MAX_PART_NUMBER || new Set(parts.map((part) => part.PartNumber)).size !== parts.length) {
+  if (
+    parts.length > MAX_PART_NUMBER ||
+    new Set(parts.map((part) => part.PartNumber)).size !== parts.length
+  ) {
     throw new UploadApiError("parts must have unique part numbers.", 400);
   }
 
   parts.sort((a, b) => a.PartNumber - b.PartNumber);
   const { bucket } = getS3Config();
-  await getS3Client().send(
+  const client = getS3Client();
+  await client.send(
     new CompleteMultipartUploadCommand({
       Bucket: bucket,
       Key: key,
@@ -236,7 +258,46 @@ export async function completeMultipartUpload(input: Record<string, unknown>) {
     }),
   );
 
-  return { key };
+  const { data: image, error } = await supabase
+    .from("images")
+    .insert({
+      project_id: projectId,
+      name: fileName,
+      object_key: key,
+      content_type: contentType,
+      size_bytes: sizeBytes,
+    })
+    .select("id")
+    .single();
+
+  if (error || !image) {
+    try {
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+    } catch (cleanupError) {
+      console.error("Could not remove orphaned S3 object", cleanupError);
+    }
+    throw new UploadApiError(
+      "The upload completed, but its image record could not be saved.",
+      500,
+    );
+  }
+
+  return { key, imageId: image.id, projectId };
+}
+
+export async function createImageReadUrl(key: string) {
+  projectIdFromObjectKey(key);
+  const { bucket } = getS3Config();
+
+  return getSignedUrl(
+    getS3Client(),
+    new GetObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      ResponseContentDisposition: "inline",
+    }),
+    { expiresIn: 60 * 60 },
+  );
 }
 
 export async function abortMultipartUpload(input: Record<string, unknown>) {

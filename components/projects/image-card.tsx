@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { MoreHorizontal, MoreVertical } from "lucide-react";
-import { formatFileSize } from "@/lib/format";
+import { MoreVertical } from "lucide-react";
+import { formatBytes } from "@/lib/format";
 import type { ImageStatus, ProjectImage } from "@/lib/types/projects";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,6 @@ type ImageCardProps = {
   projectId: string;
   isSelected: boolean;
   onSelectionChange: (imageId: string, isSelected: boolean) => void;
-  unsplashError?: string | null;
 };
 
 function statusClass(status: ImageStatus) {
@@ -31,7 +30,6 @@ export function ImageCard({
   projectId,
   isSelected,
   onSelectionChange,
-  unsplashError
 }: ImageCardProps) {
   const annotateHref = `/projects/${projectId}/annotate/${image.id}`;
 
@@ -52,7 +50,7 @@ export function ImageCard({
             />
           ) : (
             <div className="flex size-full items-center justify-center text-xs text-muted-foreground">
-              {unsplashError ? "No preview" : "Loading..."}
+              Preview unavailable
             </div>
           )}
         </Link>
@@ -92,7 +90,7 @@ export function ImageCard({
           {image.status}
         </Badge>
         <p className="text-xs text-muted-foreground">
-          {formatFileSize(image.sizeMb)} · {image.capturedAt}
+          {formatBytes(image.sizeBytes)} · {image.capturedAt}
         </p>
       </CardContent>
     </Card>

@@ -46,3 +46,6 @@ next-env.d.ts
 
 # firecrawl
 /.firecrawl
+
+# local image fixtures for manual S3 upload testing
+/test-data/s3-images/

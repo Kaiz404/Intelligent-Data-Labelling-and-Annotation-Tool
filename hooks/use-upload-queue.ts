@@ -19,8 +19,7 @@ type UseUploadQueueOptions = {
   projectId: string;
   provider?: UploadProvider;
   maxConcurrentFiles?: number;
-  /** Seed rows for empty-state demos (no File handle → not auto-uploaded). */
-  initialItems?: UploadQueueItem[];
+  onUploadComplete?: (result: { imageId: string; key: string }) => void;
 };
 
 function createItemId() {
@@ -41,10 +40,10 @@ export function useUploadQueue({
   projectId,
   provider: providerProp,
   maxConcurrentFiles = DEFAULT_MAX_CONCURRENT_FILES,
-  initialItems = [],
+  onUploadComplete,
 }: UseUploadQueueOptions) {
   const providerRef = useRef(providerProp ?? createUploadProvider());
-  const [items, setItems] = useState<UploadQueueItem[]>(initialItems);
+  const [items, setItems] = useState<UploadQueueItem[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const controllersRef = useRef(new Map<string, AbortController>());
@@ -190,6 +189,7 @@ export function useUploadQueue({
           key: result.key,
           uploadId: result.uploadId,
         });
+        onUploadComplete?.({ imageId: result.imageId, key: result.key });
       } catch (error) {
         if (controller.signal.aborted) {
           return;
@@ -203,7 +203,7 @@ export function useUploadQueue({
         inFlightRef.current.delete(item.id);
       }
     },
-    [projectId, updateItem],
+    [onUploadComplete, projectId, updateItem],
   );
 
   // Fill concurrent upload slots while the batch is running.
@@ -235,7 +235,6 @@ export function useUploadQueue({
   const startUploads = useCallback(() => {
     setItems((current) =>
       current.map((item) => {
-        // Demo seed rows have no File handle — leave them until the user re-adds real files.
         if (!item.file) return item;
         if (item.status === "Completed" || item.status === "Uploading") {
           return item;
@@ -330,11 +329,13 @@ export function useUploadQueue({
 
   // Cleanup object URLs on unmount.
   useEffect(() => {
+    const controllers = controllersRef.current;
+
     return () => {
       for (const item of itemsRef.current) {
         revokePreview(item);
       }
-      for (const controller of controllersRef.current.values()) {
+      for (const controller of controllers.values()) {
         controller.abort();
       }
     };

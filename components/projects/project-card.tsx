@@ -19,7 +19,9 @@ type ProjectCardProps = {
 };
 
 export function ProjectCard({ project }: ProjectCardProps) {
-  const progress = 0;
+  const imageCount = project.image_count ?? 0;
+  const annotatedCount = project.annotated_count ?? 0;
+  const progress = toPercent(annotatedCount, imageCount);
 
   async function handleStarToggle() {
     await toggleProjectStar(project.id, !project.starred);
@@ -71,7 +73,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
         <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
           <span className="flex items-center gap-1">
             <ImageIcon className="size-3.5" />
-            {numberFormatter.format(0)} images
+            {numberFormatter.format(imageCount)} images
           </span>
           <span className="flex items-center gap-1">
             <Clock className="size-3.5" />
@@ -81,7 +83,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
         <div className="mt-4 space-y-1">
           <div className="flex items-center justify-between text-xs">
             <span>Progress</span>
-            <span>{toPercent(progress, 100)}%</span>
+            <span>{progress}%</span>
           </div>
           <Progress value={progress} className="h-2" />
         </div>

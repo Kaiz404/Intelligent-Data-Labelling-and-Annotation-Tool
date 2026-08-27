@@ -21,6 +21,7 @@ const MAX_PUT_ATTEMPTS = 3;
 
 type CreateResponse = { uploadId: string; key: string };
 type PresignResponse = { parts: Array<{ partNumber: number; url: string }> };
+type CompleteResponse = { key: string; imageId: string };
 
 function abortError() {
   return new DOMException("Aborted", "AbortError");
@@ -287,13 +288,25 @@ export function createS3Uploader(options?: {
       const parts = [...completedParts]
         .map(([partNumber, eTag]) => ({ partNumber, eTag }))
         .sort((a, b) => a.partNumber - b.partNumber);
-      await requestApi<{ key: string }>(
+      const completed = await requestApi<CompleteResponse>(
         "/api/uploads/complete",
-        { key, uploadId, parts },
+        {
+          key,
+          uploadId,
+          parts,
+          fileName: file.name,
+          contentType: file.type,
+          sizeBytes: file.size,
+        },
         context.signal,
       );
 
-      return { fileId: item.id, key, uploadId };
+      return {
+        fileId: item.id,
+        key: completed.key,
+        imageId: completed.imageId,
+        uploadId,
+      };
     },
 
     async abort(item: UploadQueueItem) {

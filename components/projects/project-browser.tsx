@@ -69,7 +69,7 @@ export function ProjectBrowser({ initialProjects }: ProjectBrowserProps) {
       if (sortBy === "Name") {
         comparison = (first.name ?? "").localeCompare(second.name ?? "");
       } else if (sortBy === "Images") {
-        comparison = 0;
+        comparison = (first.image_count ?? 0) - (second.image_count ?? 0);
       } else if (sortBy === "Favourite") {
         comparison =
           new Date(second.updated_at ?? 0).getTime() -

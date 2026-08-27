@@ -1,6 +1,7 @@
 "use client";
 
 import { Pencil, Search, Upload } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { ImageCard } from "@/components/projects/image-card";
 import {
@@ -23,7 +24,7 @@ import {
   TooltipContent,
   TooltipTrigger
 } from "@/components/ui/tooltip";
-import type { ImageStatus, Project, ProjectImage } from "@/lib/types/projects";
+import type { Project, ProjectImage } from "@/lib/types/projects";
 
 const imageStatusFilters = [
   "All",
@@ -48,14 +49,13 @@ const defaultImageSortDirections: Record<ImageSortOption, SortDirection> = {
 type ProjectDetailClientProps = {
   project: Project;
   images: ProjectImage[];
-  unsplashError: string | null;
 };
 
 export function ProjectDetailClient({
   project,
   images,
-  unsplashError
 }: ProjectDetailClientProps) {
+  const router = useRouter();
   const [selectedImageIds, setSelectedImageIds] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [filterBy, setFilterBy] = useState<ImageFilterOption>("All");
@@ -142,9 +142,6 @@ export function ProjectDetailClient({
           {project.description ? (
             <p className="text-muted-foreground">{project.description}</p>
           ) : null}
-          {unsplashError ? (
-            <p className="text-xs text-muted-foreground">{unsplashError}</p>
-          ) : null}
         </div>
         <Button
           variant="outline"
@@ -230,7 +227,11 @@ export function ProjectDetailClient({
         </div>
       </div>
 
-      {visibleImages.length === 0 ? (
+      {images.length === 0 ? (
+        <div className="rounded-lg border border-dashed py-16 text-center text-muted-foreground">
+          No images have been uploaded to this project yet.
+        </div>
+      ) : visibleImages.length === 0 ? (
         <div className="rounded-lg border border-dashed py-16 text-center text-muted-foreground">
           No images match your filters.
         </div>
@@ -243,7 +244,6 @@ export function ProjectDetailClient({
               projectId={project.id}
               isSelected={selectedImageIds.includes(image.id)}
               onSelectionChange={handleSelectionChange}
-              unsplashError={unsplashError}
             />
           ))}
         </div>
@@ -253,6 +253,7 @@ export function ProjectDetailClient({
         open={isUploadOpen}
         onOpenChange={setIsUploadOpen}
         projectId={project.id}
+        onUploadComplete={() => router.refresh()}
       />
     </div>
   );
