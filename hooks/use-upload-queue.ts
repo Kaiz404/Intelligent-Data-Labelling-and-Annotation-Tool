@@ -101,11 +101,29 @@ export function useUploadQueue({
       const item = itemsRef.current.find((row) => row.id === id);
       if (item) {
         revokePreview(item);
-        await providerRef.current.abort?.(item);
+        if (item.status !== "Completed") {
+          try {
+            await providerRef.current.abort?.(item);
+          } catch {
+            // Removing a local queue item should still succeed when the
+            // best-effort server-side multipart cleanup is unavailable.
+          }
+        }
       }
     }
     setItems((current) => current.filter((item) => !idSet.has(item.id)));
     setSelectedIds((current) => current.filter((id) => !idSet.has(id)));
+  }, []);
+
+  const renameItem = useCallback((id: string, fileName: string) => {
+    const trimmedName = fileName.trim();
+    if (!trimmedName) return;
+
+    setItems((current) =>
+      current.map((item) =>
+        item.id === id ? { ...item, fileName: trimmedName } : item,
+      ),
+    );
   }, []);
 
   const pauseItem = useCallback(
@@ -347,6 +365,7 @@ export function useUploadQueue({
     isRunning,
     summary,
     addFiles,
+    renameItem,
     removeItems,
     pauseItem,
     pauseAll,
