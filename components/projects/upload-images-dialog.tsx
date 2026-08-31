@@ -222,6 +222,15 @@ export function UploadImagesDialog({
     setPage(1);
   }, [activeTab, search]);
 
+  useEffect(() => {
+    if (items.length !== 0) return;
+
+    setHasStarted(false);
+    setActiveTab("All");
+    setSearch("");
+    setPage(1);
+  }, [items.length]);
+
   function handleOpenChange(nextOpen: boolean) {
     if (!nextOpen) {
       void cancelAll();
