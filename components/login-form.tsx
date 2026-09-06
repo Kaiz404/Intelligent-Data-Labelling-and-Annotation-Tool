@@ -3,9 +3,8 @@
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import {
+  AuthBrand,
   AuthCardShell,
-  AuthDivider,
-  AuthTermsFooter,
 } from "@/components/auth/auth-card-shell";
 import { SocialAuthButtons } from "@/components/auth/social-auth-buttons";
 import { Button } from "@/components/ui/button";
@@ -64,17 +63,23 @@ export function LoginForm({
   };
 
   return (
-    <div className={cn("flex flex-col gap-6", className)} {...props}>
+    <div
+      className={cn("flex w-full flex-col items-center gap-5", className)}
+      {...props}
+    >
+      <AuthBrand />
       <AuthCardShell>
-        <div className="flex flex-col gap-2 px-6 text-center">
-          <h1 className="text-2xl font-semibold tracking-tight">Welcome back</h1>
+        <div className="mb-6 flex flex-col gap-2 text-left">
+          <h1 className="text-lg font-medium tracking-tight">
+            Login to your account
+          </h1>
           <p className="text-sm text-muted-foreground">
             Enter your email below to login to your account
           </p>
         </div>
 
-        <form onSubmit={handleLogin} className="flex flex-col gap-6">
-          <div className="flex flex-col gap-3">
+        <form onSubmit={handleLogin} className="flex flex-col gap-5">
+          <div className="flex flex-col gap-2">
             <Label htmlFor="email">Email</Label>
             <Input
               id="email"
@@ -86,14 +91,14 @@ export function LoginForm({
             />
           </div>
 
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-2">
             <div className="flex items-center">
               <Label htmlFor="password">Password</Label>
               <Link
                 href="/auth/forgot-password"
                 className="ml-auto text-sm text-muted-foreground underline-offset-4 hover:underline"
               >
-                Forgot your password?
+                Forgot password?
               </Link>
             </div>
             <Input
@@ -111,8 +116,6 @@ export function LoginForm({
             {isLoading ? "Logging in..." : "Login"}
           </Button>
 
-          <AuthDivider />
-
           <SocialAuthButtons
             onProviderClick={handleSocialLogin}
             loadingProvider={oauthLoading}
@@ -129,8 +132,6 @@ export function LoginForm({
           </p>
         </form>
       </AuthCardShell>
-
-      <AuthTermsFooter />
     </div>
   );
 }

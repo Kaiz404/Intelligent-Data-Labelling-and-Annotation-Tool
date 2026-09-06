@@ -1,4 +1,5 @@
-import { ImageIcon } from "lucide-react";
+import Image from "next/image";
+import authLogo from "@/app/auth/auth-logo.png";
 import { cn } from "@/lib/utils";
 
 type AuthCardShellProps = {
@@ -6,34 +7,28 @@ type AuthCardShellProps = {
   className?: string;
 };
 
-function AuthPlaceholder() {
+export function AuthBrand() {
   return (
-    <div
-      className="relative flex size-[150px] items-center justify-center rounded-xl border border-border/60 bg-background"
-      style={{
-        backgroundImage:
-          "radial-gradient(circle, var(--border) 1px, transparent 1px)",
-        backgroundSize: "12px 12px",
-      }}
-    >
-      <ImageIcon className="size-10 text-muted-foreground/40" strokeWidth={1.5} />
-    </div>
+    <Image
+      src={authLogo}
+      alt="SmartAnnoTool"
+      priority
+      className="h-auto w-[180px]"
+    />
   );
 }
-
 export function AuthCardShell({ children, className }: AuthCardShellProps) {
   return (
-    <div className={cn("flex flex-col gap-6", className)}>
-      <div className="flex overflow-hidden rounded-xl border bg-card shadow-xs">
-        <div className="flex flex-1 flex-col gap-6 p-8">{children}</div>
-        <div className="hidden flex-1 flex-col items-center justify-center bg-muted p-8 lg:flex">
-          <AuthPlaceholder />
-        </div>
-      </div>
+    <div
+      className={cn(
+        "w-full rounded-[10px] border bg-card p-6 shadow-sm",
+        className,
+      )}
+    >
+      {children}
     </div>
   );
 }
-
 export function AuthTermsFooter() {
   return (
     <p className="text-center text-xs text-muted-foreground">
@@ -47,15 +42,5 @@ export function AuthTermsFooter() {
       </a>
       .
     </p>
-  );
-}
-
-export function AuthDivider() {
-  return (
-    <div className="flex items-center gap-2">
-      <div className="h-px flex-1 bg-border" />
-      <span className="text-xs text-muted-foreground">OR CONTINUE WITH</span>
-      <div className="h-px flex-1 bg-border" />
-    </div>
   );
 }
