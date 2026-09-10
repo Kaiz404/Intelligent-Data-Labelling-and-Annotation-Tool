@@ -19,6 +19,7 @@ import {
   Pause,
   RefreshCw,
   Search,
+  Trash2,
   X,
 } from "lucide-react";
 import { formatBytes } from "@/lib/format";
@@ -56,13 +57,21 @@ type UploadImagesDialogProps = {
   onUploadComplete?: () => void;
 };
 
-function statusLabel(status: UploadQueueItem["status"]) {
+function statusLabel(status: UploadQueueItem["status"], hasStarted: boolean) {
+  if (status === "Queued" && !hasStarted) return "Ready to upload";
   if (status === "Queued" || status === "Paused") return "Uploading";
   return status;
 }
 
-function StatusCell({ item }: { item: UploadQueueItem }) {
-  const label = statusLabel(item.status);
+function StatusCell({
+  item,
+  hasStarted,
+}: {
+  item: UploadQueueItem;
+  hasStarted: boolean;
+}) {
+  const label = statusLabel(item.status, hasStarted);
+  const isReady = item.status === "Queued" && !hasStarted;
   const isFailed = item.status === "Failed";
   const isCompleted = item.status === "Completed";
   const isActive =
@@ -76,11 +85,13 @@ function StatusCell({ item }: { item: UploadQueueItem }) {
         "flex items-center gap-1.5 text-sm font-medium",
         isCompleted && "text-emerald-600",
         isFailed && "text-destructive",
-        isActive && "text-foreground",
+        (isActive || isReady) && "text-foreground",
       )}
       title={item.error}
     >
-      {isCompleted ? (
+      {isReady ? (
+        <span className="size-2 rounded-full bg-emerald-500" />
+      ) : isCompleted ? (
         <CheckCircle2 className="size-5 text-emerald-600" />
       ) : isFailed ? (
         <AlertCircle className="size-5 text-destructive" />
@@ -97,6 +108,60 @@ function StatusCell({ item }: { item: UploadQueueItem }) {
   );
 }
 
+function EditableFileName({
+  item,
+  disabled,
+  onRename,
+}: {
+  item: UploadQueueItem;
+  disabled: boolean;
+  onRename: (fileName: string) => void;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState(item.fileName);
+
+  useEffect(() => setDraft(item.fileName), [item.fileName]);
+
+  function save() {
+    const nextName = draft.trim();
+    if (nextName) onRename(nextName);
+    else setDraft(item.fileName);
+    setIsEditing(false);
+  }
+
+  if (isEditing) {
+    return (
+      <Input
+        autoFocus
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={save}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") save();
+          if (event.key === "Escape") {
+            setDraft(item.fileName);
+            setIsEditing(false);
+          }
+        }}
+        className="h-8 max-w-[280px]"
+        aria-label={`Rename ${item.fileName}`}
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={() => setIsEditing(true)}
+      className="max-w-full truncate text-left text-sm font-medium hover:underline disabled:cursor-default disabled:no-underline"
+      title={disabled ? item.fileName : "Click to rename"}
+    >
+      {item.fileName}
+    </button>
+  );
+}
+
 export function UploadImagesDialog({
   open,
   onOpenChange,
@@ -108,6 +173,7 @@ export function UploadImagesDialog({
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [isDragging, setIsDragging] = useState(false);
+  const [hasStarted, setHasStarted] = useState(false);
 
   const {
     items,
@@ -115,6 +181,7 @@ export function UploadImagesDialog({
     isRunning,
     summary,
     addFiles,
+    renameItem,
     removeItems,
     pauseItem,
     pauseAll,
@@ -139,6 +206,8 @@ export function UploadImagesDialog({
     });
   }, [activeTab, items, matchesTab, search]);
 
+  const visibleTabs = hasStarted ? uploadTabs : uploadTabs.slice(0, 1);
+
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
   const pageItems = filtered.slice(
@@ -152,6 +221,26 @@ export function UploadImagesDialog({
   useEffect(() => {
     setPage(1);
   }, [activeTab, search]);
+
+  useEffect(() => {
+    if (items.length !== 0) return;
+
+    setHasStarted(false);
+    setActiveTab("All");
+    setSearch("");
+    setPage(1);
+  }, [items.length]);
+
+  function handleOpenChange(nextOpen: boolean) {
+    if (!nextOpen) {
+      void cancelAll();
+      setHasStarted(false);
+      setActiveTab("All");
+      setSearch("");
+      setPage(1);
+    }
+    onOpenChange(nextOpen);
+  }
 
   function handleFileInput(event: ChangeEvent<HTMLInputElement>) {
     addFiles(event.currentTarget.files);
@@ -175,7 +264,7 @@ export function UploadImagesDialog({
   }, [safePage, totalPages]);
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="flex max-h-[90vh] w-full max-w-[960px] flex-col gap-6 overflow-hidden sm:max-w-[960px]">
         <DialogHeader className="gap-1.5 text-left">
           <DialogTitle className="text-lg font-normal">
@@ -200,13 +289,34 @@ export function UploadImagesDialog({
           }}
           onDrop={handleDrop}
           className={cn(
-            "flex flex-col items-center justify-center gap-6 rounded-[10px] border border-dashed border-muted-foreground p-6 text-center transition-colors",
+            "flex rounded-[10px] border border-dashed border-muted-foreground p-4 transition-colors",
+            items.length === 0
+              ? "min-h-40 flex-col items-center justify-center gap-6 text-center"
+              : "items-center gap-4 text-left",
             isDragging && "border-primary bg-primary/5",
           )}
         >
-          <CloudUpload className="size-[50px] text-muted-foreground" strokeWidth={1.5} />
-          <div className="flex flex-col items-center gap-6">
-            <div className="flex flex-col items-center gap-3">
+          <CloudUpload
+            className={cn(
+              "shrink-0 text-muted-foreground",
+              items.length === 0 ? "size-[50px]" : "size-10",
+            )}
+            strokeWidth={1.5}
+          />
+          <div
+            className={cn(
+              "flex min-w-0 flex-1",
+              items.length === 0
+                ? "flex-col items-center gap-6"
+                : "items-center justify-between gap-4",
+            )}
+          >
+            <div
+              className={cn(
+                "flex flex-col gap-1",
+                items.length === 0 && "items-center gap-3",
+              )}
+            >
               <p className="text-[13px] text-foreground">
                 Drag & Drop or Choose file to upload
               </p>
@@ -235,6 +345,7 @@ export function UploadImagesDialog({
           </div>
         </div>
 
+        {items.length > 0 ? (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">
           <div className="flex flex-wrap items-center justify-between gap-4 p-2.5 pt-2.5">
             <div className="flex flex-wrap items-center gap-6">
@@ -247,6 +358,7 @@ export function UploadImagesDialog({
                   </p>
                 </div>
               </div>
+              {hasStarted ? (
               <div className="w-full min-w-[200px] space-y-1 sm:w-[300px]">
                 <div className="flex justify-between text-xs text-muted-foreground">
                   <span>Progress</span>
@@ -257,7 +369,14 @@ export function UploadImagesDialog({
                 </div>
                 <Progress value={summary.progress} className="h-2" />
               </div>
+              ) : (
+                <span className="flex items-center gap-2 text-sm">
+                  <span className="size-2 rounded-full bg-emerald-500" />
+                  Ready to upload
+                </span>
+              )}
             </div>
+            {hasStarted ? (
             <div className="flex gap-2.5">
               <Button
                 type="button"
@@ -280,11 +399,12 @@ export function UploadImagesDialog({
                 Cancel All
               </Button>
             </div>
+            ) : null}
           </div>
 
           <div className="flex flex-col gap-3 p-2.5 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex flex-wrap gap-2.5">
-              {uploadTabs.map((tab) => {
+              {visibleTabs.map((tab) => {
                 const active = activeTab === tab;
                 return (
                   <button
@@ -330,7 +450,9 @@ export function UploadImagesDialog({
                   </TableHead>
                   <TableHead>File Name</TableHead>
                   <TableHead className="w-[120px]">Status</TableHead>
-                  <TableHead className="w-[200px]">Progress</TableHead>
+                  {hasStarted ? (
+                    <TableHead className="w-[200px]">Progress</TableHead>
+                  ) : null}
                   <TableHead className="w-[84px] text-center">Action</TableHead>
                 </TableRow>
               </TableHeader>
@@ -368,10 +490,12 @@ export function UploadImagesDialog({
                               />
                             ) : null}
                           </div>
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-medium">
-                              {file.fileName}
-                            </p>
+                          <div className="min-w-0 flex-1">
+                            <EditableFileName
+                              item={file}
+                              disabled={hasStarted}
+                              onRename={(fileName) => renameItem(file.id, fileName)}
+                            />
                             <p className="text-sm font-medium text-muted-foreground">
                               {formatBytes(file.sizeBytes)}
                             </p>
@@ -379,8 +503,9 @@ export function UploadImagesDialog({
                         </div>
                       </TableCell>
                       <TableCell>
-                        <StatusCell item={file} />
+                        <StatusCell item={file} hasStarted={hasStarted} />
                       </TableCell>
+                      {hasStarted ? (
                       <TableCell>
                         <div className="flex items-center gap-1.5">
                           <Progress
@@ -398,10 +523,12 @@ export function UploadImagesDialog({
                           </span>
                         </div>
                       </TableCell>
+                      ) : null}
                       <TableCell>
                         <div className="flex items-center justify-end gap-3 px-1">
-                          {file.status === "Uploading" ||
-                          file.status === "Queued" ? (
+                          {hasStarted &&
+                          (file.status === "Uploading" ||
+                            file.status === "Queued") ? (
                             <Button
                               type="button"
                               variant="ghost"
@@ -488,30 +615,49 @@ export function UploadImagesDialog({
             </div>
           ) : null}
         </div>
+        ) : null}
 
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            onClick={() => startUploads()}
-            disabled={
-              isRunning ||
-              !items.some(
-                (i) =>
-                  Boolean(i.file) &&
-                  i.status !== "Completed" &&
-                  i.status !== "Uploading",
-              )
-            }
-          >
-            {isRunning ? "Uploading…" : "Upload"}
-          </Button>
+        <DialogFooter className="flex-row items-center sm:justify-between">
+          <div className="mr-auto">
+            {selectedIds.length > 0 ? (
+              <Button
+                type="button"
+                variant="outline"
+                className="border-destructive text-destructive hover:text-destructive"
+                onClick={() => void removeItems(selectedIds)}
+              >
+                <Trash2 className="size-4" />
+                Remove
+              </Button>
+            ) : null}
+          </div>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => handleOpenChange(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                setHasStarted(true);
+                startUploads();
+              }}
+              disabled={
+                isRunning ||
+                !items.some(
+                  (i) =>
+                    Boolean(i.file) &&
+                    i.status !== "Completed" &&
+                    i.status !== "Uploading",
+                )
+              }
+            >
+              {isRunning ? "Uploading…" : "Upload"}
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>
