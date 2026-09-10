@@ -2,7 +2,6 @@
 
 import type { ReactNode } from "react";
 import {
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Hand,
@@ -17,12 +16,6 @@ import {
   Undo2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   Tooltip,
   TooltipContent,
@@ -48,6 +41,7 @@ type AnnotationToolbarProps = {
   onZoomOut: () => void;
   onZoomIn: () => void;
   onFit: () => void;
+  onAiAnnotate: () => void;
 };
 
 function ToolButton({
@@ -104,6 +98,7 @@ export function AnnotationToolbar({
   onZoomOut,
   onZoomIn,
   onFit,
+  onAiAnnotate,
 }: AnnotationToolbarProps) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-4">
@@ -211,21 +206,14 @@ export function AnnotationToolbar({
           <Maximize2 className="size-5" />
         </Button>
 
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              className="h-[50px] gap-2 rounded-[10px] bg-violet-600 px-4 text-base text-white hover:bg-violet-700"
-            >
-              <WandSparkles className="size-5" />
-              AI Annotate
-              <ChevronDown className="size-5" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem disabled>Coming soon</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <Button
+          type="button"
+          onClick={onAiAnnotate}
+          className="h-[50px] gap-2 rounded-[10px] bg-violet-600 px-4 text-base text-white hover:bg-violet-700"
+        >
+          <WandSparkles className="size-5" />
+          AI Annotate
+        </Button>
       </div>
     </div>
   );

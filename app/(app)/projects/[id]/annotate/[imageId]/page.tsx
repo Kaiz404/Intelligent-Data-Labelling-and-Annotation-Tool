@@ -1,6 +1,7 @@
 import { AppHeader } from "@/components/app-shell/app-header";
 import { AnnotationWorkspace } from "@/components/annotate/annotation-workspace";
 import { fetchProjectImages } from "@/lib/images";
+import { fetchProjectLabels } from "@/lib/labels";
 import { createClient } from "@/lib/supabase/server";
 import { connection } from "next/server";
 import { notFound, redirect } from "next/navigation";
@@ -25,7 +26,10 @@ async function AnnotateContent({
     notFound();
   }
 
-  const images = await fetchProjectImages(project.id);
+  const [images, labels] = await Promise.all([
+    fetchProjectImages(project.id),
+    fetchProjectLabels(project.id),
+  ]);
 
   if (images.length === 0) {
     redirect(`/projects/${projectId}`);
@@ -50,6 +54,7 @@ async function AnnotateContent({
           project={project}
           images={images}
           imageId={activeImage.id}
+          labels={labels}
         />
       </div>
     </>

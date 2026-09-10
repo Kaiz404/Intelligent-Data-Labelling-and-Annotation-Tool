@@ -3,15 +3,17 @@
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import { AiAnnotateDialog } from "@/components/annotate/ai-annotate-dialog";
 import { AnnotationSidePanel } from "@/components/annotate/annotation-side-panel";
 import { AnnotationToolbar } from "@/components/annotate/annotation-toolbar";
 import { Button } from "@/components/ui/button";
+import { createLabel, deleteLabel } from "@/lib/actions/labels";
 import {
   loadAnnotations,
   saveAnnotations,
 } from "@/lib/annotations/storage";
-import { MOCK_ANNOTATION_LABELS } from "@/lib/mock/annotation-labels";
 import type {
+  AnnotationLabel,
   AnnotationTool,
   BoundingBox,
 } from "@/lib/types/annotations";
@@ -36,6 +38,7 @@ type AnnotationWorkspaceProps = {
   project: Project;
   images: ProjectImage[];
   imageId: string;
+  labels: AnnotationLabel[];
 };
 
 const MAX_HISTORY = 50;
@@ -44,9 +47,10 @@ export function AnnotationWorkspace({
   project,
   images,
   imageId,
+  labels: initialLabels,
 }: AnnotationWorkspaceProps) {
   const router = useRouter();
-  const labels = MOCK_ANNOTATION_LABELS;
+  const [labels, setLabels] = useState<AnnotationLabel[]>(initialLabels);
 
   const imageIndex = Math.max(
     0,
@@ -64,6 +68,30 @@ export function AnnotationWorkspace({
   const [future, setFuture] = useState<BoundingBox[][]>([]);
   const [saveFlash, setSaveFlash] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const [aiAnnotateOpen, setAiAnnotateOpen] = useState(false);
+
+  useEffect(() => {
+    if (!selectedLabelId && labels[0]) {
+      setSelectedLabelId(labels[0].id);
+    }
+  }, [labels, selectedLabelId]);
+
+  const handleCreateLabel = useCallback(
+    async (name: string) => {
+      const label = await createLabel(project.id, name);
+      setLabels((current) => [...current, label]);
+    },
+    [project.id],
+  );
+
+  const handleDeleteLabel = useCallback(
+    async (labelId: string) => {
+      await deleteLabel(project.id, labelId);
+      setLabels((current) => current.filter((label) => label.id !== labelId));
+      setSelectedLabelId((current) => (current === labelId ? "" : current));
+    },
+    [project.id],
+  );
 
   useEffect(() => {
     if (!currentImage) {
@@ -146,6 +174,16 @@ export function AnnotationWorkspace({
     window.setTimeout(() => setSaveFlash(false), 1600);
   }, [boxes, currentImage, project.id]);
 
+  const handleAiDetected = useCallback(
+    (detected: BoundingBox[]) => {
+      if (detected.length === 0) {
+        return;
+      }
+      commitBoxes([...boxes, ...detected]);
+    },
+    [boxes, commitBoxes],
+  );
+
   if (!currentImage) {
     return (
       <div className="rounded-lg border border-dashed p-10 text-center text-muted-foreground">
@@ -173,6 +211,16 @@ export function AnnotationWorkspace({
         onZoomOut={() => setZoom((value) => Math.max(10, value - 10))}
         onZoomIn={() => setZoom((value) => Math.min(400, value + 10))}
         onFit={() => setFitToken((value) => value + 1)}
+        onAiAnnotate={() => setAiAnnotateOpen(true)}
+      />
+
+      <AiAnnotateDialog
+        open={aiAnnotateOpen}
+        onOpenChange={setAiAnnotateOpen}
+        projectId={project.id}
+        imageId={currentImage.id}
+        labels={labels}
+        onDetected={handleAiDetected}
       />
 
       <div className="flex flex-col gap-6 xl:flex-row xl:items-start">
@@ -207,6 +255,8 @@ export function AnnotationWorkspace({
           selectedLabelId={selectedLabelId}
           selectedBoxId={selectedBoxId}
           onSelectLabel={setSelectedLabelId}
+          onCreateLabel={handleCreateLabel}
+          onDeleteLabel={handleDeleteLabel}
           onSelectBox={(id) => {
             setSelectedBoxId(id);
             if (id) {

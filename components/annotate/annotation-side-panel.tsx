@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Search } from "lucide-react";
+import { Search, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -21,6 +22,8 @@ type AnnotationSidePanelProps = {
   selectedBoxId: string | null;
   onSelectLabel: (labelId: string) => void;
   onSelectBox: (boxId: string | null) => void;
+  onCreateLabel: (name: string) => Promise<void>;
+  onDeleteLabel: (labelId: string) => Promise<void>;
 };
 
 export function AnnotationSidePanel({
@@ -30,9 +33,35 @@ export function AnnotationSidePanel({
   selectedBoxId,
   onSelectLabel,
   onSelectBox,
+  onCreateLabel,
+  onDeleteLabel,
 }: AnnotationSidePanelProps) {
   const [labelQuery, setLabelQuery] = useState("");
   const [labelFilter, setLabelFilter] = useState<"all" | "used">("all");
+  const [newLabelName, setNewLabelName] = useState("");
+  const [isCreatingLabel, setIsCreatingLabel] = useState(false);
+  const [labelError, setLabelError] = useState<string | null>(null);
+
+  async function handleCreateLabel(event: React.FormEvent) {
+    event.preventDefault();
+    const trimmed = newLabelName.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    setIsCreatingLabel(true);
+    setLabelError(null);
+    try {
+      await onCreateLabel(trimmed);
+      setNewLabelName("");
+    } catch (error) {
+      setLabelError(
+        error instanceof Error ? error.message : "Could not add label.",
+      );
+    } finally {
+      setIsCreatingLabel(false);
+    }
+  }
 
   const filteredLabels = useMemo(() => {
     const normalized = labelQuery.trim().toLowerCase();
@@ -72,6 +101,27 @@ export function AnnotationSidePanel({
 
       <TabsContent value="label" className="mt-2">
         <div className="space-y-4 rounded-xl border bg-card p-3 shadow-sm">
+          <form onSubmit={handleCreateLabel} className="flex gap-1.5">
+            <Input
+              value={newLabelName}
+              onChange={(event) => setNewLabelName(event.target.value)}
+              placeholder="New label name..."
+              className="h-8 text-xs"
+              disabled={isCreatingLabel}
+            />
+            <Button
+              type="submit"
+              size="sm"
+              className="h-8 shrink-0"
+              disabled={isCreatingLabel || !newLabelName.trim()}
+            >
+              Add
+            </Button>
+          </form>
+          {labelError ? (
+            <p className="text-xs text-destructive">{labelError}</p>
+          ) : null}
+
           <div className="space-y-2">
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -107,29 +157,43 @@ export function AnnotationSidePanel({
               const isActive = label.id === selectedLabelId;
               return (
                 <li key={label.id}>
-                  <button
-                    type="button"
-                    onClick={() => onSelectLabel(label.id)}
+                  <div
                     className={cn(
-                      "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
+                      "group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
                       isActive
                         ? "bg-primary/10 text-foreground"
                         : "hover:bg-muted",
                     )}
                   >
-                    <span
-                      className="size-3 shrink-0 rounded-full"
-                      style={{ backgroundColor: label.color }}
-                      aria-hidden
-                    />
-                    <span className="truncate">{label.name}</span>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => onSelectLabel(label.id)}
+                      className="flex min-w-0 flex-1 items-center gap-2"
+                    >
+                      <span
+                        className="size-3 shrink-0 rounded-full"
+                        style={{ backgroundColor: label.color }}
+                        aria-hidden
+                      />
+                      <span className="truncate">{label.name}</span>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Delete ${label.name}`}
+                      onClick={() => onDeleteLabel(label.id)}
+                      className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  </div>
                 </li>
               );
             })}
             {filteredLabels.length === 0 ? (
               <li className="px-2 py-4 text-center text-xs text-muted-foreground">
-                No labels match.
+                {labels.length === 0
+                  ? "No labels yet. Add one above."
+                  : "No labels match."}
               </li>
             ) : null}
           </ul>
