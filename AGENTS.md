@@ -297,12 +297,13 @@ Update the installed list above after adding.
 
 ## Server actions
 
-Current actions: `lib/actions/projects.ts`
+Current actions: `lib/actions/projects.ts`, `lib/actions/images.ts`
 
 | Action | What it does |
 |--------|--------------|
 | `createProject(formData)` | Insert project, revalidate, redirect to `/projects/[id]` |
 | `toggleProjectStar(projectId, starred)` | Update `starred`, revalidate paths |
+| `deleteProjectImage(imageId, projectId)` | Verify image access, permanently delete its S3 object and Supabase row, then revalidate project metrics |
 
 **Pattern for new actions:**
 1. Create `lib/actions/<domain>.ts` with `"use server"` at top

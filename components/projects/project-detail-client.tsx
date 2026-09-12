@@ -3,6 +3,7 @@
 import { Pencil, Search, Upload } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
+import { deleteProjectImage } from "@/lib/actions/images";
 import { ImageCard } from "@/components/projects/image-card";
 import {
   reverseSortDirection,
@@ -11,6 +12,14 @@ import {
 } from "@/components/projects/sort-order-button";
 import { UploadImagesDialog } from "@/components/projects/upload-images-dialog";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -65,6 +74,9 @@ export function ProjectDetailClient({
     defaultImageSortDirections["Date Added"]
   );
   const [isUploadOpen, setIsUploadOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<ProjectImage | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const visibleImages = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
@@ -113,6 +125,28 @@ export function ProjectDetailClient({
         ? [...currentIds, imageId]
         : currentIds.filter((id) => id !== imageId)
     );
+  }
+
+  async function handleDeleteImage() {
+    if (!deleteTarget || isDeleting) return;
+
+    setIsDeleting(true);
+    setDeleteError(null);
+
+    try {
+      await deleteProjectImage(deleteTarget.id, project.id);
+      setSelectedImageIds((currentIds) =>
+        currentIds.filter((id) => id !== deleteTarget.id),
+      );
+      setDeleteTarget(null);
+      router.refresh();
+    } catch (error) {
+      setDeleteError(
+        error instanceof Error ? error.message : "Could not delete the image.",
+      );
+    } finally {
+      setIsDeleting(false);
+    }
   }
 
   return (
@@ -244,6 +278,10 @@ export function ProjectDetailClient({
               projectId={project.id}
               isSelected={selectedImageIds.includes(image.id)}
               onSelectionChange={handleSelectionChange}
+              onDelete={(target) => {
+                setDeleteError(null);
+                setDeleteTarget(target);
+              }}
             />
           ))}
         </div>
@@ -255,6 +293,50 @@ export function ProjectDetailClient({
         projectId={project.id}
         onUploadComplete={() => router.refresh()}
       />
+
+      <Dialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !isDeleting) {
+            setDeleteTarget(null);
+            setDeleteError(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete image?</DialogTitle>
+            <DialogDescription>
+              {deleteTarget
+                ? `This will permanently delete ${deleteTarget.fileName} from the project. This action cannot be undone.`
+                : "This action cannot be undone."}
+            </DialogDescription>
+          </DialogHeader>
+
+          {deleteError ? (
+            <p className="text-sm text-destructive">{deleteError}</p>
+          ) : null}
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isDeleting}
+              onClick={() => setDeleteTarget(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={isDeleting}
+              onClick={() => void handleDeleteImage()}
+            >
+              {isDeleting ? "Deleting..." : "Delete image"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
