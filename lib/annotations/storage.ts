@@ -7,20 +7,21 @@ function storageKey(projectId: string, imageId: string) {
 export function loadAnnotations(
   projectId: string,
   imageId: string,
+  databaseFallback: BoundingBox[] = [],
 ): BoundingBox[] {
   if (typeof window === "undefined") {
-    return [];
+    return databaseFallback;
   }
 
   try {
     const raw = sessionStorage.getItem(storageKey(projectId, imageId));
     if (!raw) {
-      return [];
+      return databaseFallback;
     }
     const parsed = JSON.parse(raw) as AnnotationDocument;
     return Array.isArray(parsed.boxes) ? parsed.boxes : [];
   } catch {
-    return [];
+    return databaseFallback;
   }
 }
 

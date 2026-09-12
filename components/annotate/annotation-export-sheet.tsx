@@ -128,7 +128,7 @@ export function AnnotationExportSheet({
     try {
       const exportImages: ExportImage[] = await Promise.all(images.map(async (image) => ({
         ...image,
-        boxes: loadAnnotations(projectId, image.id),
+        boxes: loadAnnotations(projectId, image.id, image.annotations),
         ...await getDimensions(image.imageUrl ?? image.thumbnailUrl),
       })));
       const baseName = safeName(fileName);

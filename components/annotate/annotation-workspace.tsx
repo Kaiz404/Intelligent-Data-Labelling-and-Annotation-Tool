@@ -9,6 +9,7 @@ import { AnnotationSidePanel } from "@/components/annotate/annotation-side-panel
 import { AnnotationExportSheet } from "@/components/annotate/annotation-export-sheet";
 import { AnnotationToolbar } from "@/components/annotate/annotation-toolbar";
 import { Button } from "@/components/ui/button";
+import { saveImageAnnotations } from "@/lib/actions/annotations";
 import {
   createLabel,
   deleteLabel,
@@ -73,6 +74,8 @@ export function AnnotationWorkspace({
   const [past, setPast] = useState<BoundingBox[][]>([]);
   const [future, setFuture] = useState<BoundingBox[][]>([]);
   const [saveFlash, setSaveFlash] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -105,7 +108,11 @@ export function AnnotationWorkspace({
     if (!currentImage) {
       return;
     }
-    const loaded = loadAnnotations(project.id, currentImage.id);
+    const loaded = loadAnnotations(
+      project.id,
+      currentImage.id,
+      currentImage.annotations,
+    );
     setBoxes(loaded);
     setPast([]);
     setFuture([]);
@@ -265,14 +272,31 @@ export function AnnotationWorkspace({
     [images, project.id, router],
   );
 
-  const handleSave = useCallback(() => {
+  const handleSave = useCallback(async () => {
     if (!currentImage) {
       return;
     }
     saveAnnotations(project.id, currentImage.id, boxes);
-    setLastSavedAt(new Date());
-    setSaveFlash(true);
-    window.setTimeout(() => setSaveFlash(false), 1600);
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      const result = await saveImageAnnotations(
+        project.id,
+        currentImage.id,
+        boxes,
+      );
+      setLastSavedAt(new Date(result.savedAt));
+      setSaveFlash(true);
+      window.setTimeout(() => setSaveFlash(false), 1600);
+    } catch (error) {
+      setSaveError(
+        error instanceof Error
+          ? error.message
+          : "Could not save annotations.",
+      );
+    } finally {
+      setIsSaving(false);
+    }
   }, [boxes, currentImage, project.id]);
 
   useEffect(() => {
@@ -419,9 +443,9 @@ export function AnnotationWorkspace({
 
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-2">
-            <Button type="button" onClick={handleSave} className="rounded-lg">
+            <Button type="button" onClick={handleSave} disabled={isSaving} className="rounded-lg">
               {saveFlash ? <CheckCircle2 className="size-4" /> : null}
-              {saveFlash ? "Saved" : "Save"}
+              {isSaving ? "Saving..." : saveFlash ? "Saved" : "Save"}
             </Button>
             <Button
               type="button"
@@ -435,6 +459,11 @@ export function AnnotationWorkspace({
               <Download className="size-4" /> Export
             </Button>
           </div>
+          {saveError ? (
+            <p className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              {saveError}
+            </p>
+          ) : null}
           <AnnotationSidePanel
             labels={labels}
             boxes={boxes}
