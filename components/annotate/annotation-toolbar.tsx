@@ -75,7 +75,7 @@ function ToolButton({
           disabled={disabled}
           onClick={onClick}
           className={cn(
-            "size-10 rounded-md",
+            "size-8 rounded-md",
             active && "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary",
           )}
         >
@@ -112,91 +112,91 @@ export function AnnotationToolbar({
           type="button"
           variant="outline"
           size="icon"
-          className="size-11"
+          className="size-9"
           onClick={onPrev}
           disabled={imageIndex <= 0}
           aria-label="Previous image"
         >
-          <ChevronLeft className="size-5" />
+          <ChevronLeft className="size-4" />
         </Button>
-        <p className="min-w-[4.5rem] text-center text-lg font-medium tabular-nums">
+        <p className="min-w-[3.5rem] text-center text-sm font-medium tabular-nums">
           {imageIndex + 1} / {imageCount}
         </p>
         <Button
           type="button"
           variant="outline"
           size="icon"
-          className="size-11"
+          className="size-9"
           onClick={onNext}
           disabled={imageIndex >= imageCount - 1}
           aria-label="Next image"
         >
-          <ChevronRight className="size-5" />
+          <ChevronRight className="size-4" />
         </Button>
       </div>
 
-      <div className="flex items-center gap-2 rounded-[10px] border bg-card p-2 shadow-sm">
+      <div className="flex items-center gap-1 rounded-lg border bg-card p-1 shadow-sm">
         <ToolButton
           label="Select"
           active={tool === "select"}
           onClick={() => onToolChange("select")}
         >
-          <MousePointer2 className="size-5" />
+          <MousePointer2 className="size-4" />
         </ToolButton>
         <ToolButton
           label="Bounding box"
           active={tool === "bbox"}
           onClick={() => onToolChange("bbox")}
         >
-          <Square className="size-5" />
+          <Square className="size-4" />
         </ToolButton>
         <ToolButton
           label="Pan"
           active={tool === "pan"}
           onClick={() => onToolChange("pan")}
         >
-          <Hand className="size-5" />
+          <Hand className="size-4" />
         </ToolButton>
-        <div className="mx-1 h-8 w-px bg-border" />
+        <div className="mx-1 h-6 w-px bg-border" />
         <ToolButton label="Undo" disabled={!canUndo} onClick={onUndo}>
-          <Undo2 className="size-5" />
+          <Undo2 className="size-4" />
         </ToolButton>
         <ToolButton label="Redo" disabled={!canRedo} onClick={onRedo}>
-          <Redo2 className="size-5" />
+          <Redo2 className="size-4" />
         </ToolButton>
         <ToolButton
           label="Delete selected"
           disabled={!canDelete}
           onClick={onDelete}
         >
-          <Trash2 className="size-5" />
+          <Trash2 className="size-4" />
         </ToolButton>
       </div>
 
-      <div className="flex flex-wrap items-center gap-4">
+      <div className="flex flex-wrap items-center gap-2">
         <div className="flex items-center shadow-sm">
           <Button
             type="button"
             variant="outline"
             size="icon"
-            className="size-[50px] rounded-r-none"
+            className="size-9 rounded-r-none"
             onClick={onZoomOut}
             aria-label="Zoom out"
           >
-            <Minus className="size-5" />
+            <Minus className="size-4" />
           </Button>
-          <div className="flex h-[50px] min-w-[4.5rem] items-center justify-center border-y px-3 text-lg tabular-nums">
+          <div className="flex h-9 min-w-[3.5rem] items-center justify-center border-y px-2 text-sm tabular-nums">
             {zoom}%
           </div>
           <Button
             type="button"
             variant="outline"
             size="icon"
-            className="size-[50px] rounded-l-none"
+            className="size-9 rounded-l-none"
             onClick={onZoomIn}
             aria-label="Zoom in"
           >
-            <Plus className="size-5" />
+            <Plus className="size-4" />
           </Button>
         </div>
 
@@ -204,22 +204,22 @@ export function AnnotationToolbar({
           type="button"
           variant="outline"
           size="icon"
-          className="size-[50px] rounded-[10px]"
+          className="size-9 rounded-lg"
           onClick={onFit}
           aria-label="Fit to view"
         >
-          <Maximize2 className="size-5" />
+          <Maximize2 className="size-4" />
         </Button>
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
               type="button"
-              className="h-[50px] gap-2 rounded-[10px] bg-violet-600 px-4 text-base text-white hover:bg-violet-700"
+              className="h-9 gap-1.5 rounded-lg bg-violet-600 px-3 text-sm text-white hover:bg-violet-700"
             >
-              <WandSparkles className="size-5" />
+              <WandSparkles className="size-4" />
               AI Annotate
-              <ChevronDown className="size-5" />
+              <ChevronDown className="size-4" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
