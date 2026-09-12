@@ -2,6 +2,7 @@ import "server-only";
 
 import { createClient } from "@/lib/supabase/server";
 import { createImageReadUrl } from "@/lib/uploads/s3-server";
+import type { BoundingBox } from "@/lib/types/annotations";
 import type { ImageStatus, ProjectImage } from "@/lib/types/projects";
 
 type ImageRow = {
@@ -63,6 +64,7 @@ export async function fetchProjectImages(
         progress,
         thumbnailUrl: signedUrl,
         imageUrl: signedUrl,
+        annotations: parseAnnotations(row.annotation),
       };
     }),
   );
@@ -115,4 +117,21 @@ export async function fetchImageStats(
 
   const total = data?.length ?? 0;
   return { total, annotated, unannotated: total - annotated, byProject };
+}
+
+function parseAnnotations(annotation: unknown): BoundingBox[] {
+  if (!Array.isArray(annotation)) return [];
+
+  return annotation.filter((candidate): candidate is BoundingBox => {
+    if (!candidate || typeof candidate !== "object") return false;
+    const box = candidate as Record<string, unknown>;
+    return (
+      typeof box.id === "string" &&
+      typeof box.labelId === "string" &&
+      typeof box.x === "number" && Number.isFinite(box.x) &&
+      typeof box.y === "number" && Number.isFinite(box.y) &&
+      typeof box.width === "number" && Number.isFinite(box.width) &&
+      typeof box.height === "number" && Number.isFinite(box.height)
+    );
+  });
 }

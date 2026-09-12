@@ -3,10 +3,13 @@
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import { CheckCircle2, ChevronLeft, ChevronRight, Download, Keyboard } from "lucide-react";
 import { AiAnnotateDialog } from "@/components/annotate/ai-annotate-dialog";
 import { AnnotationSidePanel } from "@/components/annotate/annotation-side-panel";
+import { AnnotationExportSheet } from "@/components/annotate/annotation-export-sheet";
 import { AnnotationToolbar } from "@/components/annotate/annotation-toolbar";
 import { Button } from "@/components/ui/button";
+import { saveImageAnnotations } from "@/lib/actions/annotations";
 import {
   createLabel,
   deleteLabel,
@@ -71,7 +74,11 @@ export function AnnotationWorkspace({
   const [past, setPast] = useState<BoundingBox[][]>([]);
   const [future, setFuture] = useState<BoundingBox[][]>([]);
   const [saveFlash, setSaveFlash] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [aiAnnotateOpen, setAiAnnotateOpen] = useState(false);
 
   useEffect(() => {
@@ -101,7 +108,11 @@ export function AnnotationWorkspace({
     if (!currentImage) {
       return;
     }
-    const loaded = loadAnnotations(project.id, currentImage.id);
+    const loaded = loadAnnotations(
+      project.id,
+      currentImage.id,
+      currentImage.annotations,
+    );
     setBoxes(loaded);
     setPast([]);
     setFuture([]);
@@ -135,14 +146,17 @@ export function AnnotationWorkspace({
       }
 
       const assignedLabelId = assignedLabel.id;
-      setBoxes((current) =>
-        current.map((box) =>
-          box.id === boxId ? { ...box, labelId: assignedLabelId } : box,
-        ),
+      const nextBoxes = boxes.map((box) =>
+        box.id === boxId ? { ...box, labelId: assignedLabelId } : box,
       );
+      commitBoxes(nextBoxes);
+      if (currentImage) {
+        saveAnnotations(project.id, currentImage.id, nextBoxes);
+        setLastSavedAt(new Date());
+      }
       setSelectedLabelId(assignedLabelId);
     },
-    [labels, project.id],
+    [boxes, commitBoxes, currentImage, labels, project.id],
   );
 
   const handleRenameLabel = useCallback(
@@ -202,6 +216,51 @@ export function AnnotationWorkspace({
     setSelectedBoxId(null);
   }, [boxes, commitBoxes, selectedBoxId]);
 
+  const handleDeleteBox = useCallback(
+    (boxId: string) => {
+      commitBoxes(boxes.filter((box) => box.id !== boxId));
+      if (selectedBoxId === boxId) setSelectedBoxId(null);
+    },
+    [boxes, commitBoxes, selectedBoxId],
+  );
+
+  const handleMoveBox = useCallback(
+    (
+      boxId: string,
+      action: "front" | "forward" | "back" | "backward",
+    ) => {
+      const currentIndex = boxes.findIndex((box) => box.id === boxId);
+      if (currentIndex < 0) return;
+      const next = [...boxes];
+      const [box] = next.splice(currentIndex, 1);
+      const nextIndex =
+        action === "front"
+          ? next.length
+          : action === "back"
+            ? 0
+            : action === "forward"
+              ? Math.min(currentIndex + 1, next.length)
+              : Math.max(currentIndex - 1, 0);
+      next.splice(nextIndex, 0, box);
+      commitBoxes(next);
+    },
+    [boxes, commitBoxes],
+  );
+
+  const handleUpdateBox = useCallback(
+    (
+      boxId: string,
+      patch: Partial<
+        Pick<BoundingBox, "labelId" | "x" | "y" | "width" | "height">
+      >,
+    ) => {
+      commitBoxes(
+        boxes.map((box) => (box.id === boxId ? { ...box, ...patch } : box)),
+      );
+    },
+    [boxes, commitBoxes],
+  );
+
   const navigateToImage = useCallback(
     (nextIndex: number) => {
       const nextImage = images[nextIndex];
@@ -213,14 +272,66 @@ export function AnnotationWorkspace({
     [images, project.id, router],
   );
 
-  const handleSave = useCallback(() => {
+  const handleSave = useCallback(async () => {
     if (!currentImage) {
       return;
     }
     saveAnnotations(project.id, currentImage.id, boxes);
-    setSaveFlash(true);
-    window.setTimeout(() => setSaveFlash(false), 1600);
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      const result = await saveImageAnnotations(
+        project.id,
+        currentImage.id,
+        boxes,
+      );
+      setLastSavedAt(new Date(result.savedAt));
+      setSaveFlash(true);
+      window.setTimeout(() => setSaveFlash(false), 1600);
+    } catch (error) {
+      setSaveError(
+        error instanceof Error
+          ? error.message
+          : "Could not save annotations.",
+      );
+    } finally {
+      setIsSaving(false);
+    }
   }, [boxes, currentImage, project.id]);
+
+  useEffect(() => {
+    if (!hydrated || !currentImage) return;
+    const timer = window.setTimeout(() => {
+      saveAnnotations(project.id, currentImage.id, boxes);
+      setLastSavedAt(new Date());
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [boxes, currentImage, hydrated, project.id]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const isEditing =
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.isContentEditable;
+      if (isEditing) return;
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        if (event.shiftKey) handleRedo();
+        else handleUndo();
+        return;
+      }
+      if (event.key === "Delete" || event.key === "Backspace") {
+        event.preventDefault();
+        handleDelete();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [handleDelete, handleRedo, handleUndo]);
 
   const handleAiDetected = useCallback(
     (detected: BoundingBox[]) => {
@@ -241,7 +352,7 @@ export function AnnotationWorkspace({
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       <AnnotationToolbar
         imageIndex={imageIndex}
         imageCount={images.length}
@@ -271,59 +382,126 @@ export function AnnotationWorkspace({
         onDetected={handleAiDetected}
       />
 
-      <div className="flex flex-col gap-6 xl:flex-row xl:items-start">
-        <div className="min-h-[550px] flex-1 overflow-hidden rounded-[10px] border border-zinc-100 shadow-sm">
-          {hydrated ? (
-            <AnnotationCanvas
-              key={currentImage.id}
-              imageUrl={currentImage.imageUrl ?? currentImage.thumbnailUrl}
-              fileName={currentImage.fileName}
-              tool={tool}
-              zoom={zoom}
-              boxes={boxes}
-              labels={labels}
-              selectedBoxId={selectedBoxId}
-              selectedLabelId={selectedLabelId}
-              onSelectBox={setSelectedBoxId}
-              onBoxesChange={handleBoxesChange}
-              onAssignBoxLabel={handleAssignBoxLabel}
-              onRenameLabel={handleRenameLabel}
-              onZoomChange={setZoom}
-              fitNonce={fitToken}
-              className="h-[550px]"
-            />
-          ) : (
-            <div className="flex h-[550px] items-center justify-center text-sm text-muted-foreground">
-              Loading annotations...
+      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_290px] xl:items-start">
+        <div className="min-w-0 space-y-4">
+          <div className="min-h-[510px] overflow-hidden rounded-xl border bg-muted/30 shadow-sm">
+            {hydrated ? (
+              <AnnotationCanvas
+                key={currentImage.id}
+                imageUrl={currentImage.imageUrl ?? currentImage.thumbnailUrl}
+                fileName={currentImage.fileName}
+                tool={tool}
+                zoom={zoom}
+                boxes={boxes}
+                labels={labels}
+                selectedBoxId={selectedBoxId}
+                selectedLabelId={selectedLabelId}
+                onSelectBox={(id) => {
+                  setSelectedBoxId(id);
+                  if (id) setTool("select");
+                }}
+                onBoxesChange={handleBoxesChange}
+                onAssignBoxLabel={handleAssignBoxLabel}
+                onRenameLabel={handleRenameLabel}
+                onZoomChange={setZoom}
+                fitNonce={fitToken}
+                className="h-[510px]"
+              />
+            ) : (
+              <div className="flex h-[510px] items-center justify-center text-sm text-muted-foreground">
+                Loading annotations...
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2 rounded-xl border bg-card p-3 shadow-sm">
+            <Button type="button" variant="ghost" size="icon" onClick={() => navigateToImage(imageIndex - 1)} disabled={imageIndex <= 0} aria-label="Previous thumbnails">
+              <ChevronLeft className="size-4" />
+            </Button>
+            <div className="grid min-w-0 flex-1 auto-cols-[110px] grid-flow-col gap-3 overflow-x-auto py-1">
+              {images.map((image, index) => (
+                <button
+                  type="button"
+                  key={image.id}
+                  onClick={() => navigateToImage(index)}
+                  className="min-w-0 text-left"
+                  aria-current={image.id === currentImage.id ? "true" : undefined}
+                >
+                  <span
+                    className={`block h-16 rounded-md border bg-muted bg-cover bg-center transition ${image.id === currentImage.id ? "border-primary ring-2 ring-primary/20" : "hover:border-primary/50"}`}
+                    style={image.thumbnailUrl ? { backgroundImage: `url(${image.thumbnailUrl})` } : undefined}
+                  />
+                  <span className="mt-1 block truncate text-[10px]">{image.fileName}</span>
+                </button>
+              ))}
             </div>
-          )}
+            <Button type="button" variant="ghost" size="icon" onClick={() => navigateToImage(imageIndex + 1)} disabled={imageIndex >= images.length - 1} aria-label="Next thumbnails">
+              <ChevronRight className="size-4" />
+            </Button>
+          </div>
         </div>
 
-        <AnnotationSidePanel
-          labels={labels}
-          boxes={boxes}
-          selectedLabelId={selectedLabelId}
-          selectedBoxId={selectedBoxId}
-          onSelectLabel={setSelectedLabelId}
-          onCreateLabel={handleCreateLabel}
-          onDeleteLabel={handleDeleteLabel}
-          onSelectBox={(id) => {
-            setSelectedBoxId(id);
-            if (id) {
-              setTool("select");
-            }
-          }}
-        />
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-2">
+            <Button type="button" onClick={handleSave} disabled={isSaving} className="rounded-lg">
+              {saveFlash ? <CheckCircle2 className="size-4" /> : null}
+              {isSaving ? "Saving..." : saveFlash ? "Saved" : "Save"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                saveAnnotations(project.id, currentImage.id, boxes);
+                setExportOpen(true);
+              }}
+              className="rounded-lg"
+            >
+              <Download className="size-4" /> Export
+            </Button>
+          </div>
+          {saveError ? (
+            <p className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              {saveError}
+            </p>
+          ) : null}
+          <AnnotationSidePanel
+            labels={labels}
+            boxes={boxes}
+            selectedLabelId={selectedLabelId}
+            selectedBoxId={selectedBoxId}
+            onSelectLabel={setSelectedLabelId}
+            onCreateLabel={handleCreateLabel}
+            onDeleteLabel={handleDeleteLabel}
+            onSelectBox={(id) => {
+              setSelectedBoxId(id);
+              if (id) setTool("select");
+            }}
+            onUpdateBox={handleUpdateBox}
+            onMoveBox={handleMoveBox}
+            onDeleteBox={handleDeleteBox}
+          />
+        </div>
       </div>
 
-      <div className="flex items-center gap-3">
-        <Button type="button" onClick={handleSave} className="rounded-[10px]">
-          Save changes
-        </Button>
-        {saveFlash ? (
-          <p className="text-sm text-muted-foreground">Saved for this session.</p>
-        ) : null}
+      <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
+        <div className="flex items-center gap-2">
+          <span className="size-2 rounded-full bg-emerald-500" />
+          <span>Auto-save enabled</span>
+          {lastSavedAt ? (
+            <><span aria-hidden>·</span><span>Last saved {lastSavedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span></>
+          ) : null}
+        </div>
+        <span className="flex items-center gap-1"><Keyboard className="size-3.5" /> Shortcuts: Delete, undo and redo</span>
       </div>
+
+      <AnnotationExportSheet
+        open={exportOpen}
+        onOpenChange={setExportOpen}
+        projectId={project.id}
+        projectName={project.name}
+        images={images}
+        labels={labels}
+      />
     </div>
   );
 }

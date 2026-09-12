@@ -1,6 +1,5 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { pickLabelColor } from "@/lib/annotations/label-colors";
 import { createClient } from "@/lib/supabase/server";
 import type { AnnotationLabel } from "@/lib/types/annotations";
@@ -46,7 +45,6 @@ export async function createLabel(
     );
   }
 
-  revalidatePath(`/projects/${projectId}`);
   return data;
 }
 
@@ -85,7 +83,6 @@ export async function renameLabel(
     );
   }
 
-  revalidatePath(`/projects/${projectId}`);
   return data;
 }
 
@@ -109,5 +106,4 @@ export async function deleteLabel(projectId: string, labelId: string) {
     throw new Error(error.message);
   }
 
-  revalidatePath(`/projects/${projectId}`);
 }

@@ -1,3 +1,5 @@
+import type { BoundingBox } from "@/lib/types/annotations";
+
 export type Project = {
   id: string;
   name: string;
@@ -22,6 +24,8 @@ export type ProjectImage = {
   thumbnailUrl: string | null;
   /** Higher-res URL for the annotation canvas when available. */
   imageUrl: string | null;
+  /** Last annotation version saved permanently in Supabase. */
+  annotations: BoundingBox[];
 };
 
 export type ProjectDraft = {

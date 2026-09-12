@@ -36,7 +36,7 @@ Image annotation workspace for managing projects and annotating image datasets.
 - Root layout metadata title: **"Annotate"**
 - Sidebar brand label: **"SmartAnnoTool"** (SAT logo)
 
-**Product status:** UI is ahead of backend integration. Projects, auth, image metadata, direct S3 image uploads, image-count metrics, per-project labels, and AI Annotate (zero-shot, no persistence) are real; drawn/AI-detected annotation boxes are still session-only (not saved to the DB) and several nav items are still placeholder.
+**Product status:** UI is ahead of backend integration. Projects, auth, image metadata, direct S3 image uploads, image-count metrics, per-project labels, durable bounding-box saves, and AI Annotate are real; several nav items are still placeholder.
 
 ---
 
@@ -84,7 +84,7 @@ data_annotation_tool/
 ├── hooks/                  # Shared React hooks (use-mobile, use-upload-queue)
 ├── lib/
 │   ├── actions/            # Server actions ("use server")
-│   ├── annotations/        # Client annotation persistence (sessionStorage) + COCO/YOLO/VOC coordinate conversion
+│   ├── annotations/        # Client annotation draft backup (sessionStorage) + COCO/YOLO/VOC coordinate conversion
 │   ├── roboflow/           # Roboflow HTTP client (zero-shot gateway workflow) — deep module, mirrors lib/uploads/
 │   ├── supabase/           # client.ts, server.ts, proxy.ts
 │   ├── types/              # Manual TypeScript types (not Supabase codegen)
@@ -194,7 +194,7 @@ Request → proxy.ts → lib/supabase/proxy.ts (updateSession)
 - `content_type` text (`image/jpeg` or `image/png`)
 - `size_bytes` bigint (> 0)
 - `created_at`, `modified_at` timestamptz
-- `annotation` jsonb (existing column; annotation UI still uses session storage)
+- `annotation` jsonb (durable bounding-box array; sessionStorage remains a client draft backup)
 - Legacy nullable `notes` and `url` columns remain but are not used by the app.
 
 **`project_labels` table:**
@@ -230,8 +230,8 @@ Manual types in `lib/types/projects.ts` and `lib/types/annotations.ts` (`Boundin
 | Projects list / create / star | **Real** | Supabase `projects` table + `lib/actions/projects.ts` |
 | Project detail — metadata | **Real** | Supabase `projects` |
 | Project detail — images | **Real** | Supabase `images` metadata + private S3 objects loaded with short-lived signed GET URLs from `lib/images.ts` |
-| Annotation workspace UI + bbox editor | **Real images and labels / session-only boxes** | Images come from Supabase + S3; labels come from Supabase `project_labels` (`lib/labels.ts` read, `lib/actions/labels.ts` create/delete) and are managed per-project in the side panel's Label tab; drawn/AI boxes still live only in React state + `sessionStorage` (`lib/annotations/storage.ts`), not persisted to `images.annotation` |
-| AI Annotate | **Real (zero-shot, no persistence)** | Toolbar button opens `components/annotate/ai-annotate-dialog.tsx`; user picks labels + confidence, `POST /api/annotations/auto-label` calls the shared Roboflow zero-shot workflow (`lib/roboflow/`) with a short-lived signed image URL, converts center-pixel predictions to top-left boxes (`lib/annotations/formats.ts`), and returns them to be added to the canvas. No Roboflow project/dataset is created; the image is never persisted by Roboflow |
+| Annotation workspace UI + bbox editor | **Real images, labels, and durable saves** | Images come from Supabase + S3; labels come from Supabase `project_labels`; Save writes boxes to `images.annotation` through `lib/actions/annotations.ts`, while `sessionStorage` keeps an unsaved local draft backup |
+| AI Annotate | **Real (zero-shot; saved after review)** | Toolbar button opens `components/annotate/ai-annotate-dialog.tsx`; user picks labels + confidence, `POST /api/annotations/auto-label` calls the shared Roboflow zero-shot workflow (`lib/roboflow/`) with a short-lived signed image URL, converts center-pixel predictions to top-left boxes (`lib/annotations/formats.ts`), and returns them to the canvas. Predictions become durable when the user presses Save |
 | Upload images dialog | **Real** | UI + queue in `components/projects/upload-images-dialog.tsx` + `hooks/use-upload-queue.ts`; `createS3Uploader()` uploads directly to S3, and successful completion persists an `images` row before refreshing the project grid. |
 | Dashboard metrics (total/annotated/unannotated) | **Real** | RLS-filtered Supabase `images` rows aggregated by `lib/images.ts` |
 | Sidebar storage widget ("10 GB / 100 GB") | **Mock** | Hardcoded in `app-sidebar.tsx` |
@@ -309,15 +309,17 @@ Update the installed list above after adding.
 
 ## Server actions
 
-Current actions: `lib/actions/projects.ts`, `lib/actions/labels.ts`
+Current actions: `lib/actions/projects.ts`, `lib/actions/images.ts`, `lib/actions/labels.ts`, `lib/actions/annotations.ts`
 
 | Action | What it does |
 |--------|--------------|
 | `createProject(formData)` | Insert project, revalidate, redirect to `/projects/[id]` |
 | `toggleProjectStar(projectId, starred)` | Update `starred`, revalidate paths |
+| `deleteProjectImage(imageId, projectId)` | Verify image access, permanently delete its S3 object and Supabase row, then revalidate project metrics |
 | `createLabel(projectId, name)` | Insert a `project_labels` row with an auto-assigned palette color, revalidate |
 | `renameLabel(projectId, labelId, name)` | Rename a project label, updating its name everywhere that label is used |
 | `deleteLabel(projectId, labelId)` | Delete a `project_labels` row, revalidate |
+| `saveImageAnnotations(projectId, imageId, boxes)` | Validate ownership and bounding boxes, then persist the current annotation array to `images.annotation` |
 
 **Pattern for new actions:**
 1. Create `lib/actions/<domain>.ts` with `"use server"` at top

@@ -300,6 +300,18 @@ export async function createImageReadUrl(key: string) {
   );
 }
 
+export async function deleteImageObject(key: string) {
+  projectIdFromObjectKey(key);
+  const { bucket } = getS3Config();
+
+  await getS3Client().send(
+    new DeleteObjectCommand({
+      Bucket: bucket,
+      Key: key,
+    }),
+  );
+}
+
 export async function abortMultipartUpload(input: Record<string, unknown>) {
   const { key, projectId } = projectIdFromObjectKey(input.key);
   await requireOwnedProject(projectId);
