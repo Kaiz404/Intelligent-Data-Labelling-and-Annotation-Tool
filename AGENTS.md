@@ -36,7 +36,7 @@ Image annotation workspace for managing projects and annotating image datasets.
 - Root layout metadata title: **"Annotate"**
 - Sidebar brand label: **"SmartAnnoTool"** (SAT logo)
 
-**Product status:** UI is ahead of backend integration. Projects, auth, image metadata, direct S3 image uploads, and image-count metrics are real; annotation boxes and several nav items are still mocked or placeholder.
+**Product status:** UI is ahead of backend integration. Projects, auth, image metadata, direct S3 image uploads, image-count metrics, per-project labels, and AI Annotate (zero-shot, no persistence) are real; drawn/AI-detected annotation boxes are still session-only (not saved to the DB) and several nav items are still placeholder.
 
 ---
 
@@ -70,26 +70,28 @@ data_annotation_tool/
 │   │   └── layout.tsx
 │   ├── auth/               # Auth pages + route handlers
 │   ├── api/uploads/        # Authenticated S3 multipart orchestration routes
+│   ├── api/annotations/    # AI auto-label route (Roboflow gateway workflow)
 │   ├── globals.css         # Tailwind v4 + design tokens
 │   ├── layout.tsx          # Root layout (font, theme)
 │   └── page.tsx            # Public landing page
 ├── components/
 │   ├── ui/                 # shadcn primitives — do not put feature logic here
 │   ├── app-shell/          # Sidebar, header
-│   ├── annotate/           # Annotation workspace (toolbar, Konva canvas, side panel)
+│   ├── annotate/           # Annotation workspace (toolbar, Konva canvas, side panel, AI Annotate dialog)
 │   ├── auth/               # Auth-specific shared UI
 │   ├── dashboard/          # Dashboard widgets
 │   └── projects/           # Project browser, detail, upload, etc.
 ├── hooks/                  # Shared React hooks (use-mobile, use-upload-queue)
 ├── lib/
 │   ├── actions/            # Server actions ("use server")
-│   ├── annotations/        # Client annotation persistence helpers (sessionStorage)
-│   ├── mock/               # Hardcoded / placeholder data
+│   ├── annotations/        # Client annotation persistence (sessionStorage) + COCO/YOLO/VOC coordinate conversion
+│   ├── roboflow/           # Roboflow HTTP client (zero-shot gateway workflow) — deep module, mirrors lib/uploads/
 │   ├── supabase/           # client.ts, server.ts, proxy.ts
 │   ├── types/              # Manual TypeScript types (not Supabase codegen)
 │   ├── uploads/            # Direct-to-S3 multipart upload provider
 │   ├── format.ts           # Formatting helpers
 │   ├── images.ts           # Supabase image queries + signed S3 read URLs
+│   ├── labels.ts           # Supabase project_labels queries
 │   ├── nav.ts              # Sidebar navigation config
 │   └── utils.ts            # cn() — clsx + tailwind-merge
 ├── supabase/               # Local Supabase CLI config + migrations (GITIGNORED — see below)
@@ -111,6 +113,7 @@ data_annotation_tool/
 | Shared types | `lib/types/<domain>.ts` |
 | Placeholder data | `lib/mock/<name>.ts` — remove when wired to real data |
 | Upload provider / chunking | `lib/uploads/` — keep UI on `UploadProvider` interface |
+| External AI provider client | `lib/roboflow/` — deep module hiding HTTP/auth/validation, mirrors `lib/uploads/` |
 | Supabase client usage (browser) | `createClient()` from `lib/supabase/client.ts` |
 | Supabase client usage (server) | `createClient()` from `lib/supabase/server.ts` |
 | Sidebar nav item | `lib/nav.ts` |
@@ -138,6 +141,7 @@ data_annotation_tool/
 | `/api/uploads/presign-parts` | `app/api/uploads/presign-parts/route.ts` | Route handler (issue presigned S3 part URLs) |
 | `/api/uploads/complete` | `app/api/uploads/complete/route.ts` | Route handler (complete S3 multipart upload) |
 | `/api/uploads/abort` | `app/api/uploads/abort/route.ts` | Route handler (abort S3 multipart upload) |
+| `/api/annotations/auto-label` | `app/api/annotations/auto-label/route.ts` | Route handler (zero-shot AI annotate one image) |
 
 **Route group `(app)`:** Wraps dashboard and projects in the sidebar shell (`app/(app)/layout.tsx`). URLs are `/dashboard`, `/projects` — the group name is omitted from the path.
 
@@ -193,11 +197,19 @@ Request → proxy.ts → lib/supabase/proxy.ts (updateSession)
 - `annotation` jsonb (existing column; annotation UI still uses session storage)
 - Legacy nullable `notes` and `url` columns remain but are not used by the app.
 
-**RLS:** Users can only SELECT/INSERT/UPDATE/DELETE their own projects (`auth.uid() = user_id`). Image policies grant the same operations only when the parent project belongs to the current user.
+**`project_labels` table:**
+- `id` UUID (PK)
+- `project_id` UUID → `projects(id)` (ON DELETE CASCADE)
+- `name` text (NOT NULL), unique per project (case-insensitive)
+- `color` text (NOT NULL) — hex color, auto-assigned from a fixed palette (`lib/annotations/label-colors.ts`) on create
+- `created_at` timestamptz
+- Per-project custom classes for the annotation workspace and AI Annotate — replaces the old hardcoded frontend label list.
+
+**RLS:** Users can only SELECT/INSERT/UPDATE/DELETE their own projects (`auth.uid() = user_id`). Image and `project_labels` policies grant the same operations only when the parent project belongs to the current user.
 
 ### Types
 
-Manual types in `lib/types/projects.ts` and `lib/types/annotations.ts` (`BoundingBox`, `AnnotationLabel`). **No Supabase codegen** (`database.types.ts` does not exist). When schema stabilizes, consider adding `supabase gen types`.
+Manual types in `lib/types/projects.ts` and `lib/types/annotations.ts` (`BoundingBox`, `AnnotationLabel` — the latter also shapes `project_labels` rows). **No Supabase codegen** (`database.types.ts` does not exist). When schema stabilizes, consider adding `supabase gen types`.
 
 ### Supabase folder is gitignored
 
@@ -218,8 +230,8 @@ Manual types in `lib/types/projects.ts` and `lib/types/annotations.ts` (`Boundin
 | Projects list / create / star | **Real** | Supabase `projects` table + `lib/actions/projects.ts` |
 | Project detail — metadata | **Real** | Supabase `projects` |
 | Project detail — images | **Real** | Supabase `images` metadata + private S3 objects loaded with short-lived signed GET URLs from `lib/images.ts` |
-| Annotation workspace UI + bbox editor | **Real images / mock annotations** | Images come from Supabase + S3; boxes remain in React state + `sessionStorage` (`lib/annotations/storage.ts`); labels come from `lib/mock/annotation-labels.ts` |
-| AI Annotate | **Placeholder** | Toolbar button stub (“Coming soon”) |
+| Annotation workspace UI + bbox editor | **Real images and labels / session-only boxes** | Images come from Supabase + S3; labels come from Supabase `project_labels` (`lib/labels.ts` read, `lib/actions/labels.ts` create/delete) and are managed per-project in the side panel's Label tab; drawn/AI boxes still live only in React state + `sessionStorage` (`lib/annotations/storage.ts`), not persisted to `images.annotation` |
+| AI Annotate | **Real (zero-shot, no persistence)** | Toolbar button opens `components/annotate/ai-annotate-dialog.tsx`; user picks labels + confidence, `POST /api/annotations/auto-label` calls the shared Roboflow zero-shot workflow (`lib/roboflow/`) with a short-lived signed image URL, converts center-pixel predictions to top-left boxes (`lib/annotations/formats.ts`), and returns them to be added to the canvas. No Roboflow project/dataset is created; the image is never persisted by Roboflow |
 | Upload images dialog | **Real** | UI + queue in `components/projects/upload-images-dialog.tsx` + `hooks/use-upload-queue.ts`; `createS3Uploader()` uploads directly to S3, and successful completion persists an `images` row before refreshing the project grid. |
 | Dashboard metrics (total/annotated/unannotated) | **Real** | RLS-filtered Supabase `images` rows aggregated by `lib/images.ts` |
 | Sidebar storage widget ("10 GB / 100 GB") | **Mock** | Hardcoded in `app-sidebar.tsx` |
@@ -297,13 +309,16 @@ Update the installed list above after adding.
 
 ## Server actions
 
-Current actions: `lib/actions/projects.ts`, `lib/actions/images.ts`
+Current actions: `lib/actions/projects.ts`, `lib/actions/images.ts`, `lib/actions/labels.ts`
 
 | Action | What it does |
 |--------|--------------|
 | `createProject(formData)` | Insert project, revalidate, redirect to `/projects/[id]` |
 | `toggleProjectStar(projectId, starred)` | Update `starred`, revalidate paths |
 | `deleteProjectImage(imageId, projectId)` | Verify image access, permanently delete its S3 object and Supabase row, then revalidate project metrics |
+| `createLabel(projectId, name)` | Insert a `project_labels` row with an auto-assigned palette color, revalidate |
+| `renameLabel(projectId, labelId, name)` | Rename a project label, updating its name everywhere that label is used |
+| `deleteLabel(projectId, labelId)` | Delete a `project_labels` row, revalidate |
 
 **Pattern for new actions:**
 1. Create `lib/actions/<domain>.ts` with `"use server"` at top
@@ -343,6 +358,11 @@ From `.env.example`:
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase publishable/anon key |
 | `AWS_REGION` | AWS region for server-side S3 multipart orchestration |
 | `AWS_S3_BUCKET` | S3 bucket for project image objects |
+| `ROBOFLOW_API_KEY` | Server-only Roboflow workspace API key (never `NEXT_PUBLIC_`) |
+| `ROBOFLOW_API_URL` | Roboflow serverless inference host (`https://serverless.roboflow.com`) |
+| `ROBOFLOW_WORKSPACE` | Roboflow workspace slug that owns the shared gateway workflow |
+| `ROBOFLOW_WORKFLOW_ID` | Shared zero-shot workflow ID (`gateway-zero-shot-detect`) — one workflow serves every project's own class list, no per-project Roboflow project |
+| `ROBOFLOW_CONFIDENCE` | Default confidence threshold (0-1) for AI Annotate |
 
 Copy `.env.example` → `.env` for local development. Never commit `.env`.
 

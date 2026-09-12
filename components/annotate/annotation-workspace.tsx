@@ -4,16 +4,22 @@ import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { CheckCircle2, ChevronLeft, ChevronRight, Download, Keyboard } from "lucide-react";
+import { AiAnnotateDialog } from "@/components/annotate/ai-annotate-dialog";
 import { AnnotationSidePanel } from "@/components/annotate/annotation-side-panel";
 import { AnnotationExportSheet } from "@/components/annotate/annotation-export-sheet";
 import { AnnotationToolbar } from "@/components/annotate/annotation-toolbar";
 import { Button } from "@/components/ui/button";
 import {
+  createLabel,
+  deleteLabel,
+  renameLabel,
+} from "@/lib/actions/labels";
+import {
   loadAnnotations,
   saveAnnotations,
 } from "@/lib/annotations/storage";
-import { MOCK_ANNOTATION_LABELS } from "@/lib/mock/annotation-labels";
 import type {
+  AnnotationLabel,
   AnnotationTool,
   BoundingBox,
 } from "@/lib/types/annotations";
@@ -38,6 +44,7 @@ type AnnotationWorkspaceProps = {
   project: Project;
   images: ProjectImage[];
   imageId: string;
+  labels: AnnotationLabel[];
 };
 
 const MAX_HISTORY = 50;
@@ -46,9 +53,10 @@ export function AnnotationWorkspace({
   project,
   images,
   imageId,
+  labels: initialLabels,
 }: AnnotationWorkspaceProps) {
   const router = useRouter();
-  const labels = MOCK_ANNOTATION_LABELS;
+  const [labels, setLabels] = useState<AnnotationLabel[]>(initialLabels);
 
   const imageIndex = Math.max(
     0,
@@ -68,6 +76,30 @@ export function AnnotationWorkspace({
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [aiAnnotateOpen, setAiAnnotateOpen] = useState(false);
+
+  useEffect(() => {
+    if (!selectedLabelId && labels[0]) {
+      setSelectedLabelId(labels[0].id);
+    }
+  }, [labels, selectedLabelId]);
+
+  const handleCreateLabel = useCallback(
+    async (name: string) => {
+      const label = await createLabel(project.id, name);
+      setLabels((current) => [...current, label]);
+    },
+    [project.id],
+  );
+
+  const handleDeleteLabel = useCallback(
+    async (labelId: string) => {
+      await deleteLabel(project.id, labelId);
+      setLabels((current) => current.filter((label) => label.id !== labelId));
+      setSelectedLabelId((current) => (current === labelId ? "" : current));
+    },
+    [project.id],
+  );
 
   useEffect(() => {
     if (!currentImage) {
@@ -88,6 +120,53 @@ export function AnnotationWorkspace({
       return next;
     });
   }, []);
+
+  const handleAssignBoxLabel = useCallback(
+    async (boxId: string, name: string) => {
+      const trimmed = name.trim();
+      if (!trimmed) {
+        throw new Error("Label name is required.");
+      }
+
+      let assignedLabel = labels.find(
+        (candidate) => candidate.name.toLowerCase() === trimmed.toLowerCase(),
+      );
+
+      if (!assignedLabel) {
+        assignedLabel = await createLabel(project.id, trimmed);
+        const createdLabel = assignedLabel;
+        setLabels((current) => [...current, createdLabel]);
+      }
+
+      const assignedLabelId = assignedLabel.id;
+      const nextBoxes = boxes.map((box) =>
+        box.id === boxId ? { ...box, labelId: assignedLabelId } : box,
+      );
+      commitBoxes(nextBoxes);
+      if (currentImage) {
+        saveAnnotations(project.id, currentImage.id, nextBoxes);
+        setLastSavedAt(new Date());
+      }
+      setSelectedLabelId(assignedLabelId);
+    },
+    [boxes, commitBoxes, currentImage, labels, project.id],
+  );
+
+  const handleRenameLabel = useCallback(
+    async (labelId: string, name: string) => {
+      const currentLabel = labels.find((label) => label.id === labelId);
+      const trimmed = name.trim();
+      if (!currentLabel || currentLabel.name === trimmed) {
+        return;
+      }
+
+      const updated = await renameLabel(project.id, labelId, trimmed);
+      setLabels((current) =>
+        current.map((label) => (label.id === labelId ? updated : label)),
+      );
+    },
+    [labels, project.id],
+  );
 
   const handleBoxesChange = useCallback(
     (next: BoundingBox[]) => {
@@ -230,6 +309,16 @@ export function AnnotationWorkspace({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleDelete, handleRedo, handleUndo]);
 
+  const handleAiDetected = useCallback(
+    (detected: BoundingBox[]) => {
+      if (detected.length === 0) {
+        return;
+      }
+      commitBoxes([...boxes, ...detected]);
+    },
+    [boxes, commitBoxes],
+  );
+
   if (!currentImage) {
     return (
       <div className="rounded-lg border border-dashed p-10 text-center text-muted-foreground">
@@ -257,6 +346,16 @@ export function AnnotationWorkspace({
         onZoomOut={() => setZoom((value) => Math.max(10, value - 10))}
         onZoomIn={() => setZoom((value) => Math.min(400, value + 10))}
         onFit={() => setFitToken((value) => value + 1)}
+        onAiAnnotate={() => setAiAnnotateOpen(true)}
+      />
+
+      <AiAnnotateDialog
+        open={aiAnnotateOpen}
+        onOpenChange={setAiAnnotateOpen}
+        projectId={project.id}
+        imageId={currentImage.id}
+        labels={labels}
+        onDetected={handleAiDetected}
       />
 
       <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_290px] xl:items-start">
@@ -278,6 +377,8 @@ export function AnnotationWorkspace({
                   if (id) setTool("select");
                 }}
                 onBoxesChange={handleBoxesChange}
+                onAssignBoxLabel={handleAssignBoxLabel}
+                onRenameLabel={handleRenameLabel}
                 onZoomChange={setZoom}
                 fitNonce={fitToken}
                 className="h-[510px]"
@@ -340,6 +441,8 @@ export function AnnotationWorkspace({
             selectedLabelId={selectedLabelId}
             selectedBoxId={selectedBoxId}
             onSelectLabel={setSelectedLabelId}
+            onCreateLabel={handleCreateLabel}
+            onDeleteLabel={handleDeleteLabel}
             onSelectBox={(id) => {
               setSelectedBoxId(id);
               if (id) setTool("select");
