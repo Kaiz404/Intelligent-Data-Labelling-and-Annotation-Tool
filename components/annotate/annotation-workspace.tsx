@@ -7,7 +7,11 @@ import { AiAnnotateDialog } from "@/components/annotate/ai-annotate-dialog";
 import { AnnotationSidePanel } from "@/components/annotate/annotation-side-panel";
 import { AnnotationToolbar } from "@/components/annotate/annotation-toolbar";
 import { Button } from "@/components/ui/button";
-import { createLabel, deleteLabel } from "@/lib/actions/labels";
+import {
+  createLabel,
+  deleteLabel,
+  renameLabel,
+} from "@/lib/actions/labels";
 import {
   loadAnnotations,
   saveAnnotations,
@@ -112,6 +116,50 @@ export function AnnotationWorkspace({
       return next;
     });
   }, []);
+
+  const handleAssignBoxLabel = useCallback(
+    async (boxId: string, name: string) => {
+      const trimmed = name.trim();
+      if (!trimmed) {
+        throw new Error("Label name is required.");
+      }
+
+      let assignedLabel = labels.find(
+        (candidate) => candidate.name.toLowerCase() === trimmed.toLowerCase(),
+      );
+
+      if (!assignedLabel) {
+        assignedLabel = await createLabel(project.id, trimmed);
+        const createdLabel = assignedLabel;
+        setLabels((current) => [...current, createdLabel]);
+      }
+
+      const assignedLabelId = assignedLabel.id;
+      setBoxes((current) =>
+        current.map((box) =>
+          box.id === boxId ? { ...box, labelId: assignedLabelId } : box,
+        ),
+      );
+      setSelectedLabelId(assignedLabelId);
+    },
+    [labels, project.id],
+  );
+
+  const handleRenameLabel = useCallback(
+    async (labelId: string, name: string) => {
+      const currentLabel = labels.find((label) => label.id === labelId);
+      const trimmed = name.trim();
+      if (!currentLabel || currentLabel.name === trimmed) {
+        return;
+      }
+
+      const updated = await renameLabel(project.id, labelId, trimmed);
+      setLabels((current) =>
+        current.map((label) => (label.id === labelId ? updated : label)),
+      );
+    },
+    [labels, project.id],
+  );
 
   const handleBoxesChange = useCallback(
     (next: BoundingBox[]) => {
@@ -238,6 +286,8 @@ export function AnnotationWorkspace({
               selectedLabelId={selectedLabelId}
               onSelectBox={setSelectedBoxId}
               onBoxesChange={handleBoxesChange}
+              onAssignBoxLabel={handleAssignBoxLabel}
+              onRenameLabel={handleRenameLabel}
               onZoomChange={setZoom}
               fitNonce={fitToken}
               className="h-[550px]"

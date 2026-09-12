@@ -316,6 +316,7 @@ Current actions: `lib/actions/projects.ts`, `lib/actions/labels.ts`
 | `createProject(formData)` | Insert project, revalidate, redirect to `/projects/[id]` |
 | `toggleProjectStar(projectId, starred)` | Update `starred`, revalidate paths |
 | `createLabel(projectId, name)` | Insert a `project_labels` row with an auto-assigned palette color, revalidate |
+| `renameLabel(projectId, labelId, name)` | Rename a project label, updating its name everywhere that label is used |
 | `deleteLabel(projectId, labelId)` | Delete a `project_labels` row, revalidate |
 
 **Pattern for new actions:**

@@ -50,6 +50,45 @@ export async function createLabel(
   return data;
 }
 
+export async function renameLabel(
+  projectId: string,
+  labelId: string,
+  name: string,
+): Promise<AnnotationLabel> {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    throw new Error("Label name is required.");
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    throw new Error("You must be signed in to rename a label.");
+  }
+
+  const { data, error } = await supabase
+    .from("project_labels")
+    .update({ name: trimmed })
+    .eq("id", labelId)
+    .eq("project_id", projectId)
+    .select("id, name, color")
+    .single();
+
+  if (error) {
+    throw new Error(
+      error.code === "23505"
+        ? "A label with this name already exists in this project."
+        : error.message,
+    );
+  }
+
+  revalidatePath(`/projects/${projectId}`);
+  return data;
+}
+
 export async function deleteLabel(projectId: string, labelId: string) {
   const supabase = await createClient();
   const {
