@@ -45,17 +45,26 @@ type AnnotationCanvasProps = {
 
 function useHtmlImage(url: string | null) {
   const [image, setImage] = useState<HTMLImageElement | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   useEffect(() => {
     if (!url) {
       setImage(null);
+      setLoadFailed(false);
       return;
     }
 
     const img = new window.Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => setImage(img);
-    img.onerror = () => setImage(null);
+    setImage(null);
+    setLoadFailed(false);
+    img.onload = () => {
+      setImage(img);
+      setLoadFailed(false);
+    };
+    img.onerror = () => {
+      setImage(null);
+      setLoadFailed(true);
+    };
     img.src = url;
 
     return () => {
@@ -64,7 +73,7 @@ function useHtmlImage(url: string | null) {
     };
   }, [url]);
 
-  return image;
+  return { image, loadFailed };
 }
 
 function normalizeRect(x: number, y: number, width: number, height: number) {
@@ -135,7 +144,7 @@ export function AnnotationCanvas({
   } | null>(null);
   const drawStartRef = useRef<{ x: number; y: number } | null>(null);
 
-  const image = useHtmlImage(imageUrl);
+  const { image, loadFailed } = useHtmlImage(imageUrl);
   const imageWidth = image?.width ?? 0;
   const imageHeight = image?.height ?? 0;
   const scale = zoom / 100;
@@ -397,6 +406,17 @@ export function AnnotationCanvas({
       {!imageUrl ? (
         <div className="flex size-full items-center justify-center text-sm text-muted-foreground">
           No image available for {fileName}
+        </div>
+      ) : loadFailed ? (
+        <div className="flex size-full flex-col items-center justify-center gap-1 px-6 text-center">
+          <p className="text-sm font-medium">Could not load this image.</p>
+          <p className="text-xs text-muted-foreground">
+            The S3 link may have expired or the object may no longer be available.
+          </p>
+        </div>
+      ) : !image ? (
+        <div className="flex size-full items-center justify-center text-sm text-muted-foreground">
+          Loading image...
         </div>
       ) : (
         <Stage
