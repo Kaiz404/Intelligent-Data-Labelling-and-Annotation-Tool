@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, ChevronLeft, ChevronRight, Download, Keyboard } from "lucide-react";
 import { AiAnnotateDialog } from "@/components/annotate/ai-annotate-dialog";
 import { AnnotationSidePanel } from "@/components/annotate/annotation-side-panel";
@@ -80,6 +80,13 @@ export function AnnotationWorkspace({
   const [hydrated, setHydrated] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [aiAnnotateOpen, setAiAnnotateOpen] = useState(false);
+  const autoSaveTimerRef = useRef<number | null>(null);
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const pendingSavesRef = useRef(0);
+  const lastSavedSignatureRef = useRef("");
+  const activeImageIdRef = useRef<string | null>(currentImage?.id ?? null);
+
+  activeImageIdRef.current = currentImage?.id ?? null;
 
   useEffect(() => {
     if (!selectedLabelId && labels[0]) {
@@ -108,15 +115,19 @@ export function AnnotationWorkspace({
     if (!currentImage) {
       return;
     }
+    setHydrated(false);
     const loaded = loadAnnotations(
       project.id,
       currentImage.id,
       currentImage.annotations,
     );
+    lastSavedSignatureRef.current = JSON.stringify(currentImage.annotations);
     setBoxes(loaded);
     setPast([]);
     setFuture([]);
     setSelectedBoxId(null);
+    setLastSavedAt(null);
+    setSaveError(null);
     setHydrated(true);
   }, [currentImage, project.id]);
 
@@ -152,7 +163,6 @@ export function AnnotationWorkspace({
       commitBoxes(nextBoxes);
       if (currentImage) {
         saveAnnotations(project.id, currentImage.id, nextBoxes);
-        setLastSavedAt(new Date());
       }
       setSelectedLabelId(assignedLabelId);
     },
@@ -272,41 +282,77 @@ export function AnnotationWorkspace({
     [images, project.id, router],
   );
 
+  const persistAnnotations = useCallback(
+    async (targetImageId: string, snapshot: BoundingBox[], flash: boolean) => {
+      const signature = JSON.stringify(snapshot);
+      pendingSavesRef.current += 1;
+      setIsSaving(true);
+      setSaveError(null);
+
+      const operation = saveQueueRef.current.then(() =>
+        saveImageAnnotations(project.id, targetImageId, snapshot),
+      );
+      saveQueueRef.current = operation.then(
+        () => undefined,
+        () => undefined,
+      );
+
+      try {
+        const result = await operation;
+        if (activeImageIdRef.current === targetImageId) {
+          lastSavedSignatureRef.current = signature;
+          setLastSavedAt(new Date(result.savedAt));
+          if (flash) {
+            setSaveFlash(true);
+            window.setTimeout(() => setSaveFlash(false), 1600);
+          }
+        }
+      } catch (error) {
+        if (activeImageIdRef.current === targetImageId) {
+          setSaveError(
+            error instanceof Error
+              ? error.message
+              : "Could not save annotations.",
+          );
+        }
+      } finally {
+        pendingSavesRef.current -= 1;
+        if (pendingSavesRef.current === 0) {
+          setIsSaving(false);
+        }
+      }
+    },
+    [project.id],
+  );
+
   const handleSave = useCallback(async () => {
-    if (!currentImage) {
-      return;
+    if (!currentImage) return;
+    if (autoSaveTimerRef.current !== null) {
+      window.clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
     }
     saveAnnotations(project.id, currentImage.id, boxes);
-    setIsSaving(true);
-    setSaveError(null);
-    try {
-      const result = await saveImageAnnotations(
-        project.id,
-        currentImage.id,
-        boxes,
-      );
-      setLastSavedAt(new Date(result.savedAt));
-      setSaveFlash(true);
-      window.setTimeout(() => setSaveFlash(false), 1600);
-    } catch (error) {
-      setSaveError(
-        error instanceof Error
-          ? error.message
-          : "Could not save annotations.",
-      );
-    } finally {
-      setIsSaving(false);
-    }
-  }, [boxes, currentImage, project.id]);
+    await persistAnnotations(currentImage.id, boxes, true);
+  }, [boxes, currentImage, persistAnnotations, project.id]);
 
   useEffect(() => {
     if (!hydrated || !currentImage) return;
-    const timer = window.setTimeout(() => {
-      saveAnnotations(project.id, currentImage.id, boxes);
-      setLastSavedAt(new Date());
+    saveAnnotations(project.id, currentImage.id, boxes);
+
+    const signature = JSON.stringify(boxes);
+    if (signature === lastSavedSignatureRef.current) return;
+
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      autoSaveTimerRef.current = null;
+      void persistAnnotations(currentImage.id, boxes, false);
     }, 1500);
-    return () => window.clearTimeout(timer);
-  }, [boxes, currentImage, hydrated, project.id]);
+    return () => {
+      if (autoSaveTimerRef.current !== null) {
+        window.clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+    };
+  }, [boxes, currentImage, hydrated, persistAnnotations, project.id]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -485,8 +531,8 @@ export function AnnotationWorkspace({
 
       <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
         <div className="flex items-center gap-2">
-          <span className="size-2 rounded-full bg-emerald-500" />
-          <span>Auto-save enabled</span>
+          <span className={`size-2 rounded-full ${saveError ? "bg-destructive" : isSaving ? "bg-amber-500" : "bg-emerald-500"}`} />
+          <span>{saveError ? "Auto-save failed" : isSaving ? "Saving..." : "Auto-save enabled"}</span>
           {lastSavedAt ? (
             <><span aria-hidden>·</span><span>Last saved {lastSavedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span></>
           ) : null}

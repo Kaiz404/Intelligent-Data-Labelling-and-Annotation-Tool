@@ -10,6 +10,8 @@ export type Project = {
   user_id: string | null;
   image_count?: number;
   annotated_count?: number;
+  /** Short-lived signed URL for the optional deterministic S3 thumbnail. */
+  thumbnailUrl?: string | null;
 };
 
 export type ImageStatus = "In Progress" | "Annotated" | "Unannotated";
