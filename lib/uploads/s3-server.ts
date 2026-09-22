@@ -1,9 +1,12 @@
 import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
+  CopyObjectCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
   S3Client,
   UploadPartCommand,
 } from "@aws-sdk/client-s3";
@@ -13,6 +16,7 @@ import { createClient } from "@/lib/supabase/server";
 const MAX_PART_NUMBER = 10_000;
 const MAX_PRESIGNED_PARTS = 50;
 const MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024 * 1024;
+const MAX_THUMBNAIL_SIZE_BYTES = 5 * 1024 * 1024;
 const ALLOWED_CONTENT_TYPES = new Set(["image/jpeg", "image/png"]);
 
 export class UploadApiError extends Error {
@@ -310,6 +314,84 @@ export async function deleteImageObject(key: string) {
       Key: key,
     }),
   );
+}
+
+function projectThumbnailKey(projectId: string) {
+  return `projects/${projectId}/thumbnail`;
+}
+
+export async function uploadProjectThumbnail(projectId: string, file: File) {
+  if (!ALLOWED_CONTENT_TYPES.has(file.type)) {
+    throw new UploadApiError("Only JPEG and PNG thumbnails are supported.", 400);
+  }
+  if (file.size <= 0 || file.size > MAX_THUMBNAIL_SIZE_BYTES) {
+    throw new UploadApiError("The thumbnail must be between 1 byte and 5 MB.", 400);
+  }
+
+  const { bucket } = getS3Config();
+  await getS3Client().send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: projectThumbnailKey(projectId),
+      Body: Buffer.from(await file.arrayBuffer()),
+      ContentType: file.type,
+    }),
+  );
+
+  return createProjectThumbnailReadUrl(projectId);
+}
+
+export async function createProjectThumbnailReadUrl(projectId: string) {
+  try {
+    const { bucket } = getS3Config();
+    const client = getS3Client();
+    const key = projectThumbnailKey(projectId);
+    await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+
+    return getSignedUrl(
+      client,
+      new GetObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        ResponseContentDisposition: "inline",
+      }),
+      { expiresIn: 60 * 60 },
+    );
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteProjectThumbnail(projectId: string) {
+  const { bucket } = getS3Config();
+  await getS3Client().send(
+    new DeleteObjectCommand({ Bucket: bucket, Key: projectThumbnailKey(projectId) }),
+  );
+}
+
+export async function copyImageObject(
+  sourceKey: string,
+  targetProjectId: string,
+  fileName: string,
+) {
+  projectIdFromObjectKey(sourceKey);
+  const { bucket } = getS3Config();
+  const targetKey = createObjectKey(targetProjectId, fileName);
+  const encodedSource = `${bucket}/${encodeURIComponent(sourceKey).replace(/%2F/g, "/")}`;
+
+  await getS3Client().send(
+    new CopyObjectCommand({
+      Bucket: bucket,
+      Key: targetKey,
+      CopySource: encodedSource,
+    }),
+  );
+
+  return targetKey;
+}
+
+export async function deleteImageObjects(keys: string[]) {
+  await Promise.all(keys.map((key) => deleteImageObject(key)));
 }
 
 export async function abortMultipartUpload(input: Record<string, unknown>) {

@@ -230,8 +230,8 @@ Manual types in `lib/types/projects.ts` and `lib/types/annotations.ts` (`Boundin
 | Projects list / create / star | **Real** | Supabase `projects` table + `lib/actions/projects.ts` |
 | Project detail — metadata | **Real** | Supabase `projects` |
 | Project detail — images | **Real** | Supabase `images` metadata + private S3 objects loaded with short-lived signed GET URLs from `lib/images.ts` |
-| Annotation workspace UI + bbox editor | **Real images, labels, and durable saves** | Images come from Supabase + S3; labels come from Supabase `project_labels`; Save writes boxes to `images.annotation` through `lib/actions/annotations.ts`, while `sessionStorage` keeps an unsaved local draft backup |
-| AI Annotate | **Real (zero-shot; saved after review)** | Toolbar button opens `components/annotate/ai-annotate-dialog.tsx`; user picks labels + confidence, `POST /api/annotations/auto-label` calls the shared Roboflow zero-shot workflow (`lib/roboflow/`) with a short-lived signed image URL, converts center-pixel predictions to top-left boxes (`lib/annotations/formats.ts`), and returns them to the canvas. Predictions become durable when the user presses Save |
+| Annotation workspace UI + bbox editor | **Real images, labels, and durable saves** | Images come from Supabase + S3; labels come from Supabase `project_labels`; changes are debounced for 1.5 seconds and auto-saved to `images.annotation`, the Save button persists immediately through the same serialized save queue, and `sessionStorage` remains a local draft backup |
+| AI Annotate | **Real (zero-shot; saved after review)** | Toolbar button opens `components/annotate/ai-annotate-dialog.tsx`; user picks labels + confidence, `POST /api/annotations/auto-label` calls the shared Roboflow zero-shot workflow (`lib/roboflow/`) with a short-lived signed image URL, converts center-pixel predictions to top-left boxes (`lib/annotations/formats.ts`), and returns them to the canvas. Accepted predictions become durable through auto-save or the Save button |
 | Upload images dialog | **Real** | UI + queue in `components/projects/upload-images-dialog.tsx` + `hooks/use-upload-queue.ts`; `createS3Uploader()` uploads directly to S3, and successful completion persists an `images` row before refreshing the project grid. |
 | Dashboard metrics (total/annotated/unannotated) | **Real** | RLS-filtered Supabase `images` rows aggregated by `lib/images.ts` |
 | Sidebar storage widget ("10 GB / 100 GB") | **Mock** | Hardcoded in `app-sidebar.tsx` |
@@ -315,6 +315,11 @@ Current actions: `lib/actions/projects.ts`, `lib/actions/images.ts`, `lib/action
 |--------|--------------|
 | `createProject(formData)` | Insert project, revalidate, redirect to `/projects/[id]` |
 | `toggleProjectStar(projectId, starred)` | Update `starred`, revalidate paths |
+| `updateProject(projectId, name, description)` | Update an owned project's name and description |
+| `duplicateProject(sourceProjectId, name, description)` | Duplicate an owned project together with its labels, S3 images, and saved annotations |
+| `copyProjectImages(sourceProjectId, targetProjectId, keepAnnotations)` | Copy every image into another owned project; optionally copy required labels and saved annotations |
+| `deleteProject(projectId)` | Permanently delete an owned project's S3 objects, image and label rows, and project row |
+| `getProjectExportData(projectId)` | Load an owned project, its signed image URLs, labels, and annotations for the shared export sheet |
 | `deleteProjectImage(imageId, projectId)` | Verify image access, permanently delete its S3 object and Supabase row, then revalidate project metrics |
 | `createLabel(projectId, name)` | Insert a `project_labels` row with an auto-assigned palette color, revalidate |
 | `renameLabel(projectId, labelId, name)` | Rename a project label, updating its name everywhere that label is used |
@@ -342,10 +347,10 @@ Bulk image upload is designed for **direct-to-S3 multipart**, not proxying bytes
 | `lib/uploads/types.ts` | `UploadProvider` + queue item fields (`uploadId`, `key`, `completedParts`) |
 | `lib/uploads/chunk.ts` | Byte-range splitting (`splitFileIntoChunks`, `sliceChunk`) |
 | `lib/uploads/s3-uploader.ts` | Browser-side multipart client: chunking, presigned PUTs, retry, progress, pause/resume, complete and abort |
-| `lib/uploads/s3-server.ts` | Server-only S3 client, request validation, ownership checks, and multipart lifecycle helpers |
+| `lib/uploads/s3-server.ts` | Server-only S3 client, request validation, ownership checks, multipart lifecycle helpers, project image copy/delete helpers, and deterministic optional project thumbnails at `projects/{projectId}/thumbnail` |
 | `lib/uploads/uploader.ts` | `createUploadProvider()` — returns the active S3 provider |
 
-**S3 API:** `POST /api/uploads/create`, `/presign-parts`, `/complete`, and `/abort` authenticate the user and verify project ownership before operating on keys constrained to `projects/{projectId}/images/{uuid}/...`. They use `@aws-sdk/client-s3` with short-lived presigned part URLs. `createS3Uploader()` sends browser chunks directly to S3, retries failed part PUTs up to three times, and preserves `uploadId`, key, part numbers, and ETags in queue state for same-page pause/resume. Never proxy file bytes through Next.js. Completion persists image metadata in Supabase; if that insert fails, the completed S3 object is deleted to avoid an orphan. Project reads generate one-hour signed GET URLs from stored object keys. The bucket CORS policy must allow GET and PUT from the app origin and expose `ETag`. Cross-refresh multipart resume is not yet implemented.
+**S3 API:** `POST /api/uploads/create`, `/presign-parts`, `/complete`, and `/abort` authenticate the user and verify project ownership before operating on keys constrained to `projects/{projectId}/images/{uuid}/...`. `POST /api/projects/[id]/thumbnail` verifies ownership and replaces the project's deterministic JPG/PNG thumbnail (maximum 5 MB). The multipart endpoints use `@aws-sdk/client-s3` with short-lived presigned part URLs. `createS3Uploader()` sends browser chunks directly to S3, retries failed part PUTs up to three times, and preserves `uploadId`, key, part numbers, and ETags in queue state for same-page pause/resume. Never proxy dataset image bytes through Next.js. Completion persists image metadata in Supabase; if that insert fails, the completed S3 object is deleted to avoid an orphan. Project reads generate one-hour signed GET URLs from stored object keys. The bucket CORS policy must allow GET and PUT from the app origin and expose `ETag`. Cross-refresh multipart resume is not yet implemented.
 
 ---
 
