@@ -2,6 +2,7 @@ import { AppHeader } from "@/components/app-shell/app-header";
 import { ProjectBrowser } from "@/components/projects/project-browser";
 import { fetchImageStats } from "@/lib/images";
 import { createClient } from "@/lib/supabase/server";
+import { createProjectThumbnailReadUrl } from "@/lib/uploads/s3-server";
 import { connection } from "next/server";
 import { Suspense } from "react";
 
@@ -24,11 +25,14 @@ async function ProjectsContent() {
 
   const projectRows = projects ?? [];
   const stats = await fetchImageStats(projectRows.map((project) => project.id));
-  const projectsWithStats = projectRows.map((project) => ({
-    ...project,
-    image_count: stats.byProject[project.id]?.total ?? 0,
-    annotated_count: stats.byProject[project.id]?.annotated ?? 0,
-  }));
+  const projectsWithStats = await Promise.all(
+    projectRows.map(async (project) => ({
+      ...project,
+      image_count: stats.byProject[project.id]?.total ?? 0,
+      annotated_count: stats.byProject[project.id]?.annotated ?? 0,
+      thumbnailUrl: await createProjectThumbnailReadUrl(project.id),
+    })),
+  );
 
   return <ProjectBrowser initialProjects={projectsWithStats} />;
 }

@@ -2,8 +2,18 @@
 
 import { Plus, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { AnnotationExportSheet } from "@/components/annotate/annotation-export-sheet";
+import {
+  CopyImagesDialog,
+  DeleteProjectDialog,
+  DuplicateProjectDialog,
+  EditProjectDialog,
+} from "@/components/dashboard/project-action-dialogs";
 import { CreateProjectDialog } from "@/components/projects/create-project-dialog";
-import { ProjectCard } from "@/components/projects/project-card";
+import {
+  ProjectCard,
+  type ProjectCardAction,
+} from "@/components/projects/project-card";
 import {
   reverseSortDirection,
   SortOrderButton,
@@ -19,6 +29,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { Project } from "@/lib/types/projects";
+import type { AnnotationLabel } from "@/lib/types/annotations";
+import type { ProjectImage } from "@/lib/types/projects";
+import { getProjectExportData } from "@/lib/actions/projects";
 
 const sortOptions = ["Date Edited", "Name", "Images", "Favourite"] as const;
 
@@ -35,6 +48,12 @@ type ProjectBrowserProps = {
   initialProjects: Project[];
 };
 
+type ExportData = {
+  project: Project;
+  images: ProjectImage[];
+  labels: AnnotationLabel[];
+};
+
 export function ProjectBrowser({ initialProjects }: ProjectBrowserProps) {
   const [projects, setProjects] = useState(initialProjects);
   const [search, setSearch] = useState("");
@@ -43,6 +62,11 @@ export function ProjectBrowser({ initialProjects }: ProjectBrowserProps) {
     defaultSortDirections["Date Edited"],
   );
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [action, setAction] = useState<ProjectCardAction | null>(null);
+  const [exportData, setExportData] = useState<ExportData | null>(null);
+  const [exportingProjectId, setExportingProjectId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     setProjects(initialProjects);
@@ -87,6 +111,26 @@ export function ProjectBrowser({ initialProjects }: ProjectBrowserProps) {
   function handleSortChange(nextSortBy: SortOption) {
     setSortBy(nextSortBy);
     setSortDirection(defaultSortDirections[nextSortBy]);
+  }
+
+  function openAction(project: Project, nextAction: ProjectCardAction) {
+    setSelectedProject(project);
+    setAction(nextAction);
+    setActionError(null);
+  }
+
+  async function openExport(project: Project) {
+    setExportingProjectId(project.id);
+    setActionError(null);
+    try {
+      setExportData(await getProjectExportData(project.id));
+    } catch (cause) {
+      setActionError(
+        cause instanceof Error ? cause.message : "Could not prepare the export.",
+      );
+    } finally {
+      setExportingProjectId(null);
+    }
   }
 
   return (
@@ -140,6 +184,12 @@ export function ProjectBrowser({ initialProjects }: ProjectBrowserProps) {
         </div>
       </div>
 
+      {actionError ? (
+        <p className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          {actionError}
+        </p>
+      ) : null}
+
       {visibleProjects.length === 0 ? (
         <div className="rounded-lg border border-dashed py-16 text-center">
           <p className="text-muted-foreground">No projects found.</p>
@@ -152,14 +202,35 @@ export function ProjectBrowser({ initialProjects }: ProjectBrowserProps) {
           </Button>
         </div>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {visibleProjects.map((project) => (
-            <ProjectCard key={project.id} project={project} />
+            <ProjectCard
+              key={project.id}
+              project={project}
+              exporting={exportingProjectId === project.id}
+              onAction={openAction}
+              onExport={(selected) => void openExport(selected)}
+            />
           ))}
         </div>
       )}
 
       <CreateProjectDialog open={isCreateOpen} onOpenChange={setIsCreateOpen} />
+      <EditProjectDialog project={selectedProject} open={action === "edit"} onOpenChange={(open) => !open && setAction(null)} />
+      <DuplicateProjectDialog project={selectedProject} open={action === "duplicate"} onOpenChange={(open) => !open && setAction(null)} />
+      <CopyImagesDialog project={selectedProject} projects={projects} open={action === "copy"} onOpenChange={(open) => !open && setAction(null)} />
+      <DeleteProjectDialog project={selectedProject} open={action === "delete"} onOpenChange={(open) => !open && setAction(null)} />
+      {exportData ? (
+        <AnnotationExportSheet
+          key={exportData.project.id}
+          open
+          onOpenChange={(open) => !open && setExportData(null)}
+          projectId={exportData.project.id}
+          projectName={exportData.project.name}
+          images={exportData.images}
+          labels={exportData.labels}
+        />
+      ) : null}
     </div>
   );
 }
