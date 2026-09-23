@@ -1,6 +1,7 @@
 import { AppHeader } from "@/components/app-shell/app-header";
 import { ProjectDetailClient } from "@/components/projects/project-detail-client";
-import { fetchProjectImages } from "@/lib/images";
+import { fetchImageStats, fetchProjectImages } from "@/lib/images";
+import { fetchProjectLabels } from "@/lib/labels";
 import { createClient } from "@/lib/supabase/server";
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
@@ -19,13 +20,32 @@ async function ProjectDetailContent({ id }: { id: string }) {
     notFound();
   }
 
-  const images = await fetchProjectImages(project.id);
+  const [{ data: projectRows }, images, labels] = await Promise.all([
+    supabase
+      .from("projects")
+      .select("*")
+      .order("name", { ascending: true }),
+    fetchProjectImages(project.id),
+    fetchProjectLabels(project.id),
+  ]);
+  const destinations = projectRows ?? [];
+  const stats = await fetchImageStats(destinations.map((item) => item.id));
+  const projects = destinations.map((item) => ({
+    ...item,
+    image_count: stats.byProject[item.id]?.total ?? 0,
+    annotated_count: stats.byProject[item.id]?.annotated ?? 0,
+  }));
 
   return (
     <>
       <AppHeader projectName={project.name} />
       <div className="flex-1 p-4 md:p-6">
-        <ProjectDetailClient project={project} images={images} />
+        <ProjectDetailClient
+          project={project}
+          images={images}
+          projects={projects}
+          labels={labels}
+        />
       </div>
     </>
   );

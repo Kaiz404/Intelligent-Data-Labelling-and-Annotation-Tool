@@ -171,6 +171,12 @@ export function AnnotationCanvas({
   );
 
   const selectedLabel = labelById.get(selectedLabelId) ?? labels[0];
+  const selectedBox = selectedBoxId
+    ? boxes.find((box) => box.id === selectedBoxId)
+    : undefined;
+  const selectedBoxColor = selectedBox
+    ? labelById.get(selectedBox.labelId)?.color ?? "#2563eb"
+    : "#2563eb";
   const editorBox = labelEditor
     ? boxes.find((box) => box.id === labelEditor.boxId)
     : null;
@@ -634,8 +640,15 @@ export function AnnotationCanvas({
                   width={box.width}
                   height={box.height}
                   stroke={color}
-                  strokeWidth={isSelected ? 2.5 : 2}
-                  fill={hexToRgba(color, isSelected ? 0.18 : 0.1)}
+                  strokeWidth={isSelected ? 2 : 1.5}
+                  fill={hexToRgba(color, isSelected ? 0.22 : 0.045)}
+                  opacity={selectedBoxId && !isSelected ? 0.58 : 1}
+                  cornerRadius={isSelected ? 2 : 0}
+                  shadowColor={color}
+                  shadowBlur={isSelected ? 6 : 0}
+                  shadowOpacity={isSelected ? 0.45 : 0}
+                  shadowForStrokeEnabled={isSelected}
+                  hitStrokeWidth={10}
                   draggable={tool === "select"}
                   onClick={() => {
                     if (tool === "select") {
@@ -667,6 +680,7 @@ export function AnnotationCanvas({
                   key={`label-${box.id}`}
                   x={box.x}
                   y={Math.max(box.y - 22, 0)}
+                  opacity={selectedBoxId && box.id !== selectedBoxId ? 0.62 : 1}
                   onMouseDown={(event) => {
                     event.cancelBubble = true;
                   }}
@@ -706,6 +720,13 @@ export function AnnotationCanvas({
                 ref={transformerRef}
                 rotateEnabled={false}
                 keepRatio={false}
+                borderStroke={selectedBoxColor}
+                borderStrokeWidth={1}
+                anchorStroke={selectedBoxColor}
+                anchorFill="#ffffff"
+                anchorSize={7}
+                anchorCornerRadius={2}
+                padding={1}
                 boundBoxFunc={(oldBox, newBox) => {
                   if (newBox.width < 4 || newBox.height < 4) {
                     return oldBox;

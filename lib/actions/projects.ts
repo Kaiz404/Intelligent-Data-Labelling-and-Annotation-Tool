@@ -142,12 +142,18 @@ async function copyImages(
   targetProjectId: string,
   labelIds: Map<string, string>,
   keepAnnotations = true,
+  imageIds?: string[],
 ) {
-  const { data, error } = await supabase
+  let query = supabase
     .from("images")
     .select("name, object_key, content_type, size_bytes, annotation")
     .eq("project_id", sourceProjectId);
+  if (imageIds) query = query.in("id", imageIds);
+  const { data, error } = await query;
   if (error) throw new Error(`Could not load project images: ${error.message}`);
+  if (imageIds && (data?.length ?? 0) !== new Set(imageIds).size) {
+    throw new Error("One or more selected images could not be found.");
+  }
 
   const createdKeys: string[] = [];
   const createdImageIds: string[] = [];
@@ -290,6 +296,86 @@ export async function copyProjectImages(
   revalidatePath("/projects");
   revalidatePath(`/projects/${targetProjectId}`);
   return { copied: createdKeys.length };
+}
+
+export async function transferProjectImages(
+  sourceProjectId: string,
+  targetProjectId: string,
+  imageIds: string[],
+  mode: "copy" | "move",
+  keepAnnotations = true,
+) {
+  const uniqueImageIds = [...new Set(imageIds)];
+  if (uniqueImageIds.length === 0) throw new Error("Select at least one image.");
+  if (mode === "move" && sourceProjectId === targetProjectId) {
+    throw new Error("Choose a different destination project when moving images.");
+  }
+
+  const { supabase } = await requireOwnedProject(sourceProjectId);
+  await requireOwnedProject(targetProjectId);
+
+  const { data: sourceImages, error: sourceError } = await supabase
+    .from("images")
+    .select("id, object_key")
+    .eq("project_id", sourceProjectId)
+    .in("id", uniqueImageIds);
+  if (sourceError || (sourceImages?.length ?? 0) !== uniqueImageIds.length) {
+    throw new Error("One or more selected images could not be loaded.");
+  }
+
+  const labelIds = keepAnnotations
+    ? await copyLabels(supabase, sourceProjectId, targetProjectId)
+    : new Map<string, string>();
+  const createdKeys = await copyImages(
+    supabase,
+    sourceProjectId,
+    targetProjectId,
+    labelIds,
+    keepAnnotations,
+    uniqueImageIds,
+  );
+
+  if (mode === "move") {
+    try {
+      await deleteImageObjects(
+        (sourceImages ?? []).map((image) => image.object_key),
+      );
+      const { error: deleteError } = await supabase
+        .from("images")
+        .delete()
+        .eq("project_id", sourceProjectId)
+        .in("id", uniqueImageIds);
+      if (deleteError) throw deleteError;
+    } catch (error) {
+      await supabase
+        .from("images")
+        .delete()
+        .eq("project_id", targetProjectId)
+        .in("object_key", createdKeys);
+      await deleteImageObjects(createdKeys).catch(() => undefined);
+      throw new Error(
+        error instanceof Error
+          ? `Images were copied but could not be removed from the source: ${error.message}`
+          : "Images could not be moved.",
+      );
+    }
+  }
+
+  await Promise.all([
+    supabase
+      .from("projects")
+      .update({ updated_at: new Date().toISOString() })
+      .eq("id", sourceProjectId),
+    supabase
+      .from("projects")
+      .update({ updated_at: new Date().toISOString() })
+      .eq("id", targetProjectId),
+  ]);
+  revalidatePath("/dashboard");
+  revalidatePath("/projects");
+  revalidatePath(`/projects/${sourceProjectId}`);
+  revalidatePath(`/projects/${targetProjectId}`);
+  return { transferred: createdKeys.length };
 }
 
 export async function deleteProject(projectId: string) {
