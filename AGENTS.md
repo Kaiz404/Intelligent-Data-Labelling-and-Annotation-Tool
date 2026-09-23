@@ -229,7 +229,7 @@ Manual types in `lib/types/projects.ts` and `lib/types/annotations.ts` (`Boundin
 | User auth (sign up, login, OAuth, reset) | **Real** | Supabase Auth |
 | Projects list / create / star | **Real** | Supabase `projects` table + `lib/actions/projects.ts` |
 | Project detail — metadata | **Real** | Supabase `projects` |
-| Project detail — images | **Real** | Supabase `images` metadata + private S3 objects loaded with short-lived signed GET URLs from `lib/images.ts` |
+| Project detail — images | **Real** | Supabase `images` metadata + private S3 objects loaded with short-lived signed GET URLs from `lib/images.ts`; card and multi-select actions support rename, copy/add, move, export, and permanent delete |
 | Annotation workspace UI + bbox editor | **Real images, labels, and durable saves** | Images come from Supabase + S3; labels come from Supabase `project_labels`; changes are debounced for 1.5 seconds and auto-saved to `images.annotation`, the Save button persists immediately through the same serialized save queue, and `sessionStorage` remains a local draft backup |
 | AI Annotate | **Real (zero-shot; saved after review)** | Toolbar button opens `components/annotate/ai-annotate-dialog.tsx`; user picks labels + confidence, `POST /api/annotations/auto-label` calls the shared Roboflow zero-shot workflow (`lib/roboflow/`) with a short-lived signed image URL, converts center-pixel predictions to top-left boxes (`lib/annotations/formats.ts`), and returns them to the canvas. Accepted predictions become durable through auto-save or the Save button |
 | Upload images dialog | **Real** | UI + queue in `components/projects/upload-images-dialog.tsx` + `hooks/use-upload-queue.ts`; `createS3Uploader()` uploads directly to S3, and successful completion persists an `images` row before refreshing the project grid. |
@@ -318,9 +318,12 @@ Current actions: `lib/actions/projects.ts`, `lib/actions/images.ts`, `lib/action
 | `updateProject(projectId, name, description)` | Update an owned project's name and description |
 | `duplicateProject(sourceProjectId, name, description)` | Duplicate an owned project together with its labels, S3 images, and saved annotations |
 | `copyProjectImages(sourceProjectId, targetProjectId, keepAnnotations)` | Copy every image into another owned project; optionally copy required labels and saved annotations |
+| `transferProjectImages(sourceProjectId, targetProjectId, imageIds, mode, keepAnnotations)` | Copy/add or move selected S3 images to an owned project, optionally remapping labels and annotations; copy-to-current duplicates images while move-to-current is rejected |
 | `deleteProject(projectId)` | Permanently delete an owned project's S3 objects, image and label rows, and project row |
 | `getProjectExportData(projectId)` | Load an owned project, its signed image URLs, labels, and annotations for the shared export sheet |
 | `deleteProjectImage(imageId, projectId)` | Verify image access, permanently delete its S3 object and Supabase row, then revalidate project metrics |
+| `deleteProjectImages(imageIds, projectId)` | Verify and permanently delete a selected image batch from S3 and Supabase |
+| `renameProjectImage(imageId, projectId, fileName)` | Rename an owned image's display/export file name |
 | `createLabel(projectId, name)` | Insert a `project_labels` row with an auto-assigned palette color, revalidate |
 | `renameLabel(projectId, labelId, name)` | Rename a project label, updating its name everywhere that label is used |
 | `deleteLabel(projectId, labelId)` | Delete a `project_labels` row, revalidate |

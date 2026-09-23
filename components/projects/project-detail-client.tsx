@@ -1,10 +1,12 @@
 "use client";
 
-import { Pencil, Search, Upload } from "lucide-react";
+import { CopyPlus, Download, FolderInput, Pencil, Search, Trash2, Upload } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
-import { deleteProjectImage } from "@/lib/actions/images";
+import { deleteProjectImages } from "@/lib/actions/images";
+import { AnnotationExportSheet } from "@/components/annotate/annotation-export-sheet";
 import { ImageCard } from "@/components/projects/image-card";
+import { ImageTransferDialog, RenameImageDialog } from "@/components/projects/image-action-dialogs";
 import {
   reverseSortDirection,
   SortOrderButton,
@@ -12,6 +14,7 @@ import {
 } from "@/components/projects/sort-order-button";
 import { UploadImagesDialog } from "@/components/projects/upload-images-dialog";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -33,6 +36,7 @@ import {
   TooltipContent,
   TooltipTrigger
 } from "@/components/ui/tooltip";
+import type { AnnotationLabel } from "@/lib/types/annotations";
 import type { Project, ProjectImage } from "@/lib/types/projects";
 
 const imageStatusFilters = [
@@ -58,11 +62,15 @@ const defaultImageSortDirections: Record<ImageSortOption, SortDirection> = {
 type ProjectDetailClientProps = {
   project: Project;
   images: ProjectImage[];
+  projects: Project[];
+  labels: AnnotationLabel[];
 };
 
 export function ProjectDetailClient({
   project,
   images,
+  projects,
+  labels,
 }: ProjectDetailClientProps) {
   const router = useRouter();
   const [selectedImageIds, setSelectedImageIds] = useState<string[]>([]);
@@ -74,7 +82,11 @@ export function ProjectDetailClient({
     defaultImageSortDirections["Date Added"]
   );
   const [isUploadOpen, setIsUploadOpen] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<ProjectImage | null>(null);
+  const [renameTarget, setRenameTarget] = useState<ProjectImage | null>(null);
+  const [transferMode, setTransferMode] = useState<"copy" | "move" | null>(null);
+  const [transferImageIds, setTransferImageIds] = useState<string[]>([]);
+  const [exportImages, setExportImages] = useState<ProjectImage[] | null>(null);
+  const [deleteTargets, setDeleteTargets] = useState<ProjectImage[]>([]);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -128,17 +140,18 @@ export function ProjectDetailClient({
   }
 
   async function handleDeleteImage() {
-    if (!deleteTarget || isDeleting) return;
+    if (deleteTargets.length === 0 || isDeleting) return;
 
     setIsDeleting(true);
     setDeleteError(null);
 
     try {
-      await deleteProjectImage(deleteTarget.id, project.id);
+      const ids = deleteTargets.map((image) => image.id);
+      await deleteProjectImages(ids, project.id);
       setSelectedImageIds((currentIds) =>
-        currentIds.filter((id) => id !== deleteTarget.id),
+        currentIds.filter((id) => !ids.includes(id)),
       );
-      setDeleteTarget(null);
+      setDeleteTargets([]);
       router.refresh();
     } catch (error) {
       setDeleteError(
@@ -147,6 +160,15 @@ export function ProjectDetailClient({
     } finally {
       setIsDeleting(false);
     }
+  }
+
+  const selectedImages = images.filter((image) =>
+    selectedImageIds.includes(image.id),
+  );
+
+  function openTransfer(mode: "copy" | "move", targetImages: ProjectImage[]) {
+    setTransferImageIds(targetImages.map((image) => image.id));
+    setTransferMode(mode);
   }
 
   return (
@@ -278,14 +300,28 @@ export function ProjectDetailClient({
               projectId={project.id}
               isSelected={selectedImageIds.includes(image.id)}
               onSelectionChange={handleSelectionChange}
+              onRename={setRenameTarget}
+              onMove={(target) => openTransfer("move", [target])}
+              onAdd={(target) => openTransfer("copy", [target])}
+              onExport={(target) => setExportImages([target])}
               onDelete={(target) => {
                 setDeleteError(null);
-                setDeleteTarget(target);
+                setDeleteTargets([target]);
               }}
             />
           ))}
         </div>
       )}
+
+      {selectedImages.length > 0 ? (
+        <div className="fixed bottom-5 left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-2 rounded-xl border bg-background/95 p-2 shadow-xl backdrop-blur">
+          <label className="flex items-center gap-2 px-2 text-sm text-muted-foreground"><Checkbox checked onCheckedChange={(checked) => { if (!checked) setSelectedImageIds([]); }} />{selectedImages.length} Selected</label>
+          <Button type="button" variant="outline" size="sm" onClick={() => openTransfer("move", selectedImages)}><FolderInput className="size-4" />Move to...</Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => openTransfer("copy", selectedImages)}><CopyPlus className="size-4" />Add to...</Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => setExportImages(selectedImages)}><Download className="size-4" />Export</Button>
+          <Button type="button" variant="outline" size="sm" className="border-destructive text-destructive hover:text-destructive" onClick={() => { setDeleteError(null); setDeleteTargets(selectedImages); }}><Trash2 className="size-4" />Delete</Button>
+        </div>
+      ) : null}
 
       <UploadImagesDialog
         open={isUploadOpen}
@@ -294,21 +330,52 @@ export function ProjectDetailClient({
         onUploadComplete={() => router.refresh()}
       />
 
+      <RenameImageDialog
+        image={renameTarget}
+        projectId={project.id}
+        open={renameTarget !== null}
+        onOpenChange={(open) => { if (!open) setRenameTarget(null); }}
+      />
+
+      <ImageTransferDialog
+        open={transferMode !== null}
+        onOpenChange={(open) => { if (!open) setTransferMode(null); }}
+        mode={transferMode ?? "copy"}
+        sourceProject={project}
+        projects={projects}
+        imageIds={transferImageIds}
+        onComplete={() => setSelectedImageIds([])}
+      />
+
+      {exportImages ? (
+        <AnnotationExportSheet
+          key={exportImages.map((image) => image.id).join(",")}
+          open
+          onOpenChange={(open) => { if (!open) setExportImages(null); }}
+          projectId={project.id}
+          projectName={project.name}
+          images={exportImages}
+          labels={labels}
+        />
+      ) : null}
+
       <Dialog
-        open={deleteTarget !== null}
+        open={deleteTargets.length > 0}
         onOpenChange={(open) => {
           if (!open && !isDeleting) {
-            setDeleteTarget(null);
+            setDeleteTargets([]);
             setDeleteError(null);
           }
         }}
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Delete image?</DialogTitle>
+            <DialogTitle>Delete {deleteTargets.length === 1 ? "image" : "images"}?</DialogTitle>
             <DialogDescription>
-              {deleteTarget
-                ? `This will permanently delete ${deleteTarget.fileName} from the project. This action cannot be undone.`
+              {deleteTargets.length === 1
+                ? `This will permanently delete ${deleteTargets[0].fileName} from the project. This action cannot be undone.`
+                : deleteTargets.length > 1
+                  ? `This will permanently delete ${deleteTargets.length} images from the project. This action cannot be undone.`
                 : "This action cannot be undone."}
             </DialogDescription>
           </DialogHeader>
@@ -322,7 +389,7 @@ export function ProjectDetailClient({
               type="button"
               variant="outline"
               disabled={isDeleting}
-              onClick={() => setDeleteTarget(null)}
+              onClick={() => setDeleteTargets([])}
             >
               Cancel
             </Button>
@@ -332,7 +399,7 @@ export function ProjectDetailClient({
               disabled={isDeleting}
               onClick={() => void handleDeleteImage()}
             >
-              {isDeleting ? "Deleting..." : "Delete image"}
+              {isDeleting ? "Deleting..." : `Delete ${deleteTargets.length === 1 ? "image" : "images"}`}
             </Button>
           </DialogFooter>
         </DialogContent>
