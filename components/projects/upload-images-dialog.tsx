@@ -25,6 +25,7 @@ import {
 import { formatBytes } from "@/lib/format";
 import { useUploadQueue } from "@/hooks/use-upload-queue";
 import type { UploadQueueItem, UploadTab } from "@/lib/uploads/types";
+import { extractZipImages } from "@/lib/uploads/zip-extractor";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -49,6 +50,14 @@ import { cn } from "@/lib/utils";
 
 const uploadTabs = ["All", "Uploading", "Completed", "Failed"] as const;
 const PAGE_SIZE = 6;
+
+function isZipFile(file: File) {
+  return (
+    file.name.toLowerCase().endsWith(".zip") ||
+    file.type === "application/zip" ||
+    file.type === "application/x-zip-compressed"
+  );
+}
 
 type UploadImagesDialogProps = {
   open: boolean;
@@ -174,6 +183,8 @@ export function UploadImagesDialog({
   const [page, setPage] = useState(1);
   const [isDragging, setIsDragging] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [extractionError, setExtractionError] = useState<string | null>(null);
 
   const {
     items,
@@ -242,15 +253,53 @@ export function UploadImagesDialog({
     onOpenChange(nextOpen);
   }
 
+  async function handleSelectedFiles(fileList: FileList | File[] | null) {
+    if (!fileList || isExtracting) return;
+
+    const files = Array.from(fileList);
+    const zipFiles = files.filter(isZipFile);
+    const rawFiles = files.filter((file) => !isZipFile(file));
+    setExtractionError(null);
+
+    if (!zipFiles.length) {
+      addFiles(rawFiles);
+      return;
+    }
+
+    setIsExtracting(true);
+
+    try {
+      const results = await Promise.allSettled(zipFiles.map(extractZipImages));
+      const extractedImages = results.flatMap((result) =>
+        result.status === "fulfilled" ? result.value : [],
+      );
+      const errors = results.flatMap((result) =>
+        result.status === "rejected"
+          ? [
+              result.reason instanceof Error
+                ? result.reason.message
+                : "Could not extract a ZIP file.",
+            ]
+          : [],
+      );
+
+      // addFiles remains the single source of truth for image MIME and queue-size validation.
+      addFiles([...rawFiles, ...extractedImages]);
+      if (errors.length) setExtractionError(errors.join(" "));
+    } finally {
+      setIsExtracting(false);
+    }
+  }
+
   function handleFileInput(event: ChangeEvent<HTMLInputElement>) {
-    addFiles(event.currentTarget.files);
+    void handleSelectedFiles(event.currentTarget.files);
     event.currentTarget.value = "";
   }
 
   function handleDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     setIsDragging(false);
-    addFiles(event.dataTransfer.files);
+    void handleSelectedFiles(event.dataTransfer.files);
   }
 
   const pageNumbers = useMemo(() => {
@@ -321,7 +370,7 @@ export function UploadImagesDialog({
                 Drag & Drop or Choose file to upload
               </p>
               <p className="flex items-center gap-1 text-xs text-muted-foreground">
-                <span>JPG or PNG</span>
+                <span>JPG, PNG, or ZIP</span>
                 <span aria-hidden>·</span>
                 <span>Up to 15 GB</span>
               </p>
@@ -331,6 +380,7 @@ export function UploadImagesDialog({
               variant="outline"
               className="h-9 border-primary text-primary shadow-sm hover:bg-primary/5 hover:text-primary"
               onClick={() => inputRef.current?.click()}
+              disabled={isExtracting}
             >
               Browse files
             </Button>
@@ -340,10 +390,20 @@ export function UploadImagesDialog({
               multiple
               onChange={handleFileInput}
               type="file"
-              accept="image/png,image/jpeg,.jpg,.jpeg,.png"
+              accept="image/png,image/jpeg,application/zip,.jpg,.jpeg,.png,.zip"
+              disabled={isExtracting}
             />
           </div>
         </div>
+
+        {isExtracting ? (
+          <p className="text-sm text-muted-foreground">Extracting ZIP images…</p>
+        ) : null}
+        {extractionError ? (
+          <p className="text-sm text-destructive" role="alert">
+            {extractionError}
+          </p>
+        ) : null}
 
         {items.length > 0 ? (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">
@@ -646,6 +706,7 @@ export function UploadImagesDialog({
                 startUploads();
               }}
               disabled={
+                isExtracting ||
                 isRunning ||
                 !items.some(
                   (i) =>
