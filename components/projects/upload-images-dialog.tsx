@@ -90,6 +90,7 @@ function StatusCell({
 
   return (
     <span
+      key={item.status}
       className={cn(
         "flex items-center gap-1.5 text-sm font-medium",
         isCompleted && "text-emerald-600",

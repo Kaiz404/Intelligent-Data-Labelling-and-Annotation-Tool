@@ -49,7 +49,9 @@ export function useUploadQueue({
   const controllersRef = useRef(new Map<string, AbortController>());
   const inFlightRef = useRef(new Set<string>());
   const itemsRef = useRef(items);
+  const onUploadCompleteRef = useRef(onUploadComplete);
   itemsRef.current = items;
+  onUploadCompleteRef.current = onUploadComplete;
 
   const updateItem = useCallback(
     (id: string, patch: Partial<UploadQueueItem>) => {
@@ -207,7 +209,10 @@ export function useUploadQueue({
           key: result.key,
           uploadId: result.uploadId,
         });
-        onUploadComplete?.({ imageId: result.imageId, key: result.key });
+        onUploadCompleteRef.current?.({
+          imageId: result.imageId,
+          key: result.key,
+        });
       } catch (error) {
         if (controller.signal.aborted) {
           return;
@@ -221,7 +226,7 @@ export function useUploadQueue({
         inFlightRef.current.delete(item.id);
       }
     },
-    [onUploadComplete, projectId, updateItem],
+    [projectId, updateItem],
   );
 
   // Fill concurrent upload slots while the batch is running.
