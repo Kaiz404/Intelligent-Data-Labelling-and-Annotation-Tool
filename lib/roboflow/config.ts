@@ -4,6 +4,8 @@ export class RoboflowError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    /** True for rate limits, timeouts and upstream 5xx — safe to retry later. */
+    readonly retryable = false,
   ) {
     super(message);
   }

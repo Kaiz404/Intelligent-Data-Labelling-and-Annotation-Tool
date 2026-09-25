@@ -1,16 +1,6 @@
-import {
-  canonicalToBoundingBox,
-  clampCanonicalToImage,
-  fromCenterPixelBox,
-} from "@/lib/annotations/formats";
-import { detectImage } from "@/lib/roboflow/client";
+import { detectSuggestionsForImage } from "@/lib/annotations/auto-label";
 import { RoboflowError } from "@/lib/roboflow/config";
-import {
-  createImageReadUrl,
-  requireOwnedProject,
-  UploadApiError,
-} from "@/lib/uploads/s3-server";
-import type { BoundingBox } from "@/lib/types/annotations";
+import { requireOwnedProject, UploadApiError } from "@/lib/uploads/s3-server";
 
 class AutoLabelError extends Error {
   constructor(
@@ -95,33 +85,13 @@ export async function POST(request: Request) {
       );
     }
 
-    const labelIdByName = new Map(
-      labels.map((label) => [label.name.trim().toLowerCase(), label.id as string]),
-    );
-
-    const imageUrl = await createImageReadUrl(image.object_key);
-    const result = await detectImage({
-      imageUrl,
-      classNames: labels.map((label) => label.name),
+    const suggestions = await detectSuggestionsForImage({
+      objectKey: image.object_key,
+      labels,
       confidence: confidence as number | undefined,
     });
-
-    const boxes: BoundingBox[] = [];
-    for (const detection of result.detections) {
-      const labelId = labelIdByName.get(detection.className.trim().toLowerCase());
-      if (!labelId) {
-        // Zero-shot model returned a class we didn't request/recognize — skip it.
-        continue;
-      }
-
-      const canonical = clampCanonicalToImage(
-        fromCenterPixelBox(detection),
-        result.image,
-      );
-      boxes.push(canonicalToBoundingBox(canonical, labelId));
-    }
-
-    return Response.json({ boxes });
+    // Returned as suggestions (with confidence) for the user to accept.
+    return Response.json({ boxes: suggestions });
   } catch (error) {
     return errorResponse(error);
   }

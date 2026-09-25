@@ -67,15 +67,20 @@ export async function detectImage(input: {
     });
   } catch (error) {
     if (error instanceof Error && error.name === "TimeoutError") {
-      throw new RoboflowError("AI annotation timed out.", 504);
+      throw new RoboflowError("AI annotation timed out.", 504, true);
     }
-    throw new RoboflowError("Could not reach the AI annotation service.", 502);
+    throw new RoboflowError(
+      "Could not reach the AI annotation service.",
+      502,
+      true,
+    );
   }
 
   if (!response.ok) {
     throw new RoboflowError(
       `AI annotation service returned an error (${response.status}).`,
       502,
+      response.status === 429 || response.status >= 500,
     );
   }
 
