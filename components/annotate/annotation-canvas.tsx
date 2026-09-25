@@ -41,6 +41,8 @@ type AnnotationCanvasProps = {
   onAssignBoxLabel: (boxId: string, name: string) => Promise<void>;
   onRenameLabel: (labelId: string, name: string) => Promise<void>;
   onZoomChange: (zoom: number) => void;
+  /** Confidence (0..1) keyed by box ID for AI suggestions not yet accepted. */
+  suggestionConfidence?: Record<string, number>;
   /** Increment to re-fit the image in the viewport. */
   fitNonce?: number;
   className?: string;
@@ -132,6 +134,7 @@ export function AnnotationCanvas({
   onAssignBoxLabel,
   onRenameLabel,
   onZoomChange,
+  suggestionConfidence,
   fitNonce = 0,
   className,
 }: AnnotationCanvasProps) {
@@ -630,6 +633,7 @@ export function AnnotationCanvas({
               const label = labelById.get(box.labelId);
               const color = label?.color ?? "#2563eb";
               const isSelected = box.id === selectedBoxId;
+              const isSuggestion = suggestionConfidence?.[box.id] !== undefined;
 
               return (
                 <Rect
@@ -641,7 +645,12 @@ export function AnnotationCanvas({
                   height={box.height}
                   stroke={color}
                   strokeWidth={isSelected ? 2 : 1.5}
-                  fill={hexToRgba(color, isSelected ? 0.22 : 0.045)}
+                  // Unaccepted AI suggestions are dashed and nearly unfilled.
+                  dash={isSuggestion ? [6, 4] : undefined}
+                  fill={hexToRgba(
+                    color,
+                    isSelected ? 0.22 : isSuggestion ? 0.015 : 0.045,
+                  )}
                   opacity={selectedBoxId && !isSelected ? 0.58 : 1}
                   cornerRadius={isSelected ? 2 : 0}
                   shadowColor={color}
@@ -675,6 +684,7 @@ export function AnnotationCanvas({
               if (!label) {
                 return null;
               }
+              const confidence = suggestionConfidence?.[box.id];
               return (
                 <Label
                   key={`label-${box.id}`}
@@ -691,7 +701,11 @@ export function AnnotationCanvas({
                 >
                   <Tag fill={label.color} cornerRadius={4} />
                   <Text
-                    text={label.name}
+                    text={
+                      confidence !== undefined
+                        ? `✦ ${label.name} ${Math.round(confidence * 100)}%`
+                        : label.name
+                    }
                     fontSize={12}
                     fontFamily="inherit"
                     fill="#ffffff"

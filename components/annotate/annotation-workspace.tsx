@@ -2,12 +2,13 @@
 
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, ChevronLeft, ChevronRight, Download, Keyboard } from "lucide-react";
 import { AiAnnotateDialog } from "@/components/annotate/ai-annotate-dialog";
 import { AnnotationSidePanel } from "@/components/annotate/annotation-side-panel";
 import { AnnotationExportSheet } from "@/components/annotate/annotation-export-sheet";
 import { AnnotationToolbar } from "@/components/annotate/annotation-toolbar";
+import { SuggestionReviewBar } from "@/components/annotate/suggestion-review-bar";
 import { Button } from "@/components/ui/button";
 import { saveImageAnnotations } from "@/lib/actions/annotations";
 import {
@@ -15,14 +16,17 @@ import {
   deleteLabel,
   renameLabel,
 } from "@/lib/actions/labels";
+import { resolveSuggestions } from "@/lib/actions/suggestions";
 import {
   loadAnnotations,
   saveAnnotations,
 } from "@/lib/annotations/storage";
 import type {
   AnnotationLabel,
+  AnnotationSuggestion,
   AnnotationTool,
   BoundingBox,
+  ImageSuggestionSet,
 } from "@/lib/types/annotations";
 import type { Project, ProjectImage } from "@/lib/types/projects";
 
@@ -46,15 +50,66 @@ type AnnotationWorkspaceProps = {
   images: ProjectImage[];
   imageId: string;
   labels: AnnotationLabel[];
+  /** Unreviewed bulk-AI suggestions for this image, grouped by job item. */
+  suggestionSets: ImageSuggestionSet[];
+  /** Project images that still have bulk-AI suggestions to review. */
+  reviewImageIds: string[];
+};
+
+/**
+ * Boxes on the canvas that are AI suggestions not yet accepted. `itemId` is
+ * the bulk job item they came from, or null for single-image AI Annotate
+ * results (which only live on this page until accepted).
+ */
+type SuggestionMeta = Record<
+  string,
+  { itemId: string | null; confidence: number }
+>;
+
+type SuggestionResolution = {
+  itemId: string;
+  remaining: AnnotationSuggestion[];
 };
 
 const MAX_HISTORY = 50;
+
+function sameGeometry(first: BoundingBox, second: BoundingBox) {
+  return (
+    first.x === second.x &&
+    first.y === second.y &&
+    first.width === second.width &&
+    first.height === second.height
+  );
+}
+
+function withoutSuggestion(meta: SuggestionMeta, boxId: string) {
+  if (!meta[boxId]) return meta;
+  const next = { ...meta };
+  delete next[boxId];
+  return next;
+}
+
+/** Still-pending suggestions per bulk job item, for `resolveSuggestions`. */
+function buildResolutions(
+  boxes: BoundingBox[],
+  meta: SuggestionMeta,
+  sets: ImageSuggestionSet[],
+): SuggestionResolution[] {
+  return sets.map((set) => ({
+    itemId: set.itemId,
+    remaining: boxes
+      .filter((box) => meta[box.id]?.itemId === set.itemId)
+      .map((box) => ({ ...box, confidence: meta[box.id].confidence })),
+  }));
+}
 
 export function AnnotationWorkspace({
   project,
   images,
   imageId,
   labels: initialLabels,
+  suggestionSets,
+  reviewImageIds,
 }: AnnotationWorkspaceProps) {
   const router = useRouter();
   const [labels, setLabels] = useState<AnnotationLabel[]>(initialLabels);
@@ -80,13 +135,36 @@ export function AnnotationWorkspace({
   const [hydrated, setHydrated] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [aiAnnotateOpen, setAiAnnotateOpen] = useState(false);
+  const [suggestionMeta, setSuggestionMeta] = useState<SuggestionMeta>({});
+  const [reviewQueue, setReviewQueue] = useState(reviewImageIds);
   const autoSaveTimerRef = useRef<number | null>(null);
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const pendingSavesRef = useRef(0);
   const lastSavedSignatureRef = useRef("");
+  const lastResolvedSignatureRef = useRef("");
   const activeImageIdRef = useRef<string | null>(currentImage?.id ?? null);
 
   activeImageIdRef.current = currentImage?.id ?? null;
+
+  useEffect(() => {
+    setReviewQueue(reviewImageIds);
+  }, [reviewImageIds]);
+
+  // Only accepted boxes are real annotations: they are what gets auto-saved,
+  // exported, and backed up. Pending suggestions stay dashed on the canvas.
+  const acceptedBoxes = useMemo(
+    () => boxes.filter((box) => !suggestionMeta[box.id]),
+    [boxes, suggestionMeta],
+  );
+  const suggestionConfidence = useMemo(() => {
+    const confidence: Record<string, number> = {};
+    for (const box of boxes) {
+      const meta = suggestionMeta[box.id];
+      if (meta) confidence[box.id] = meta.confidence;
+    }
+    return confidence;
+  }, [boxes, suggestionMeta]);
+  const pendingCount = Object.keys(suggestionConfidence).length;
 
   useEffect(() => {
     if (!selectedLabelId && labels[0]) {
@@ -122,14 +200,34 @@ export function AnnotationWorkspace({
       currentImage.annotations,
     );
     lastSavedSignatureRef.current = JSON.stringify(currentImage.annotations);
-    setBoxes(loaded);
+
+    // Overlay unreviewed bulk-AI suggestions, skipping any already accepted
+    // (same box ID) and any whose label has since been deleted.
+    const loadedIds = new Set(loaded.map((box) => box.id));
+    const knownLabelIds = new Set(initialLabels.map((label) => label.id));
+    const meta: SuggestionMeta = {};
+    const suggestionBoxes: BoundingBox[] = [];
+    for (const set of suggestionSets) {
+      for (const { confidence, ...box } of set.suggestions) {
+        if (loadedIds.has(box.id) || !knownLabelIds.has(box.labelId)) continue;
+        meta[box.id] = { itemId: set.itemId, confidence };
+        suggestionBoxes.push(box);
+      }
+    }
+    const initialBoxes = [...loaded, ...suggestionBoxes];
+    lastResolvedSignatureRef.current = JSON.stringify(
+      buildResolutions(initialBoxes, meta, suggestionSets),
+    );
+
+    setBoxes(initialBoxes);
+    setSuggestionMeta(meta);
     setPast([]);
     setFuture([]);
     setSelectedBoxId(null);
     setLastSavedAt(null);
     setSaveError(null);
     setHydrated(true);
-  }, [currentImage, project.id]);
+  }, [currentImage, initialLabels, project.id, suggestionSets]);
 
   const commitBoxes = useCallback((next: BoundingBox[]) => {
     setBoxes((current) => {
@@ -137,6 +235,10 @@ export function AnnotationWorkspace({
       setFuture([]);
       return next;
     });
+  }, []);
+
+  const acceptSuggestion = useCallback((boxId: string) => {
+    setSuggestionMeta((current) => withoutSuggestion(current, boxId));
   }, []);
 
   const handleAssignBoxLabel = useCallback(
@@ -160,13 +262,20 @@ export function AnnotationWorkspace({
       const nextBoxes = boxes.map((box) =>
         box.id === boxId ? { ...box, labelId: assignedLabelId } : box,
       );
+      // Relabelling a suggestion counts as accepting it.
+      const nextMeta = withoutSuggestion(suggestionMeta, boxId);
       commitBoxes(nextBoxes);
+      setSuggestionMeta(nextMeta);
       if (currentImage) {
-        saveAnnotations(project.id, currentImage.id, nextBoxes);
+        saveAnnotations(
+          project.id,
+          currentImage.id,
+          nextBoxes.filter((box) => !nextMeta[box.id]),
+        );
       }
       setSelectedLabelId(assignedLabelId);
     },
-    [boxes, commitBoxes, currentImage, labels, project.id],
+    [boxes, commitBoxes, currentImage, labels, project.id, suggestionMeta],
   );
 
   const handleRenameLabel = useCallback(
@@ -187,9 +296,17 @@ export function AnnotationWorkspace({
 
   const handleBoxesChange = useCallback(
     (next: BoundingBox[]) => {
+      // Moving or resizing a suggestion counts as accepting it.
+      const previousById = new Map(boxes.map((box) => [box.id, box]));
+      for (const box of next) {
+        const previous = previousById.get(box.id);
+        if (previous && suggestionMeta[box.id] && !sameGeometry(previous, box)) {
+          acceptSuggestion(box.id);
+        }
+      }
       commitBoxes(next);
     },
-    [commitBoxes],
+    [acceptSuggestion, boxes, commitBoxes, suggestionMeta],
   );
 
   const handleUndo = useCallback(() => {
@@ -218,6 +335,7 @@ export function AnnotationWorkspace({
     });
   }, [boxes]);
 
+  // Deleting a suggestion rejects it; undo brings it back as a suggestion.
   const handleDelete = useCallback(() => {
     if (!selectedBoxId) {
       return;
@@ -233,6 +351,13 @@ export function AnnotationWorkspace({
     },
     [boxes, commitBoxes, selectedBoxId],
   );
+
+  const handleAcceptAll = useCallback(() => setSuggestionMeta({}), []);
+
+  const handleRejectAll = useCallback(() => {
+    commitBoxes(boxes.filter((box) => !suggestionMeta[box.id]));
+    setSelectedBoxId(null);
+  }, [boxes, commitBoxes, suggestionMeta]);
 
   const handleMoveBox = useCallback(
     (
@@ -264,11 +389,13 @@ export function AnnotationWorkspace({
         Pick<BoundingBox, "labelId" | "x" | "y" | "width" | "height">
       >,
     ) => {
+      // Editing a suggestion's label or coordinates counts as accepting it.
+      acceptSuggestion(boxId);
       commitBoxes(
         boxes.map((box) => (box.id === boxId ? { ...box, ...patch } : box)),
       );
     },
-    [boxes, commitBoxes],
+    [acceptSuggestion, boxes, commitBoxes],
   );
 
   const navigateToImage = useCallback(
@@ -282,16 +409,39 @@ export function AnnotationWorkspace({
     [images, project.id, router],
   );
 
+  /**
+   * Serialized save: persists accepted boxes to `images.annotation` and, when
+   * review decisions changed, the still-pending suggestions per job item.
+   * Returns whether everything was saved.
+   */
   const persistAnnotations = useCallback(
-    async (targetImageId: string, snapshot: BoundingBox[], flash: boolean) => {
+    async (
+      targetImageId: string,
+      snapshot: BoundingBox[],
+      resolutions: SuggestionResolution[],
+      flash: boolean,
+    ) => {
       const signature = JSON.stringify(snapshot);
+      const resolutionSignature = JSON.stringify(resolutions);
+      const saveBoxes = signature !== lastSavedSignatureRef.current || flash;
+      const saveResolutions =
+        resolutionSignature !== lastResolvedSignatureRef.current;
       pendingSavesRef.current += 1;
       setIsSaving(true);
       setSaveError(null);
 
-      const operation = saveQueueRef.current.then(() =>
-        saveImageAnnotations(project.id, targetImageId, snapshot),
-      );
+      // Accepted boxes are saved before their suggestions are cleared, so a
+      // failure in between can only leave a suggestion that is already
+      // accepted — which the loader skips by box ID.
+      const operation = saveQueueRef.current.then(async () => {
+        const result = saveBoxes
+          ? await saveImageAnnotations(project.id, targetImageId, snapshot)
+          : null;
+        if (saveResolutions) {
+          await resolveSuggestions(project.id, resolutions);
+        }
+        return result;
+      });
       saveQueueRef.current = operation.then(
         () => undefined,
         () => undefined,
@@ -301,12 +451,17 @@ export function AnnotationWorkspace({
         const result = await operation;
         if (activeImageIdRef.current === targetImageId) {
           lastSavedSignatureRef.current = signature;
-          setLastSavedAt(new Date(result.savedAt));
+          lastResolvedSignatureRef.current = resolutionSignature;
+          if (result) setLastSavedAt(new Date(result.savedAt));
           if (flash) {
             setSaveFlash(true);
             window.setTimeout(() => setSaveFlash(false), 1600);
           }
         }
+        if (resolutions.every((resolution) => resolution.remaining.length === 0)) {
+          setReviewQueue((queue) => queue.filter((id) => id !== targetImageId));
+        }
+        return true;
       } catch (error) {
         if (activeImageIdRef.current === targetImageId) {
           setSaveError(
@@ -315,6 +470,7 @@ export function AnnotationWorkspace({
               : "Could not save annotations.",
           );
         }
+        return false;
       } finally {
         pendingSavesRef.current -= 1;
         if (pendingSavesRef.current === 0) {
@@ -325,26 +481,45 @@ export function AnnotationWorkspace({
     [project.id],
   );
 
+  /** Save now (skipping the auto-save debounce) with explicit review state. */
+  const flushSave = useCallback(
+    async (nextBoxes: BoundingBox[], nextMeta: SuggestionMeta, flash: boolean) => {
+      if (!currentImage) return false;
+      if (autoSaveTimerRef.current !== null) {
+        window.clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+      const accepted = nextBoxes.filter((box) => !nextMeta[box.id]);
+      saveAnnotations(project.id, currentImage.id, accepted);
+      return persistAnnotations(
+        currentImage.id,
+        accepted,
+        buildResolutions(nextBoxes, nextMeta, suggestionSets),
+        flash,
+      );
+    },
+    [currentImage, persistAnnotations, project.id, suggestionSets],
+  );
+
   const handleSave = useCallback(async () => {
-    if (!currentImage) return;
-    if (autoSaveTimerRef.current !== null) {
-      window.clearTimeout(autoSaveTimerRef.current);
-      autoSaveTimerRef.current = null;
-    }
-    saveAnnotations(project.id, currentImage.id, boxes);
-    await persistAnnotations(currentImage.id, boxes, true);
-  }, [boxes, currentImage, persistAnnotations, project.id]);
+    await flushSave(boxes, suggestionMeta, true);
+  }, [boxes, flushSave, suggestionMeta]);
 
   useEffect(() => {
     if (!hydrated || !currentImage) return;
-    saveAnnotations(project.id, currentImage.id, boxes);
+    saveAnnotations(project.id, currentImage.id, acceptedBoxes);
 
-    const signature = JSON.stringify(boxes);
-    if (signature === lastSavedSignatureRef.current) return;
+    const resolutions = buildResolutions(boxes, suggestionMeta, suggestionSets);
+    if (
+      JSON.stringify(acceptedBoxes) === lastSavedSignatureRef.current &&
+      JSON.stringify(resolutions) === lastResolvedSignatureRef.current
+    ) {
+      return;
+    }
 
     autoSaveTimerRef.current = window.setTimeout(() => {
       autoSaveTimerRef.current = null;
-      void persistAnnotations(currentImage.id, boxes, false);
+      void persistAnnotations(currentImage.id, acceptedBoxes, resolutions, false);
     }, 1500);
     return () => {
       if (autoSaveTimerRef.current !== null) {
@@ -352,7 +527,48 @@ export function AnnotationWorkspace({
         autoSaveTimerRef.current = null;
       }
     };
-  }, [boxes, currentImage, hydrated, persistAnnotations, project.id]);
+  }, [
+    acceptedBoxes,
+    boxes,
+    currentImage,
+    hydrated,
+    persistAnnotations,
+    project.id,
+    suggestionMeta,
+    suggestionSets,
+  ]);
+
+  const nextReviewImageId = useMemo(() => {
+    const waiting = new Set(reviewQueue.filter((id) => id !== currentImage?.id));
+    const ordered = [
+      ...images.slice(imageIndex + 1),
+      ...images.slice(0, imageIndex),
+    ];
+    return ordered.find((image) => waiting.has(image.id))?.id ?? null;
+  }, [currentImage?.id, imageIndex, images, reviewQueue]);
+
+  const otherImagesToReview = useMemo(() => {
+    const imageIds = new Set(images.map((image) => image.id));
+    return reviewQueue.filter(
+      (id) => id !== currentImage?.id && imageIds.has(id),
+    ).length;
+  }, [currentImage?.id, images, reviewQueue]);
+
+  /** Save this image's review with `nextMeta`, then open the next image to review. */
+  const saveAndReviewNext = useCallback(
+    async (nextMeta: SuggestionMeta) => {
+      setSuggestionMeta(nextMeta);
+      if (!(await flushSave(boxes, nextMeta, !nextReviewImageId))) return;
+      if (nextReviewImageId) {
+        router.push(`/projects/${project.id}/annotate/${nextReviewImageId}`);
+      }
+    },
+    [boxes, flushSave, nextReviewImageId, project.id, router],
+  );
+
+  const selectedIsSuggestion = Boolean(
+    selectedBoxId && suggestionMeta[selectedBoxId],
+  );
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -372,19 +588,51 @@ export function AnnotationWorkspace({
       if (event.key === "Delete" || event.key === "Backspace") {
         event.preventDefault();
         handleDelete();
+        return;
+      }
+      if (
+        event.key.toLowerCase() === "a" &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey
+      ) {
+        if (event.shiftKey && pendingCount > 0) {
+          event.preventDefault();
+          handleAcceptAll();
+        } else if (!event.shiftKey && selectedBoxId && selectedIsSuggestion) {
+          event.preventDefault();
+          acceptSuggestion(selectedBoxId);
+        }
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleDelete, handleRedo, handleUndo]);
+  }, [
+    acceptSuggestion,
+    handleAcceptAll,
+    handleDelete,
+    handleRedo,
+    handleUndo,
+    pendingCount,
+    selectedBoxId,
+    selectedIsSuggestion,
+  ]);
 
+  // Single-image AI results join the canvas as suggestions to accept, so
+  // auto-save never persists unreviewed predictions.
   const handleAiDetected = useCallback(
-    (detected: BoundingBox[]) => {
+    (detected: AnnotationSuggestion[]) => {
       if (detected.length === 0) {
         return;
       }
-      commitBoxes([...boxes, ...detected]);
+      const meta: SuggestionMeta = {};
+      const detectedBoxes = detected.map(({ confidence, ...box }) => {
+        meta[box.id] = { itemId: null, confidence };
+        return box;
+      });
+      setSuggestionMeta((current) => ({ ...current, ...meta }));
+      commitBoxes([...boxes, ...detectedBoxes]);
     },
     [boxes, commitBoxes],
   );
@@ -396,6 +644,8 @@ export function AnnotationWorkspace({
       </div>
     );
   }
+
+  const reviewSet = new Set(reviewQueue);
 
   return (
     <div className="flex flex-col gap-4">
@@ -430,6 +680,24 @@ export function AnnotationWorkspace({
 
       <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_290px] xl:items-start">
         <div className="min-w-0 space-y-4">
+          <SuggestionReviewBar
+            pendingCount={pendingCount}
+            otherImagesToReview={otherImagesToReview}
+            selectedIsSuggestion={selectedIsSuggestion}
+            isSaving={isSaving}
+            error={saveError}
+            onAcceptSelected={() => {
+              if (selectedBoxId) acceptSuggestion(selectedBoxId);
+            }}
+            onRejectSelected={() => {
+              if (selectedBoxId) handleDeleteBox(selectedBoxId);
+            }}
+            onAcceptAll={handleAcceptAll}
+            onRejectAll={handleRejectAll}
+            onAcceptAllAndNext={() => void saveAndReviewNext({})}
+            onNextToReview={() => void saveAndReviewNext(suggestionMeta)}
+          />
+
           <div className="min-h-[510px] overflow-hidden rounded-xl border bg-muted/30 shadow-sm">
             {hydrated ? (
               <AnnotationCanvas
@@ -450,6 +718,7 @@ export function AnnotationWorkspace({
                 onAssignBoxLabel={handleAssignBoxLabel}
                 onRenameLabel={handleRenameLabel}
                 onZoomChange={setZoom}
+                suggestionConfidence={suggestionConfidence}
                 fitNonce={fitToken}
                 className="h-[510px]"
               />
@@ -474,9 +743,16 @@ export function AnnotationWorkspace({
                   aria-current={image.id === currentImage.id ? "true" : undefined}
                 >
                   <span
-                    className={`block h-16 rounded-md border bg-muted bg-cover bg-center transition ${image.id === currentImage.id ? "border-primary ring-2 ring-primary/20" : "hover:border-primary/50"}`}
+                    className={`relative block h-16 rounded-md border bg-muted bg-cover bg-center transition ${image.id === currentImage.id ? "border-primary ring-2 ring-primary/20" : "hover:border-primary/50"}`}
                     style={image.thumbnailUrl ? { backgroundImage: `url(${image.thumbnailUrl})` } : undefined}
-                  />
+                  >
+                    {reviewSet.has(image.id) ? (
+                      <span
+                        className="absolute right-1 top-1 size-2.5 rounded-full bg-violet-600 ring-2 ring-background"
+                        title="AI suggestions to review"
+                      />
+                    ) : null}
+                  </span>
                   <span className="mt-1 block truncate text-[10px]">{image.fileName}</span>
                 </button>
               ))}
@@ -497,7 +773,7 @@ export function AnnotationWorkspace({
               type="button"
               variant="outline"
               onClick={() => {
-                saveAnnotations(project.id, currentImage.id, boxes);
+                saveAnnotations(project.id, currentImage.id, acceptedBoxes);
                 setExportOpen(true);
               }}
               className="rounded-lg"
@@ -525,6 +801,9 @@ export function AnnotationWorkspace({
             onUpdateBox={handleUpdateBox}
             onMoveBox={handleMoveBox}
             onDeleteBox={handleDeleteBox}
+            suggestionConfidence={suggestionConfidence}
+            onAcceptSuggestion={acceptSuggestion}
+            onRejectSuggestion={handleDeleteBox}
           />
         </div>
       </div>
@@ -537,7 +816,10 @@ export function AnnotationWorkspace({
             <><span aria-hidden>·</span><span>Last saved {lastSavedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span></>
           ) : null}
         </div>
-        <span className="flex items-center gap-1"><Keyboard className="size-3.5" /> Shortcuts: Delete, undo and redo</span>
+        <span className="flex items-center gap-1">
+          <Keyboard className="size-3.5" /> Shortcuts: Delete, undo and redo
+          {pendingCount > 0 ? " · A accept suggestion · Shift+A accept all" : ""}
+        </span>
       </div>
 
       <AnnotationExportSheet

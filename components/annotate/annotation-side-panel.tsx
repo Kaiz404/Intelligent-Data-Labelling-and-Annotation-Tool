@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { GripVertical, MoreVertical, Search, Trash2, X } from "lucide-react";
+import { Check, GripVertical, MoreVertical, Search, Sparkles, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -24,6 +24,10 @@ type AnnotationSidePanelProps = {
   onUpdateBox: (boxId: string, patch: BoxPatch) => void;
   onMoveBox: (boxId: string, action: "front" | "forward" | "back" | "backward") => void;
   onDeleteBox: (boxId: string) => void;
+  /** Confidence keyed by box ID for AI suggestions not yet accepted. */
+  suggestionConfidence?: Record<string, number>;
+  onAcceptSuggestion?: (boxId: string) => void;
+  onRejectSuggestion?: (boxId: string) => void;
 };
 
 function CoordinateField({ label, value, minimum, onCommit }: { label: string; value: number; minimum: number; onCommit: (value: number) => void }) {
@@ -55,7 +59,7 @@ function CoordinateField({ label, value, minimum, onCommit }: { label: string; v
   );
 }
 
-export function AnnotationSidePanel({ labels, boxes, selectedLabelId, selectedBoxId, onSelectLabel, onSelectBox, onCreateLabel, onDeleteLabel, onUpdateBox, onMoveBox, onDeleteBox }: AnnotationSidePanelProps) {
+export function AnnotationSidePanel({ labels, boxes, selectedLabelId, selectedBoxId, onSelectLabel, onSelectBox, onCreateLabel, onDeleteLabel, onUpdateBox, onMoveBox, onDeleteBox, suggestionConfidence, onAcceptSuggestion, onRejectSuggestion }: AnnotationSidePanelProps) {
   const [labelQuery, setLabelQuery] = useState("");
   const [labelFilter, setLabelFilter] = useState<"all" | "used">("all");
   const [newLabelName, setNewLabelName] = useState("");
@@ -146,6 +150,7 @@ export function AnnotationSidePanel({ labels, boxes, selectedLabelId, selectedBo
                 {[...boxes].reverse().map((box, reverseIndex) => {
                   const label = labelById.get(box.labelId);
                   const index = boxes.length - reverseIndex;
+                  const confidence = suggestionConfidence?.[box.id];
                   return (
                     <li key={box.id}>
                       <div role="button" tabIndex={0} onClick={() => onSelectBox(box.id)} onKeyDown={(event) => {
@@ -154,8 +159,15 @@ export function AnnotationSidePanel({ labels, boxes, selectedLabelId, selectedBo
                         <GripVertical className="size-3.5 shrink-0 text-muted-foreground" />
                         <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: label?.color ?? "#71717a" }} />
                         <span className="truncate">{label?.name ?? "Unknown"} #{index}</span>
+                        {confidence !== undefined ? (
+                          <>
+                            <span className="flex shrink-0 items-center gap-0.5 text-[10px] text-violet-600 dark:text-violet-300" title="AI suggestion — not yet accepted"><Sparkles className="size-3" />{Math.round(confidence * 100)}%</span>
+                            <Button type="button" variant="ghost" size="icon" className="ml-auto size-6 shrink-0 text-emerald-600 hover:text-emerald-700" aria-label={`Accept ${label?.name ?? "suggestion"} ${index}`} onClick={(event) => { event.stopPropagation(); onAcceptSuggestion?.(box.id); }}><Check className="size-3.5" /></Button>
+                            <Button type="button" variant="ghost" size="icon" className="size-6 shrink-0 hover:text-destructive" aria-label={`Reject ${label?.name ?? "suggestion"} ${index}`} onClick={(event) => { event.stopPropagation(); onRejectSuggestion?.(box.id); }}><X className="size-3.5" /></Button>
+                          </>
+                        ) : null}
                         <DropdownMenu>
-                          <DropdownMenuTrigger asChild><Button type="button" variant="ghost" size="icon" className="ml-auto size-7 shrink-0" aria-label={`Layer options for ${label?.name ?? "annotation"} ${index}`} onClick={(event) => event.stopPropagation()}><MoreVertical className="size-3.5" /></Button></DropdownMenuTrigger>
+                          <DropdownMenuTrigger asChild><Button type="button" variant="ghost" size="icon" className={cn("size-7 shrink-0", confidence === undefined && "ml-auto")} aria-label={`Layer options for ${label?.name ?? "annotation"} ${index}`} onClick={(event) => event.stopPropagation()}><MoreVertical className="size-3.5" /></Button></DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-40" onClick={(event) => event.stopPropagation()}>
                             <DropdownMenuItem disabled={reverseIndex === 0} onSelect={() => onMoveBox(box.id, "front")}>Bring to Front</DropdownMenuItem>
                             <DropdownMenuItem disabled={reverseIndex === 0} onSelect={() => onMoveBox(box.id, "forward")}>Bring Forward</DropdownMenuItem>
@@ -178,6 +190,14 @@ export function AnnotationSidePanel({ labels, boxes, selectedLabelId, selectedBo
       {selectedBox ? (
         <section className="space-y-3 rounded-xl border bg-card p-3 shadow-sm" aria-label="Selected bounding box properties">
           <div><h2 className="text-sm font-semibold">Properties</h2><p className="mt-1 text-[11px] text-muted-foreground">Edit the selected bounding box.</p></div>
+          {suggestionConfidence?.[selectedBox.id] !== undefined ? (
+            <div className="flex items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 p-2 text-xs dark:border-violet-900 dark:bg-violet-950/40">
+              <Sparkles className="size-3.5 shrink-0 text-violet-600" />
+              <span className="min-w-0 flex-1">AI suggestion · {Math.round(suggestionConfidence[selectedBox.id] * 100)}% confident</span>
+              <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-emerald-700 hover:text-emerald-700" onClick={() => onAcceptSuggestion?.(selectedBox.id)}><Check className="size-3.5" />Accept</Button>
+              <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-destructive hover:text-destructive" onClick={() => onRejectSuggestion?.(selectedBox.id)}><X className="size-3.5" />Reject</Button>
+            </div>
+          ) : null}
           <div className="space-y-1.5">
             <label className="text-[11px] text-muted-foreground">Label</label>
             <Select value={selectedBox.labelId} onValueChange={(labelId) => { onSelectLabel(labelId); onUpdateBox(selectedBox.id, { labelId }); }}>

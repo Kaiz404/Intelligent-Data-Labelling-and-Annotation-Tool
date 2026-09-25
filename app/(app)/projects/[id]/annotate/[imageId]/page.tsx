@@ -1,5 +1,9 @@
 import { AppHeader } from "@/components/app-shell/app-header";
 import { AnnotationWorkspace } from "@/components/annotate/annotation-workspace";
+import {
+  fetchImagesAwaitingReview,
+  fetchPendingSuggestions,
+} from "@/lib/annotations/jobs";
 import { fetchProjectImages } from "@/lib/images";
 import { fetchProjectLabels } from "@/lib/labels";
 import { createClient } from "@/lib/supabase/server";
@@ -26,9 +30,11 @@ async function AnnotateContent({
     notFound();
   }
 
-  const [images, labels] = await Promise.all([
+  const [images, labels, suggestionSets, reviewImageIds] = await Promise.all([
     fetchProjectImages(project.id),
     fetchProjectLabels(project.id),
+    fetchPendingSuggestions(project.id, imageId),
+    fetchImagesAwaitingReview(project.id),
   ]);
 
   if (images.length === 0) {
@@ -55,6 +61,8 @@ async function AnnotateContent({
           images={images}
           imageId={activeImage.id}
           labels={labels}
+          suggestionSets={suggestionSets}
+          reviewImageIds={reviewImageIds}
         />
       </div>
     </>
