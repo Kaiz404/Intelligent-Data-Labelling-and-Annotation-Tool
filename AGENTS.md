@@ -36,7 +36,7 @@ Image annotation workspace for managing projects and annotating image datasets.
 - Root layout metadata title: **"Annotate"**
 - Sidebar brand label: **"SmartAnnoTool"** (SAT logo)
 
-**Product status:** UI is ahead of backend integration. Projects, auth, image metadata, direct S3 image uploads, image-count metrics, per-project labels, durable bounding-box saves, and AI Annotate are real; several nav items are still placeholder.
+**Product status:** UI is ahead of backend integration. Projects, auth, image metadata, direct S3 image uploads, image-count metrics, per-project labels, durable bounding-box saves, single-image AI Annotate, and bulk AI Annotate jobs with a review flow are real; several nav items are still placeholder.
 
 ---
 
@@ -70,21 +70,21 @@ data_annotation_tool/
 │   │   └── layout.tsx
 │   ├── auth/               # Auth pages + route handlers
 │   ├── api/uploads/        # Authenticated S3 multipart orchestration routes
-│   ├── api/annotations/    # AI auto-label route (Roboflow gateway workflow)
+│   ├── api/annotations/    # AI auto-label (single image) + bulk AI job routes
 │   ├── globals.css         # Tailwind v4 + design tokens
 │   ├── layout.tsx          # Root layout (font, theme)
 │   └── page.tsx            # Public landing page
 ├── components/
 │   ├── ui/                 # shadcn primitives — do not put feature logic here
 │   ├── app-shell/          # Sidebar, header
-│   ├── annotate/           # Annotation workspace (toolbar, Konva canvas, side panel, AI Annotate dialog)
+│   ├── annotate/           # Annotation workspace (toolbar, Konva canvas, side panel, AI Annotate dialog, suggestion review bar)
 │   ├── auth/               # Auth-specific shared UI
 │   ├── dashboard/          # Dashboard widgets
-│   └── projects/           # Project browser, detail, upload, etc.
-├── hooks/                  # Shared React hooks (use-mobile, use-upload-queue)
+│   └── projects/           # Project browser, detail, upload, bulk AI dialog + job banner, etc.
+├── hooks/                  # Shared React hooks (use-mobile, use-upload-queue, use-annotation-job)
 ├── lib/
 │   ├── actions/            # Server actions ("use server")
-│   ├── annotations/        # Client annotation draft backup (sessionStorage) + COCO/YOLO/VOC coordinate conversion
+│   ├── annotations/        # Client annotation draft backup (sessionStorage), COCO/YOLO/VOC conversion, shared detection (auto-label.ts), bulk job queue + worker (jobs.ts, server-only)
 │   ├── roboflow/           # Roboflow HTTP client (zero-shot gateway workflow) — deep module, mirrors lib/uploads/
 │   ├── supabase/           # client.ts, server.ts, proxy.ts
 │   ├── types/              # Manual TypeScript types (not Supabase codegen)
@@ -142,6 +142,9 @@ data_annotation_tool/
 | `/api/uploads/complete` | `app/api/uploads/complete/route.ts` | Route handler (complete S3 multipart upload) |
 | `/api/uploads/abort` | `app/api/uploads/abort/route.ts` | Route handler (abort S3 multipart upload) |
 | `/api/annotations/auto-label` | `app/api/annotations/auto-label/route.ts` | Route handler (zero-shot AI annotate one image) |
+| `/api/annotations/jobs` | `app/api/annotations/jobs/route.ts` | Route handler (POST: queue a bulk AI run, starts worker via `after()`) |
+| `/api/annotations/jobs/[jobId]` | `app/api/annotations/jobs/[jobId]/route.ts` | Route handler (GET: progress + per-image updates; restarts an idle worker) |
+| `/api/annotations/jobs/[jobId]/cancel` | `app/api/annotations/jobs/[jobId]/cancel/route.ts` | Route handler (POST: cancel an active run) |
 
 **Route group `(app)`:** Wraps dashboard and projects in the sidebar shell (`app/(app)/layout.tsx`). URLs are `/dashboard`, `/projects` — the group name is omitted from the path.
 
@@ -205,7 +208,21 @@ Request → proxy.ts → lib/supabase/proxy.ts (updateSession)
 - `created_at` timestamptz
 - Per-project custom classes for the annotation workspace and AI Annotate — replaces the old hardcoded frontend label list.
 
-**RLS:** Users can only SELECT/INSERT/UPDATE/DELETE their own projects (`auth.uid() = user_id`). Image and `project_labels` policies grant the same operations only when the parent project belongs to the current user.
+**`annotation_jobs` table** (one bulk AI run):
+- `id`, `project_id` → `projects(id)` (CASCADE), `user_id` (default `auth.uid()`)
+- `status`: `queued` | `running` | `completed` | `cancelled`; partial unique index allows **one active job per project**
+- `labels` jsonb — snapshot of requested `[{ id, name }]`; `confidence` real; `total_items`
+- `created_at`, `updated_at`, `finished_at`
+
+**`annotation_job_items` table** (one image in a run — this table *is* the work queue):
+- `job_id` + `project_id` → `annotation_jobs(id, project_id)` (CASCADE), `image_id` → `images(id)` (CASCADE), `position` (processing order)
+- `status`: `queued` | `running` | `succeeded` | `failed` | `cancelled`; `attempts` (max 3); `locked_until` (lease while running, retry-not-before while queued); `error`
+- `suggestions` jsonb — pending AI boxes (`BoundingBox` + `confidence`) awaiting review; shrinks as the user accepts/rejects; `suggestion_count` is a generated column. Accepted boxes move into `images.annotation`.
+- A newer successful run clears older unreviewed suggestions for the same image.
+
+**SQL functions (SECURITY INVOKER, `authenticated` only):** `claim_annotation_job_items(project, limit, lock_seconds)` leases items with `FOR UPDATE SKIP LOCKED`; `finalize_annotation_jobs(project)`; `annotation_image_states(project)` (latest status + pending suggestion count per image); `annotation_job_counts(job)`.
+
+**RLS:** Users can only SELECT/INSERT/UPDATE/DELETE their own projects (`auth.uid() = user_id`). Image, `project_labels`, `annotation_jobs`, and `annotation_job_items` policies grant the same operations only when the parent project belongs to the current user.
 
 ### Types
 
@@ -231,7 +248,8 @@ Manual types in `lib/types/projects.ts` and `lib/types/annotations.ts` (`Boundin
 | Project detail — metadata | **Real** | Supabase `projects` |
 | Project detail — images | **Real** | Supabase `images` metadata + private S3 objects loaded with short-lived signed GET URLs from `lib/images.ts`; card and multi-select actions support rename, copy/add, move, export, and permanent delete |
 | Annotation workspace UI + bbox editor | **Real images, labels, and durable saves** | Images come from Supabase + S3; labels come from Supabase `project_labels`; changes are debounced for 1.5 seconds and auto-saved to `images.annotation`, the Save button persists immediately through the same serialized save queue, and `sessionStorage` remains a local draft backup |
-| AI Annotate | **Real (zero-shot; saved after review)** | Toolbar button opens `components/annotate/ai-annotate-dialog.tsx`; user picks labels + confidence, `POST /api/annotations/auto-label` calls the shared Roboflow zero-shot workflow (`lib/roboflow/`) with a short-lived signed image URL, converts center-pixel predictions to top-left boxes (`lib/annotations/formats.ts`), and returns them to the canvas. Accepted predictions become durable through auto-save or the Save button |
+| AI Annotate | **Real (zero-shot; saved after review)** | Toolbar button opens `components/annotate/ai-annotate-dialog.tsx`; user picks labels + confidence, `POST /api/annotations/auto-label` calls the shared Roboflow zero-shot workflow (`lib/roboflow/`) with a short-lived signed image URL, converts center-pixel predictions to top-left boxes (`lib/annotations/formats.ts`), and returns them to the canvas as dashed suggestions with confidence. Suggestions are excluded from auto-save until accepted (accept, move/resize, relabel, `A`/`Shift+A`); rejected = deleted |
+| Bulk AI Annotate (many images / whole project) | **Real** | Project page "AI Annotate" button or selection bar opens `components/projects/batch-ai-annotate-dialog.tsx` (scope: selected / not yet AI-annotated / entire project, max 2000). `POST /api/annotations/jobs` inserts `annotation_jobs` + items, then drains the queue in `after()` (`lib/annotations/jobs.ts`: 4 parallel Roboflow calls, 240s budget, retry with backoff). The drain runs as the signed-in user (RLS, no service-role key); `hooks/use-annotation-job.ts` polls every 2.5s and each poll restarts the drain if no worker holds a live lease, so runs progress while the project page is open. Results show as card badges + an "AI suggestions" filter, and as dashed suggestions in the workspace with a review bar (Accept all & next, Reject all, per-box accept/reject). The workspace auto-save persists accepted boxes to `images.annotation` and remaining suggestions via `resolveSuggestions` through the same serialized save queue |
 | Upload images dialog | **Real** | UI + queue in `components/projects/upload-images-dialog.tsx` + `hooks/use-upload-queue.ts`; `createS3Uploader()` uploads directly to S3, and successful completion persists an `images` row before refreshing the project grid. |
 | Dashboard metrics (total/annotated/unannotated) | **Real** | RLS-filtered Supabase `images` rows aggregated by `lib/images.ts` |
 | Sidebar storage widget ("10 GB / 100 GB") | **Mock** | Hardcoded in `app-sidebar.tsx` |
@@ -309,7 +327,7 @@ Update the installed list above after adding.
 
 ## Server actions
 
-Current actions: `lib/actions/projects.ts`, `lib/actions/images.ts`, `lib/actions/labels.ts`, `lib/actions/annotations.ts`
+Current actions: `lib/actions/projects.ts`, `lib/actions/images.ts`, `lib/actions/labels.ts`, `lib/actions/annotations.ts`, `lib/actions/suggestions.ts`
 
 | Action | What it does |
 |--------|--------------|
@@ -328,6 +346,7 @@ Current actions: `lib/actions/projects.ts`, `lib/actions/images.ts`, `lib/action
 | `renameLabel(projectId, labelId, name)` | Rename a project label, updating its name everywhere that label is used |
 | `deleteLabel(projectId, labelId)` | Delete a `project_labels` row, revalidate |
 | `saveImageAnnotations(projectId, imageId, boxes)` | Validate ownership and bounding boxes, then persist the current annotation array to `images.annotation` |
+| `resolveSuggestions(projectId, resolutions)` | After reviewing AI suggestions, set each job item's still-pending `suggestions` (empty clears it from review). No `revalidatePath` — it runs inside workspace auto-save |
 
 **Pattern for new actions:**
 1. Create `lib/actions/<domain>.ts` with `"use server"` at top
