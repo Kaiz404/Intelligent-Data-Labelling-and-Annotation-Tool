@@ -1,10 +1,12 @@
 "use client";
 
-import { CopyPlus, Download, FolderInput, Pencil, Search, Trash2, Upload } from "lucide-react";
+import { CopyPlus, Download, FolderInput, Pencil, Search, Trash2, Upload, WandSparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { startTransition, useCallback, useMemo, useState } from "react";
 import { deleteProjectImages } from "@/lib/actions/images";
 import { AnnotationExportSheet } from "@/components/annotate/annotation-export-sheet";
+import { AiJobBanner } from "@/components/projects/ai-job-banner";
+import { BatchAiAnnotateDialog } from "@/components/projects/batch-ai-annotate-dialog";
 import { ImageCard } from "@/components/projects/image-card";
 import { ImageTransferDialog, RenameImageDialog } from "@/components/projects/image-action-dialogs";
 import {
@@ -36,7 +38,12 @@ import {
   TooltipContent,
   TooltipTrigger
 } from "@/components/ui/tooltip";
-import type { AnnotationLabel } from "@/lib/types/annotations";
+import { useAnnotationJob } from "@/hooks/use-annotation-job";
+import type {
+  AnnotationJobProgress,
+  AnnotationLabel,
+  ImageAiState,
+} from "@/lib/types/annotations";
 import type { Project, ProjectImage } from "@/lib/types/projects";
 
 const imageStatusFilters = [
@@ -47,7 +54,7 @@ const imageStatusFilters = [
 ] as const;
 
 const imageSortOptions = ["Date Added", "Name", "Status"] as const;
-const imageFilterOptions = ["All", "Selected"] as const;
+const imageFilterOptions = ["All", "Selected", "AI suggestions"] as const;
 
 type ImageStatusFilter = (typeof imageStatusFilters)[number];
 type ImageSortOption = (typeof imageSortOptions)[number];
@@ -64,6 +71,8 @@ type ProjectDetailClientProps = {
   images: ProjectImage[];
   projects: Project[];
   labels: AnnotationLabel[];
+  initialJob: AnnotationJobProgress | null;
+  initialAiStates: Record<string, ImageAiState>;
 };
 
 export function ProjectDetailClient({
@@ -71,6 +80,8 @@ export function ProjectDetailClient({
   images,
   projects,
   labels,
+  initialJob,
+  initialAiStates,
 }: ProjectDetailClientProps) {
   const router = useRouter();
   const [selectedImageIds, setSelectedImageIds] = useState<string[]>([]);
@@ -89,6 +100,38 @@ export function ProjectDetailClient({
   const [deleteTargets, setDeleteTargets] = useState<ProjectImage[]>([]);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isAiOpen, setIsAiOpen] = useState(false);
+
+  const refresh = useCallback(() => {
+    // Let client state commit before merging the refreshed Server Component
+    // payload into this client boundary.
+    startTransition(() => router.refresh());
+  }, [router]);
+
+  const {
+    job: aiJob,
+    states: aiStates,
+    isActive: isAiJobActive,
+    start: startAiJob,
+    cancel: cancelAiJob,
+  } = useAnnotationJob({
+    initialJob,
+    initialStates: initialAiStates,
+    onFinished: refresh,
+  });
+
+  const imageIds = useMemo(() => images.map((image) => image.id), [images]);
+  const reviewImageIds = useMemo(
+    () => imageIds.filter((id) => (aiStates[id]?.pendingSuggestions ?? 0) > 0),
+    [aiStates, imageIds],
+  );
+  const failedImageIds = useMemo(
+    () => imageIds.filter((id) => aiStates[id]?.status === "failed"),
+    [aiStates, imageIds],
+  );
+  const reviewHref = reviewImageIds[0]
+    ? `/projects/${project.id}/annotate/${reviewImageIds[0]}`
+    : null;
 
   const visibleImages = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
@@ -101,7 +144,11 @@ export function ProjectDetailClient({
         statusFilter === "All" ? true : image.status === statusFilter
       )
       .filter((image) =>
-        filterBy === "Selected" ? selectedImageIds.includes(image.id) : true
+        filterBy === "Selected"
+          ? selectedImageIds.includes(image.id)
+          : filterBy === "AI suggestions"
+            ? (aiStates[image.id]?.pendingSuggestions ?? 0) > 0
+            : true
       )
       .sort((first, second) => {
         let comparison = 0;
@@ -117,6 +164,7 @@ export function ProjectDetailClient({
         return sortDirection === "ascending" ? comparison : -comparison;
       });
   }, [
+    aiStates,
     filterBy,
     images,
     search,
@@ -199,15 +247,39 @@ export function ProjectDetailClient({
             <p className="text-muted-foreground">{project.description}</p>
           ) : null}
         </div>
-        <Button
-          variant="outline"
-          onClick={() => setIsUploadOpen(true)}
-          className="text-primary border-primary hover:text-primary"
-        >
-          <Upload className="size-4 text-primary" />
-          Upload Images
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setIsUploadOpen(true)}
+            className="text-primary border-primary hover:text-primary"
+          >
+            <Upload className="size-4 text-primary" />
+            Upload Images
+          </Button>
+          <Button
+            onClick={() => setIsAiOpen(true)}
+            disabled={images.length === 0 || isAiJobActive}
+            className="bg-violet-600 text-white hover:bg-violet-700"
+          >
+            <WandSparkles className="size-4" />
+            AI Annotate
+          </Button>
+        </div>
       </div>
+
+      {aiJob ? (
+        <AiJobBanner
+          job={aiJob}
+          reviewImageCount={reviewImageIds.length}
+          reviewHref={reviewHref}
+          failedImageIds={failedImageIds}
+          onCancel={cancelAiJob}
+          onRetryFailed={() => {
+            setSelectedImageIds(failedImageIds);
+            setIsAiOpen(true);
+          }}
+        />
+      ) : null}
 
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
         <div className="relative flex-1">
@@ -284,21 +356,32 @@ export function ProjectDetailClient({
       </div>
 
       {images.length === 0 ? (
-        <div className="rounded-lg border border-dashed py-16 text-center text-muted-foreground">
+        <div
+          key="empty-images"
+          className="rounded-lg border border-dashed py-16 text-center text-muted-foreground"
+        >
           No images have been uploaded to this project yet.
         </div>
       ) : visibleImages.length === 0 ? (
-        <div className="rounded-lg border border-dashed py-16 text-center text-muted-foreground">
+        <div
+          key="no-filter-results"
+          className="rounded-lg border border-dashed py-16 text-center text-muted-foreground"
+        >
           No images match your filters.
         </div>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        <div
+          key="image-grid"
+          className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+        >
           {visibleImages.map((image) => (
             <ImageCard
               key={image.id}
               image={image}
               projectId={project.id}
               isSelected={selectedImageIds.includes(image.id)}
+              selectionMode={selectedImageIds.length > 0}
+              aiState={aiStates[image.id]}
               onSelectionChange={handleSelectionChange}
               onRename={setRenameTarget}
               onMove={(target) => openTransfer("move", [target])}
@@ -316,6 +399,7 @@ export function ProjectDetailClient({
       {selectedImages.length > 0 ? (
         <div className="fixed bottom-5 left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-2 rounded-xl border bg-background/95 p-2 shadow-xl backdrop-blur">
           <label className="flex items-center gap-2 px-2 text-sm text-muted-foreground"><Checkbox checked onCheckedChange={(checked) => { if (!checked) setSelectedImageIds([]); }} />{selectedImages.length} Selected</label>
+          <Button type="button" size="sm" className="bg-violet-600 text-white hover:bg-violet-700" disabled={isAiJobActive} onClick={() => setIsAiOpen(true)}><WandSparkles className="size-4" />AI Annotate</Button>
           <Button type="button" variant="outline" size="sm" onClick={() => openTransfer("move", selectedImages)}><FolderInput className="size-4" />Move to...</Button>
           <Button type="button" variant="outline" size="sm" onClick={() => openTransfer("copy", selectedImages)}><CopyPlus className="size-4" />Add to...</Button>
           <Button type="button" variant="outline" size="sm" onClick={() => setExportImages(selectedImages)}><Download className="size-4" />Export</Button>
@@ -327,7 +411,20 @@ export function ProjectDetailClient({
         open={isUploadOpen}
         onOpenChange={setIsUploadOpen}
         projectId={project.id}
-        onUploadComplete={() => router.refresh()}
+        onUploadComplete={refresh}
+      />
+
+      <BatchAiAnnotateDialog
+        open={isAiOpen}
+        onOpenChange={setIsAiOpen}
+        labels={labels}
+        imageIds={imageIds}
+        selectedImageIds={selectedImageIds}
+        aiStates={aiStates}
+        onStart={async (input) => {
+          await startAiJob({ projectId: project.id, ...input });
+          setSelectedImageIds([]);
+        }}
       />
 
       <RenameImageDialog

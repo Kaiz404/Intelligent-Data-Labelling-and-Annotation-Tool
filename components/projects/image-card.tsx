@@ -2,15 +2,19 @@
 
 import Link from "next/link";
 import {
+  Clock,
   CopyPlus,
   Download,
   FolderInput,
+  Loader2,
   MoreVertical,
   Pencil,
+  Sparkles,
   Trash2,
 } from "lucide-react";
 import { useState } from "react";
 import { formatBytes } from "@/lib/format";
+import type { ImageAiState } from "@/lib/types/annotations";
 import type { ImageStatus, ProjectImage } from "@/lib/types/projects";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,6 +32,9 @@ type ImageCardProps = {
   image: ProjectImage;
   projectId: string;
   isSelected: boolean;
+  /** Keep the checkbox visible on every card while any image is selected. */
+  selectionMode?: boolean;
+  aiState?: ImageAiState;
   onSelectionChange: (imageId: string, isSelected: boolean) => void;
   onRename: (image: ProjectImage) => void;
   onMove: (image: ProjectImage) => void;
@@ -44,10 +51,30 @@ function statusClass(status: ImageStatus) {
   }[status];
 }
 
+function AiStateBadge({ state }: { state: ImageAiState }) {
+  const aiClass =
+    "gap-1 border-violet-500/20 bg-violet-500/10 text-xs text-violet-700 dark:text-violet-300";
+  if (state.status === "queued") {
+    return <Badge variant="outline" className="gap-1 text-xs text-muted-foreground"><Clock className="size-3" />Queued</Badge>;
+  }
+  if (state.status === "running") {
+    return <Badge variant="outline" className={aiClass}><Loader2 className="size-3 animate-spin" />Detecting</Badge>;
+  }
+  if (state.pendingSuggestions > 0) {
+    return <Badge variant="outline" className={aiClass}><Sparkles className="size-3" />{state.pendingSuggestions} to review</Badge>;
+  }
+  if (state.status === "failed") {
+    return <Badge variant="outline" className="text-xs text-destructive">AI failed</Badge>;
+  }
+  return null;
+}
+
 export function ImageCard({
   image,
   projectId,
   isSelected,
+  selectionMode = false,
+  aiState,
   onSelectionChange,
   onRename,
   onMove,
@@ -70,7 +97,7 @@ export function ImageCard({
           )}
         </Link>
 
-        <div className={cn("pointer-events-none absolute left-2 top-2 z-10 opacity-0 transition-opacity duration-200 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100", isSelected && "pointer-events-auto opacity-100")}>
+        <div className={cn("pointer-events-none absolute left-2 top-2 z-10 opacity-0 transition-opacity duration-200 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100", (isSelected || selectionMode) && "pointer-events-auto opacity-100")}>
           <Checkbox checked={isSelected} onCheckedChange={(checked) => onSelectionChange(image.id, checked === true)} aria-label={`Select ${image.fileName}`} className="m-1 size-6 bg-background" />
         </div>
 
@@ -89,7 +116,10 @@ export function ImageCard({
       </div>
       <CardContent className="space-y-2 p-3">
         <Link href={annotateHref} className="block truncate text-sm font-medium hover:underline">{image.fileName}</Link>
-        <Badge variant="outline" className={cn("text-xs", statusClass(image.status))}>{image.status}</Badge>
+        <div className="flex flex-wrap gap-1.5">
+          <Badge variant="outline" className={cn("text-xs", statusClass(image.status))}>{image.status}</Badge>
+          {aiState ? <AiStateBadge state={aiState} /> : null}
+        </div>
         <p className="text-xs text-muted-foreground">{formatBytes(image.sizeBytes)} · {image.capturedAt}</p>
       </CardContent>
     </Card>

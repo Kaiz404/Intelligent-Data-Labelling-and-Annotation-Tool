@@ -1,5 +1,9 @@
 import { AppHeader } from "@/components/app-shell/app-header";
 import { ProjectDetailClient } from "@/components/projects/project-detail-client";
+import {
+  fetchImageAiStates,
+  fetchLatestAnnotationJob,
+} from "@/lib/annotations/jobs";
 import { fetchImageStats, fetchProjectImages } from "@/lib/images";
 import { fetchProjectLabels } from "@/lib/labels";
 import { createClient } from "@/lib/supabase/server";
@@ -20,13 +24,15 @@ async function ProjectDetailContent({ id }: { id: string }) {
     notFound();
   }
 
-  const [{ data: projectRows }, images, labels] = await Promise.all([
+  const [{ data: projectRows }, images, labels, latestJob, aiStates] = await Promise.all([
     supabase
       .from("projects")
       .select("*")
       .order("name", { ascending: true }),
     fetchProjectImages(project.id),
     fetchProjectLabels(project.id),
+    fetchLatestAnnotationJob(project.id),
+    fetchImageAiStates(project.id),
   ]);
   const destinations = projectRows ?? [];
   const stats = await fetchImageStats(destinations.map((item) => item.id));
@@ -45,6 +51,8 @@ async function ProjectDetailContent({ id }: { id: string }) {
           images={images}
           projects={projects}
           labels={labels}
+          initialJob={latestJob}
+          initialAiStates={aiStates}
         />
       </div>
     </>
