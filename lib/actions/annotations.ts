@@ -77,6 +77,24 @@ export async function saveImageAnnotations(
     throw new Error("Project not found or you do not have access.");
   }
 
+  const labelIds = [...new Set(boxes.map((box) => box.labelId))];
+  // Bound the query URL and result size even for the 50,000-box maximum.
+  for (let offset = 0; offset < labelIds.length; offset += 100) {
+    const batch = labelIds.slice(offset, offset + 100);
+    const { data: labels, error: labelsError } = await supabase
+      .from("project_labels")
+      .select("id")
+      .eq("project_id", projectId)
+      .in("id", batch);
+    if (labelsError) {
+      throw new Error(`Could not validate annotation labels: ${labelsError.message}`);
+    }
+    const validIds = new Set((labels ?? []).map((label) => label.id));
+    if (batch.some((labelId) => !validIds.has(labelId))) {
+      throw new Error("One or more annotation labels do not belong to this project.");
+    }
+  }
+
   const { data: image, error: updateError } = await supabase
     .from("images")
     .update({ annotation: boxes })
