@@ -86,6 +86,7 @@ export async function POST(request: Request) {
     }
 
     const suggestions = await detectSuggestionsForImage({
+      projectId,
       objectKey: image.object_key,
       labels,
       confidence: confidence as number | undefined,

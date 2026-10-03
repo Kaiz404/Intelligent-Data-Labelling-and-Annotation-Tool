@@ -195,7 +195,11 @@ export function ProjectDetailClient({
 
     try {
       const ids = deleteTargets.map((image) => image.id);
-      await moveImagesToRecycleBin(project.id, ids);
+      const result = await moveImagesToRecycleBin(project.id, ids);
+      if (!result.ok) {
+        setDeleteError(result.error);
+        return;
+      }
       setSelectedImageIds((currentIds) =>
         currentIds.filter((id) => !ids.includes(id)),
       );
@@ -470,8 +474,8 @@ export function ProjectDetailClient({
             <DialogTitle>Move to Recycle Bin?</DialogTitle>
             <DialogDescription>
               {deleteTargets.length === 1
-                ? `“${deleteTargets[0].fileName}” will be moved to the Recycle Bin with its annotations. You can restore it from the Recycle Bin for 30 days.`
-                : `${deleteTargets.length} images will be moved to the Recycle Bin with their annotations. You can restore them from the Recycle Bin for 30 days.`}
+                ? `“${deleteTargets[0].fileName}” will be moved to the Recycle Bin with its annotations. You can restore it from the Recycle Bin for 30 days. Unreviewed AI suggestions aren't kept.`
+                : `${deleteTargets.length} images will be moved to the Recycle Bin with their annotations. You can restore them from the Recycle Bin for 30 days. Unreviewed AI suggestions aren't kept.`}
             </DialogDescription>
           </DialogHeader>
 

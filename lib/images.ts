@@ -1,7 +1,10 @@
 import "server-only";
 
 import { createClient } from "@/lib/supabase/server";
-import { createImageReadUrl } from "@/lib/uploads/s3-server";
+import {
+  createImageReadUrl,
+  objectKeyBelongsToProject,
+} from "@/lib/uploads/s3-server";
 import type { BoundingBox } from "@/lib/types/annotations";
 import type { ImageStatus, ProjectImage } from "@/lib/types/projects";
 import type { RecentAnnotationsResult } from "@/lib/types/recent-annotations";
@@ -37,8 +40,15 @@ function annotationStatus(annotation: unknown): {
     : { status: "Unannotated", progress: 0 };
 }
 
-async function toProjectImage(row: ImageRow): Promise<ProjectImage> {
-  const signedUrl = await createImageReadUrl(row.object_key);
+async function toProjectImage(
+  row: ImageRow,
+  projectId: string,
+): Promise<ProjectImage> {
+  // `images.object_key` is not constrained by RLS, so only sign keys under the
+  // row's own project; anything else gets no URL rather than another object.
+  const signedUrl = objectKeyBelongsToProject(row.object_key, projectId)
+    ? await createImageReadUrl(row.object_key)
+    : null;
   const { status, progress } = annotationStatus(row.annotation);
 
   return {
@@ -68,7 +78,9 @@ export async function fetchProjectImages(
     throw new Error(`Could not load project images: ${error.message}`);
   }
 
-  return Promise.all(((data ?? []) as ImageRow[]).map(toProjectImage));
+  return Promise.all(
+    ((data ?? []) as ImageRow[]).map((row) => toProjectImage(row, projectId)),
+  );
 }
 
 type RecentImageRow = ImageRow & {
@@ -108,7 +120,7 @@ export async function fetchRecentlyAnnotatedImages(
   const rows = (data ?? []) as RecentImageRow[];
   const images = await Promise.all(
     rows.slice(0, limit).map(async (row) => {
-      const image = await toProjectImage(row);
+      const image = await toProjectImage(row, row.project_id);
       const project = Array.isArray(row.projects) ? row.projects[0] : row.projects;
       return {
         ...image,

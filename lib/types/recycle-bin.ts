@@ -16,13 +16,19 @@ export type RecycleBinProject = {
   expiresAt: string;
   /** Project thumbnail, else its first image; short-lived signed URL. */
   thumbnailUrl: string | null;
+  /**
+   * Permanent deletion started but did not finish (some files may be gone).
+   * The item can no longer be restored; deleting it permanently again retries.
+   */
+  deletionPending: boolean;
 };
 
 /**
  * Where a deleted image's project currently is:
  * - `active`: the project exists, so the image can be restored.
  * - `in_bin`: the project is in the recycle bin; restore the project first.
- * - `gone`: the project was permanently deleted; the image cannot be restored.
+ * - `gone`: the project was permanently deleted (or its permanent deletion
+ *   started); the image cannot be restored.
  */
 export type RecycleBinProjectState = "active" | "in_bin" | "gone";
 
@@ -43,6 +49,11 @@ export type RecycleBinImage = {
   expiresAt: string;
   /** Short-lived signed URL for the image object. */
   thumbnailUrl: string | null;
+  /**
+   * Permanent deletion started but did not finish (its file may be gone).
+   * The item can no longer be restored; deleting it permanently again retries.
+   */
+  deletionPending: boolean;
 };
 
 export type RecycleBinContents = {
@@ -69,6 +80,22 @@ export type RecycleBinRestoreResult = {
 export type RecycleBinPermanentDeleteResult = {
   /** Recycle bin rows removed, including dependent image rows of deleted projects. */
   deleted: number;
-  /** Items whose stored files could not be removed; they stay in the bin for a retry. */
+  /**
+   * Items whose stored files (or row) could not be removed. They stay in the
+   * bin marked as deletion pending, so they cannot be restored; retry deleting.
+   */
   failed: Array<{ id: string; error: string }>;
+  /** Requested ids that were no longer in the bin (restored or deleted elsewhere). */
+  skipped: string[];
 };
+
+/** Expected failures are returned (not thrown) so production builds show the message. */
+export type RecycleBinActionFailure = { ok: false; error: string };
+
+export type MoveProjectToRecycleBinResult =
+  | { ok: true; itemId: string }
+  | RecycleBinActionFailure;
+
+export type MoveImagesToRecycleBinResult =
+  | { ok: true; itemIds: string[] }
+  | RecycleBinActionFailure;

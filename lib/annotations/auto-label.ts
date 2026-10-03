@@ -6,7 +6,10 @@ import {
   fromCenterPixelBox,
 } from "@/lib/annotations/formats";
 import { detectImage } from "@/lib/roboflow/client";
-import { createImageReadUrl } from "@/lib/uploads/s3-server";
+import {
+  createImageReadUrl,
+  objectKeyBelongsToProject,
+} from "@/lib/uploads/s3-server";
 import type { AnnotationSuggestion } from "@/lib/types/annotations";
 
 export type DetectionLabel = { id: string; name: string };
@@ -17,6 +20,8 @@ export type DetectionLabel = { id: string; name: string };
  * Shared by the single-image route and the bulk job worker.
  */
 export async function detectSuggestionsForImage(input: {
+  /** The image's project; its object key must live under this project. */
+  projectId: string;
   objectKey: string;
   labels: DetectionLabel[];
   confidence?: number;
@@ -25,6 +30,9 @@ export async function detectSuggestionsForImage(input: {
     input.labels.map((label) => [label.name.trim().toLowerCase(), label.id]),
   );
 
+  if (!objectKeyBelongsToProject(input.objectKey, input.projectId)) {
+    throw new Error("The image's stored file does not belong to its project.");
+  }
   const imageUrl = await createImageReadUrl(input.objectKey);
   const result = await detectImage({
     imageUrl,

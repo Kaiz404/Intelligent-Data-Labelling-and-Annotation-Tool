@@ -4,9 +4,9 @@ import { createClient } from "@/lib/supabase/server";
 import {
   createImageReadUrl,
   createProjectThumbnailReadUrl,
-  deleteImageObjects,
+  deleteImageObject,
   deleteProjectThumbnail,
-  projectIdFromObjectKey,
+  objectKeyBelongsToProject,
   UploadApiError,
 } from "@/lib/uploads/s3-server";
 import type {
@@ -21,7 +21,9 @@ import type {
 /*
  * Recycle bin data access. Moving to / restoring from the bin happens in SQL
  * (supabase/migrations/20261004120000_add_recycle_bin.sql); permanent
- * deletion lives here because it must remove S3 objects first.
+ * deletion lives here because it must remove S3 objects. It first claims rows
+ * by setting `purge_started_at`, which makes them unrestorable, and only then
+ * touches S3, so a partly deleted item can never be restored.
  *
  * Nothing in this module calls revalidatePath, so the read/purge helpers are
  * safe to call while rendering a Server Component.
@@ -42,6 +44,8 @@ export const RECYCLE_BIN_SQLSTATE = {
   projectInRecycleBin: "RB005",
   restoreConflict: "RB006",
   snapshotInvalid: "RB007",
+  itemDeleting: "RB008",
+  itemExpired: "RB009",
 } as const;
 
 export const RECYCLE_BIN_MIGRATION = "20261004120000_add_recycle_bin.sql";
@@ -115,7 +119,8 @@ export async function getRecycleBinSession(): Promise<RecycleBinSession> {
 }
 
 const PAGE_SIZE = 1000;
-// Keeps `.in(...)` filters well inside PostgREST URL limits.
+// Keeps `.in(...)` filters well inside PostgREST URL limits, and bounds the
+// rows a single claim (UPDATE ... RETURNING) hands back.
 const ID_CHUNK_SIZE = 100;
 // Concurrent single-object S3 deletes per round, and image rows per DB delete.
 const S3_DELETE_BATCH_SIZE = 50;
@@ -157,17 +162,8 @@ async function findExistingIds(
   return existing;
 }
 
-/** True when `key` is a well-formed image key under `projects/{projectId}/images/`. */
-function keyBelongsToProject(key: string, projectId: string) {
-  try {
-    return projectIdFromObjectKey(key).projectId === projectId;
-  } catch {
-    return false;
-  }
-}
-
 async function signObjectKey(key: string | null, projectId: string) {
-  if (!key || !keyBelongsToProject(key, projectId)) return null;
+  if (!key || !objectKeyBelongsToProject(key, projectId)) return null;
   try {
     return await createImageReadUrl(key);
   } catch {
@@ -185,7 +181,7 @@ function toIsoString(value: string) {
 // ---------------------------------------------------------------------------
 
 const LIST_COLUMNS =
-  "id, kind, project_id, image_id, name, project_name, description, image_count, size_bytes, cover_object_key, deleted_at, expires_at";
+  "id, kind, project_id, image_id, name, project_name, description, image_count, size_bytes, cover_object_key, deleted_at, expires_at, purge_started_at";
 
 type RecycleBinListRow = {
   id: string;
@@ -200,6 +196,7 @@ type RecycleBinListRow = {
   cover_object_key: string | null;
   deleted_at: string;
   expires_at: string;
+  purge_started_at: string | null;
 };
 
 /**
@@ -228,6 +225,11 @@ export async function fetchRecycleBin(
 
   const projectRows = rows.filter((row) => row.kind === "project");
   const imageRows = rows.filter((row) => row.kind === "image");
+  // A project whose permanent deletion started can never come back, so its
+  // images are treated like images of a deleted project.
+  const restorableProjectIds = new Set(
+    projectRows.filter((row) => !row.purge_started_at).map((row) => row.project_id),
+  );
   const binnedProjectIds = new Set(projectRows.map((row) => row.project_id));
   const activeProjectIds = await findExistingIds(
     supabase,
@@ -239,7 +241,7 @@ export async function fetchRecycleBin(
 
   function projectState(projectId: string): RecycleBinProjectState {
     if (activeProjectIds.has(projectId)) return "active";
-    if (binnedProjectIds.has(projectId)) return "in_bin";
+    if (restorableProjectIds.has(projectId)) return "in_bin";
     return "gone";
   }
 
@@ -258,6 +260,7 @@ export async function fetchRecycleBin(
           thumbnailUrl:
             (await createProjectThumbnailReadUrl(row.project_id)) ??
             (await signObjectKey(row.cover_object_key, row.project_id)),
+          deletionPending: row.purge_started_at !== null,
         }),
       ),
     ),
@@ -274,6 +277,7 @@ export async function fetchRecycleBin(
           deletedAt: toIsoString(row.deleted_at),
           expiresAt: toIsoString(row.expires_at),
           thumbnailUrl: await signObjectKey(row.cover_object_key, row.project_id),
+          deletionPending: row.purge_started_at !== null,
         }),
       ),
     ),
@@ -335,9 +339,9 @@ export async function selectRecycleBinRowsById<T>(
 // Permanent deletion
 // ---------------------------------------------------------------------------
 
-export const RECYCLE_BIN_DELETION_COLUMNS = "id, kind, project_id, image_id, object_keys";
+const DELETION_COLUMNS = "id, kind, project_id, image_id, object_keys";
 
-export type RecycleBinDeletionRow = {
+type DeletionRow = {
   id: string;
   kind: RecycleBinItemKind;
   project_id: string;
@@ -346,13 +350,40 @@ export type RecycleBinDeletionRow = {
 };
 
 /**
+ * Marks rows as being permanently deleted (`purge_started_at`) and returns
+ * the rows actually claimed. From here on `restore_recycle_bin_item` refuses
+ * them, and a restore that won the race has already removed the row, so it is
+ * simply not returned. Re-claiming a row whose earlier deletion failed is how
+ * deletion is retried.
+ */
+async function claimForDeletion(
+  supabase: SupabaseServerClient,
+  userId: string,
+  itemIds: string[],
+): Promise<DeletionRow[]> {
+  const claimedAt = new Date().toISOString();
+  const claimed: DeletionRow[] = [];
+  for (const ids of chunk(itemIds.filter(isUuid), ID_CHUNK_SIZE)) {
+    const { data, error } = await supabase
+      .from("recycle_bin_items")
+      .update({ purge_started_at: claimedAt })
+      .eq("user_id", userId)
+      .in("id", ids)
+      .select(DELETION_COLUMNS);
+    if (error) throw queryError("Could not prepare items for deletion", error);
+    claimed.push(...((data ?? []) as DeletionRow[]));
+  }
+  return claimed;
+}
+
+/**
  * Only keys under the item's own project prefix are deleted. Every app-created
  * key has that shape; anything else is left alone rather than risk removing
  * another project's object.
  */
-function ownedObjectKeys(row: RecycleBinDeletionRow) {
+function ownedObjectKeys(row: DeletionRow) {
   const keys = row.object_keys ?? [];
-  const owned = keys.filter((key) => keyBelongsToProject(key, row.project_id));
+  const owned = keys.filter((key) => objectKeyBelongsToProject(key, row.project_id));
   if (owned.length !== keys.length) {
     console.warn(
       `Recycle bin item ${row.id}: skipped ${keys.length - owned.length} S3 key(s) outside projects/${row.project_id}/images/.`,
@@ -361,10 +392,27 @@ function ownedObjectKeys(row: RecycleBinDeletionRow) {
   return owned;
 }
 
-async function deleteObjectsInBatches(keys: string[]) {
-  for (const batch of chunk(keys, S3_DELETE_BATCH_SIZE)) {
-    await deleteImageObjects(batch);
+/**
+ * Deletes every owned key of `rows` (S3_DELETE_BATCH_SIZE at a time) and
+ * returns the first failure per row id. One bad key fails only its own row.
+ */
+async function deleteObjectsByRow(rows: DeletionRow[]) {
+  const tasks = rows.flatMap((row) =>
+    ownedObjectKeys(row).map((key) => ({ rowId: row.id, key })),
+  );
+  const failures = new Map<string, unknown>();
+  for (const batch of chunk(tasks, S3_DELETE_BATCH_SIZE)) {
+    const results = await Promise.allSettled(
+      batch.map((task) => deleteImageObject(task.key)),
+    );
+    results.forEach((result, index) => {
+      const { rowId } = batch[index];
+      if (result.status === "rejected" && !failures.has(rowId)) {
+        failures.set(rowId, result.reason);
+      }
+    });
   }
+  return failures;
 }
 
 async function deleteRows(
@@ -386,137 +434,142 @@ async function deleteRows(
   return deleted;
 }
 
-/** Image rows left behind by projects that no longer exist anywhere. */
-async function selectOrphanedImageRows(
+/** Ids of image rows left behind by projects that no longer exist anywhere. */
+async function selectOrphanedImageRowIds(
   supabase: SupabaseServerClient,
   userId: string,
   projectIds: string[],
 ) {
-  const rows: RecycleBinDeletionRow[] = [];
-  for (const ids of chunk(projectIds, ID_CHUNK_SIZE)) {
-    rows.push(
-      ...(await selectAllPages<RecycleBinDeletionRow>(
-        "Could not load recycle bin images",
-        (from, to) =>
-          supabase
-            .from("recycle_bin_items")
-            .select(RECYCLE_BIN_DELETION_COLUMNS)
-            .eq("user_id", userId)
-            .eq("kind", "image")
-            .in("project_id", ids)
-            .order("id", { ascending: true })
-            .range(from, to),
-      )),
+  const ids: string[] = [];
+  for (const batch of chunk(projectIds, ID_CHUNK_SIZE)) {
+    const rows = await selectAllPages<{ id: string }>(
+      "Could not load recycle bin images",
+      (from, to) =>
+        supabase
+          .from("recycle_bin_items")
+          .select("id")
+          .eq("user_id", userId)
+          .eq("kind", "image")
+          .in("project_id", batch)
+          .order("id", { ascending: true })
+          .range(from, to),
     );
+    ids.push(...rows.map((row) => row.id));
   }
-  return rows;
+  return ids;
 }
 
-function storageErrorMessage(error: unknown) {
-  if (error instanceof UploadApiError || error instanceof RecycleBinUnavailableError) {
-    return error.message;
-  }
-  console.error("Recycle bin permanent deletion failed", error);
-  return "Could not delete the stored files. The item is still in the recycle bin; try again.";
-}
+const RETRY_MESSAGE =
+  "Permanent deletion didn't finish. The item can't be restored any more; delete it permanently again to retry.";
 
 /**
- * Permanently deletes recycle bin rows: S3 objects first (so a failure leaves
- * a retryable row), then the rows. Deleting a project also deletes any image
- * rows from that project, since their files share its S3 prefix and they can
- * never be restored. Rows whose project/image is live again (a concurrent
- * restore) are skipped and their files kept.
- *
- * Failures are reported per item instead of thrown; items whose files were
- * partly removed stay in the bin so the deletion can be retried.
+ * Permanently deletes recycle bin items for `session`'s user:
+ * 1. claim the rows (`purge_started_at`), so they can no longer be restored;
+ * 2. delete their S3 objects, tracking success per row (and the thumbnail
+ *    for projects);
+ * 3. delete only the rows whose objects were all removed.
+ * Rows that fail stay claimed (unrestorable) and are reported in `failed`;
+ * deleting them again retries. Deleting a project also deletes its image
+ * rows still in the bin, since they share its S3 prefix and can never be
+ * restored. Requested ids that could not be claimed (restored or deleted
+ * elsewhere, unknown) are returned in `skipped`.
  */
-export async function deleteRecycleBinRowsPermanently(
-  supabase: SupabaseServerClient,
-  userId: string,
-  rows: RecycleBinDeletionRow[],
+export async function permanentlyDeleteRecycleBinItems(
+  session: RecycleBinSession,
+  itemIds: string[],
 ): Promise<RecycleBinPermanentDeleteResult> {
-  const failed: RecycleBinPermanentDeleteResult["failed"] = [];
-  let deleted = 0;
-  const unique = [...new Map(rows.map((row) => [row.id, row])).values()];
+  const { supabase, userId } = session;
+  const requested = uniqueIds(itemIds);
+  const claimed = await claimForDeletion(supabase, userId, requested);
+  const claimedIds = new Set(claimed.map((row) => row.id));
+  const skipped = requested.filter((id) => !claimedIds.has(id));
 
-  const projectRows = unique.filter((row) => row.kind === "project");
-  const liveProjectIds = await findExistingIds(
-    supabase,
-    "projects",
-    projectRows.map((row) => row.project_id),
-  );
+  const failed: RecycleBinPermanentDeleteResult["failed"] = [];
+  let loggedUnexpected = false;
+  function fail(id: string, error: unknown) {
+    if (error instanceof UploadApiError || error instanceof RecycleBinUnavailableError) {
+      failed.push({ id, error: error.message });
+      return;
+    }
+    if (!loggedUnexpected) {
+      loggedUnexpected = true;
+      console.error("Recycle bin permanent deletion failed", error);
+    }
+    failed.push({ id, error: RETRY_MESSAGE });
+  }
+
+  let deleted = 0;
   const deletedProjectIds: string[] = [];
-  for (const row of projectRows) {
-    if (liveProjectIds.has(row.project_id)) continue;
+  for (const row of claimed.filter((item) => item.kind === "project")) {
+    const failures = await deleteObjectsByRow([row]);
+    if (failures.has(row.id)) {
+      fail(row.id, failures.get(row.id));
+      continue;
+    }
     try {
-      await deleteObjectsInBatches(ownedObjectKeys(row));
       await deleteProjectThumbnail(row.project_id);
       deleted += await deleteRows(supabase, userId, [row.id]);
       deletedProjectIds.push(row.project_id);
     } catch (error) {
-      failed.push({ id: row.id, error: storageErrorMessage(error) });
+      fail(row.id, error);
     }
   }
 
-  const imageRowsById = new Map<string, RecycleBinDeletionRow>();
-  for (const row of unique) {
-    if (row.kind === "image") imageRowsById.set(row.id, row);
-  }
-  for (const row of await selectOrphanedImageRows(supabase, userId, deletedProjectIds)) {
-    imageRowsById.set(row.id, row);
-  }
-  const imageRows = [...imageRowsById.values()];
-  const liveImageIds = await findExistingIds(
-    supabase,
-    "images",
-    imageRows.flatMap((row) => (row.image_id ? [row.image_id] : [])),
-  );
+  const dependentIds = (
+    await selectOrphanedImageRowIds(supabase, userId, deletedProjectIds)
+  ).filter((id) => !claimedIds.has(id));
+  const imageRows = [
+    ...claimed.filter((item) => item.kind === "image"),
+    ...(await claimForDeletion(supabase, userId, dependentIds)),
+  ];
 
-  for (const batch of chunk(
-    imageRows.filter((row) => !row.image_id || !liveImageIds.has(row.image_id)),
-    S3_DELETE_BATCH_SIZE,
-  )) {
+  for (const batch of chunk(imageRows, S3_DELETE_BATCH_SIZE)) {
+    const failures = await deleteObjectsByRow(batch);
+    const cleared: string[] = [];
+    for (const row of batch) {
+      if (failures.has(row.id)) fail(row.id, failures.get(row.id));
+      else cleared.push(row.id);
+    }
+    if (cleared.length === 0) continue;
     try {
-      await deleteObjectsInBatches(batch.flatMap(ownedObjectKeys));
-      deleted += await deleteRows(supabase, userId, batch.map((row) => row.id));
+      deleted += await deleteRows(supabase, userId, cleared);
     } catch (error) {
-      const message = storageErrorMessage(error);
-      for (const row of batch) failed.push({ id: row.id, error: message });
+      for (const id of cleared) fail(id, error);
     }
   }
 
-  return { deleted, failed };
+  return { deleted, failed, skipped };
 }
 
 /**
- * Permanently deletes the signed-in user's items past their 30-day retention.
- * Returns how many recycle bin rows were removed; per-item storage failures
- * are logged and retried on the next purge. Throws
+ * Permanently deletes the signed-in user's items past their 30-day retention,
+ * through the same claim path as {@link permanentlyDeleteRecycleBinItems}.
+ * Returns how many recycle bin rows were removed; per-item failures are
+ * logged and retried on the next purge. Throws
  * {@link RecycleBinUnavailableError} if the migration is not applied.
  */
 export async function purgeExpiredRecycleBinItems(
   session?: RecycleBinSession,
 ): Promise<number> {
-  const { supabase, userId } = session ?? (await getRecycleBinSession());
+  const resolved = session ?? (await getRecycleBinSession());
   const now = new Date().toISOString();
 
-  const rows = await selectAllPages<RecycleBinDeletionRow>(
+  const rows = await selectAllPages<{ id: string }>(
     "Could not load expired recycle bin items",
     (from, to) =>
-      supabase
+      resolved.supabase
         .from("recycle_bin_items")
-        .select(RECYCLE_BIN_DELETION_COLUMNS)
-        .eq("user_id", userId)
+        .select("id")
+        .eq("user_id", resolved.userId)
         .lt("expires_at", now)
         .order("id", { ascending: true })
         .range(from, to),
   );
   if (rows.length === 0) return 0;
 
-  const { deleted, failed } = await deleteRecycleBinRowsPermanently(
-    supabase,
-    userId,
-    rows,
+  const { deleted, failed } = await permanentlyDeleteRecycleBinItems(
+    resolved,
+    rows.map((row) => row.id),
   );
   if (failed.length > 0) {
     console.error(

@@ -121,6 +121,19 @@ export function projectIdFromObjectKey(key: unknown) {
   return { key: value, projectId: match[1] };
 }
 
+/**
+ * True when `key` is a well-formed image key under `projects/{projectId}/images/`.
+ * The database does not constrain `object_key`, so callers that act on a row's
+ * key (signing, deleting) should check it against the row's own project.
+ */
+export function objectKeyBelongsToProject(key: unknown, projectId: string) {
+  try {
+    return projectIdFromObjectKey(key).projectId === projectId;
+  } catch {
+    return false;
+  }
+}
+
 export function createObjectKey(projectId: string, fileName: string) {
   const sanitizedName = fileName
     .replace(/[^a-zA-Z0-9._ -]/g, "_")

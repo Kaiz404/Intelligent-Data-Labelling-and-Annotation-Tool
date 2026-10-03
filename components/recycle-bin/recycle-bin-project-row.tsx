@@ -1,6 +1,10 @@
 "use client";
 
-import { Clock, ImageIcon, RotateCcw, Trash2 } from "lucide-react";
+import { CircleAlert, Clock, ImageIcon, RotateCcw, Trash2 } from "lucide-react";
+import {
+  DELETION_PENDING_LABEL,
+  DELETION_PENDING_TOOLTIP,
+} from "@/components/recycle-bin/recycle-bin-image-card";
 import {
   daysLeftLabel,
   deletedLabel,
@@ -8,6 +12,11 @@ import {
 } from "@/components/recycle-bin/recycle-bin-time";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { numberFormatter } from "@/lib/format";
 import type { RecycleBinProject } from "@/lib/types/recycle-bin";
 import { cn } from "@/lib/utils";
@@ -89,6 +98,12 @@ export function RecycleBinProjectRow({
               </span>
             </span>
           </div>
+          {project.deletionPending ? (
+            <p className="flex items-center gap-1.5 text-xs font-medium text-destructive">
+              <CircleAlert className="size-3.5 shrink-0" aria-hidden="true" />
+              {DELETION_PENDING_LABEL}
+            </p>
+          ) : null}
           {error ? (
             <p role="alert" className="text-xs text-destructive">
               {error}
@@ -102,16 +117,31 @@ export function RecycleBinProjectRow({
           {daysLeftLabel(project.expiresAt, now)}
         </p>
         <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={disabled}
-            onClick={() => onRestore(project)}
-          >
-            <RotateCcw className="size-4" />
-            {pendingAction === "restore" ? "Restoring..." : "Restore"}
-          </Button>
+          {project.deletionPending ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                {/* Disabled buttons swallow pointer events; the span keeps the tooltip working. */}
+                <span tabIndex={0} className="rounded-md">
+                  <Button type="button" variant="outline" size="sm" disabled>
+                    <RotateCcw className="size-4" />
+                    Restore
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-64">{DELETION_PENDING_TOOLTIP}</TooltipContent>
+            </Tooltip>
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={disabled}
+              onClick={() => onRestore(project)}
+            >
+              <RotateCcw className="size-4" />
+              {pendingAction === "restore" ? "Restoring..." : "Restore"}
+            </Button>
+          )}
           <Button
             type="button"
             variant="outline"

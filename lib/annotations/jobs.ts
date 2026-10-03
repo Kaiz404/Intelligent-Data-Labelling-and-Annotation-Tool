@@ -344,6 +344,7 @@ async function processItem(
     }
 
     const suggestions = await detectSuggestionsForImage({
+      projectId,
       objectKey: image.object_key as string,
       labels: job.labels,
       confidence: job.confidence,

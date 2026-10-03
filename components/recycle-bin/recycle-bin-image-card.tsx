@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  CircleAlert,
   Clock,
   Folder,
   FolderX,
@@ -34,28 +35,48 @@ import type {
 } from "@/lib/types/recycle-bin";
 import { cn } from "@/lib/utils";
 
+/** Shown on any bin item whose permanent deletion started but didn't finish. */
+export const DELETION_PENDING_LABEL =
+  "Deletion didn't finish — delete permanently again";
+export const DELETION_PENDING_TOOLTIP =
+  "Permanent deletion started but didn't finish, so some files may already be gone and the item can't be restored. Delete it permanently again to finish.";
+
 /** Why an image cannot be restored right now, or null when it can. */
-export function restoreBlockedReason(state: RecycleBinProjectState) {
-  if (state === "in_bin") return "Restore project first";
-  if (state === "gone") return "Project was permanently deleted";
+export function restoreBlockedReason(
+  image: Pick<RecycleBinImage, "projectState" | "deletionPending">,
+) {
+  if (image.deletionPending) return "Deletion didn't finish";
+  if (image.projectState === "in_bin") return "Restore project first";
+  if (image.projectState === "gone") return "Project was permanently deleted";
   return null;
 }
 
+type StateDetails = { label: string; tooltip: string; className: string; icon: typeof FolderX };
+
+const deletionPendingDetails: StateDetails = {
+  label: DELETION_PENDING_LABEL,
+  tooltip: DELETION_PENDING_TOOLTIP,
+  className: "text-destructive",
+  icon: CircleAlert,
+};
+
 const projectStateDetails: Record<
   Exclude<RecycleBinProjectState, "active">,
-  { label: string; tooltip: string; className: string }
+  StateDetails
 > = {
   in_bin: {
     label: "Project is in the Recycle Bin",
     tooltip:
       "Restore this image's project from the Projects tab first, then restore the image.",
     className: "text-amber-600 dark:text-amber-500",
+    icon: FolderX,
   },
   gone: {
     label: "Project permanently deleted",
     tooltip:
       "This image's project was permanently deleted, so the image can't be restored. You can still delete it permanently.",
     className: "text-destructive",
+    icon: FolderX,
   },
 };
 
@@ -84,9 +105,12 @@ export function RecycleBinImageCard({
   onDelete,
 }: RecycleBinImageCardProps) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const blockedReason = restoreBlockedReason(image.projectState);
-  const stateDetails =
-    image.projectState === "active" ? null : projectStateDetails[image.projectState];
+  const blockedReason = restoreBlockedReason(image);
+  const stateDetails = image.deletionPending
+    ? deletionPendingDetails
+    : image.projectState === "active"
+      ? null
+      : projectStateDetails[image.projectState];
 
   return (
     <div
@@ -143,7 +167,7 @@ export function RecycleBinImageCard({
                   stateDetails.className,
                 )}
               >
-                <FolderX className="size-3.5 shrink-0" aria-hidden="true" />
+                <stateDetails.icon className="size-3.5 shrink-0" aria-hidden="true" />
                 {stateDetails.label}
               </p>
             </TooltipTrigger>

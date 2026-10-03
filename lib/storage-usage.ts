@@ -1,6 +1,7 @@
 import "server-only";
 
 import { cache } from "react";
+import { isRecycleBinSchemaMissing } from "@/lib/recycle-bin";
 import { createClient } from "@/lib/supabase/server";
 import { measureProjectStorage } from "@/lib/uploads/s3-server";
 
@@ -9,7 +10,10 @@ export type StorageUsageSource = "s3" | "database";
 export type StorageUsage = {
   usedBytes: number;
   quotaBytes: number;
-  /** "s3" = listed from the bucket; "database" = sum of `images.size_bytes`. */
+  /**
+   * "s3" = listed from the bucket; "database" = sum of `images.size_bytes`
+   * plus the Recycle Bin's `size_bytes` (binned files are still stored).
+   */
   source: StorageUsageSource;
   /** S3 objects listed ("s3") or image rows summed ("database"). */
   objectCount?: number;
@@ -40,7 +44,7 @@ function getStorageQuotaBytes() {
  */
 async function forEachRowPage<Row>(
   supabase: SupabaseServerClient,
-  table: "projects" | "images",
+  table: "projects" | "images" | "recycle_bin_items",
   columns: string,
   onPage: (rows: Row[]) => void,
 ) {
@@ -55,7 +59,9 @@ async function forEachRowPage<Row>(
       .range(fetched, fetched + ROW_PAGE_SIZE - 1);
 
     if (error) {
-      throw new Error(`Could not load ${table}: ${error.message}`);
+      throw new Error(`Could not load ${table}: ${error.message}`, {
+        cause: error,
+      });
     }
 
     const rows = (data ?? []) as unknown as Row[];
@@ -94,6 +100,38 @@ async function sumImageSizes(supabase: SupabaseServerClient) {
       }
     },
   );
+  return { bytes, count };
+}
+
+/**
+ * Bytes still held by the user's Recycle Bin items (their S3 objects are kept
+ * until permanent deletion). Live images and binned items never overlap, so
+ * adding this to `sumImageSizes` does not double count. Zero when the Recycle
+ * Bin migration is not applied yet.
+ */
+async function sumRecycleBinSizes(supabase: SupabaseServerClient) {
+  let bytes = 0;
+  let count = 0;
+  try {
+    await forEachRowPage<{ size_bytes: number | string | null; image_count: number | null }>(
+      supabase,
+      "recycle_bin_items",
+      "size_bytes, image_count",
+      (rows) => {
+        for (const row of rows) {
+          const size = Number(row.size_bytes);
+          if (Number.isFinite(size) && size > 0) bytes += size;
+          count += Number(row.image_count) || 0;
+        }
+      },
+    );
+  } catch (error) {
+    const cause = (error as { cause?: { code?: string; message: string } }).cause;
+    if (!isRecycleBinSchemaMissing(cause)) {
+      console.warn("[storage-usage] Could not include Recycle Bin items", error);
+    }
+    return { bytes: 0, count: 0 };
+  }
   return { bytes, count };
 }
 
@@ -138,12 +176,15 @@ const getStorageUsageForKey = cache(
       warnS3FallbackOnce(error);
     }
 
-    const { bytes, count } = await sumImageSizes(supabase);
+    const [live, binned] = await Promise.all([
+      sumImageSizes(supabase),
+      sumRecycleBinSizes(supabase),
+    ]);
     return {
-      usedBytes: bytes,
+      usedBytes: live.bytes + binned.bytes,
       quotaBytes,
       source: "database",
-      objectCount: count,
+      objectCount: live.count + binned.count,
     };
   },
 );
@@ -155,8 +196,9 @@ const getStorageUsageForKey = cache(
  * Lists S3 under `projects/{id}/` for every RLS-visible project plus
  * `extraProjectIds` (for example Recycle Bin projects whose objects are still
  * in S3; pass only IDs the user owns). If S3 listing fails for any reason,
- * falls back to summing the user's `images.size_bytes` (source "database",
- * which excludes thumbnails and anything without an `images` row). Throws only
+ * falls back to summing the user's `images.size_bytes` plus Recycle Bin item
+ * sizes (source "database", which excludes thumbnails and anything without a
+ * row). Throws only
  * when Supabase itself cannot be queried.
  */
 export function getStorageUsage(

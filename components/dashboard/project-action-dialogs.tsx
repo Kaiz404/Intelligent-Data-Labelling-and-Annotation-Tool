@@ -265,7 +265,11 @@ export function DeleteProjectDialog({ project, open, onOpenChange }: CommonProps
     setPending(true);
     setError(null);
     try {
-      await moveProjectToRecycleBin(project.id);
+      const result = await moveProjectToRecycleBin(project.id);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
       onOpenChange(false);
       router.refresh();
     } catch (cause) {
@@ -278,7 +282,7 @@ export function DeleteProjectDialog({ project, open, onOpenChange }: CommonProps
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
-        <DialogHeader><DialogTitle>Move to Recycle Bin?</DialogTitle><DialogDescription>“{project?.name}” will be moved to the Recycle Bin with its images, labels, and annotations. You can restore it from the Recycle Bin for 30 days.</DialogDescription></DialogHeader>
+        <DialogHeader><DialogTitle>Move to Recycle Bin?</DialogTitle><DialogDescription>“{project?.name}” will be moved to the Recycle Bin with its images, labels, and annotations. You can restore it from the Recycle Bin for 30 days. Unreviewed AI suggestions aren&apos;t kept.</DialogDescription></DialogHeader>
         <ErrorMessage message={error} />
         <DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>Cancel</Button><Button type="button" variant="destructive" onClick={confirmDelete} disabled={pending}>{pending ? "Moving..." : "Move to Recycle Bin"}</Button></DialogFooter>
       </DialogContent>

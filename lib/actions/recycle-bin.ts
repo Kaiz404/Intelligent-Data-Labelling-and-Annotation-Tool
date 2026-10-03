@@ -2,20 +2,20 @@
 
 import { revalidatePath } from "next/cache";
 import {
-  deleteRecycleBinRowsPermanently,
   isRecycleBinSchemaMissing,
   isUuid,
-  RECYCLE_BIN_DELETION_COLUMNS,
+  permanentlyDeleteRecycleBinItems,
   RECYCLE_BIN_SETUP_MESSAGE,
   RECYCLE_BIN_SQLSTATE,
   RecycleBinUnavailableError,
   requireRecycleBinUser,
   selectRecycleBinRowsById,
   uniqueIds,
-  type RecycleBinDeletionRow,
 } from "@/lib/recycle-bin";
 import { createClient } from "@/lib/supabase/server";
 import type {
+  MoveImagesToRecycleBinResult,
+  MoveProjectToRecycleBinResult,
   RecycleBinItemKind,
   RecycleBinPermanentDeleteResult,
   RecycleBinRestoreResult,
@@ -28,6 +28,10 @@ const IMAGES_NOT_FOUND = "One or more selected images could not be found.";
 const ITEM_NOT_FOUND = "This item is no longer in the recycle bin.";
 const PROJECT_GONE =
   "The project was permanently deleted, so this image can't be restored.";
+const ITEM_DELETING =
+  "Permanent deletion of this item already started, so it can't be restored. Delete it permanently again to finish.";
+const ITEM_EXPIRED =
+  "This item passed its 30-day limit and is being removed, so it can't be restored.";
 
 /** Pages that list live projects/images, plus the bin itself. */
 function revalidateAfterChange(projectIds: Iterable<string>) {
@@ -55,60 +59,78 @@ function moveErrorMessage(error: RpcError, fallback: string) {
   }
 }
 
+async function signedInClient() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  return user ? supabase : null;
+}
+
 /**
  * Moves an owned project (its labels and images) into the recycle bin. The
  * S3 objects are kept until the item is deleted permanently or expires.
+ * Expected failures (signed out, not found, migration missing, database
+ * errors) are returned as `{ ok: false, error }` so the message survives
+ * production builds, which mask thrown server-action errors.
  */
 export async function moveProjectToRecycleBin(
   projectId: string,
-): Promise<{ itemId: string }> {
-  if (!isUuid(projectId)) throw new Error(PROJECT_NOT_FOUND);
+): Promise<MoveProjectToRecycleBinResult> {
+  if (!isUuid(projectId)) return { ok: false, error: PROJECT_NOT_FOUND };
 
-  const supabase = await createClient();
-  await requireRecycleBinUser(supabase, "You must be signed in to delete a project.");
+  const supabase = await signedInClient();
+  if (!supabase) {
+    return { ok: false, error: "You must be signed in to delete a project." };
+  }
 
   const { data, error } = await supabase.rpc("move_project_to_recycle_bin", {
     p_project_id: projectId,
   });
   if (error) {
-    throw new Error(
-      moveErrorMessage(error, "Could not move the project to the recycle bin"),
-    );
+    return {
+      ok: false,
+      error: moveErrorMessage(error, "Could not move the project to the Recycle Bin"),
+    };
   }
 
   revalidateAfterChange([projectId]);
-  return { itemId: String(data) };
+  return { ok: true, itemId: String(data) };
 }
 
 /**
  * Moves images of one owned project into the recycle bin (one bin item per
  * image). All-or-nothing: fails without changes if any id is not an image of
- * that project.
+ * that project. Expected failures are returned, like
+ * {@link moveProjectToRecycleBin}.
  */
 export async function moveImagesToRecycleBin(
   projectId: string,
   imageIds: string[],
-): Promise<{ itemIds: string[] }> {
-  if (!isUuid(projectId)) throw new Error(PROJECT_NOT_FOUND);
+): Promise<MoveImagesToRecycleBinResult> {
+  if (!isUuid(projectId)) return { ok: false, error: PROJECT_NOT_FOUND };
   const ids = uniqueIds(imageIds);
-  if (ids.length === 0) throw new Error("Select at least one image.");
-  if (!ids.every(isUuid)) throw new Error(IMAGES_NOT_FOUND);
+  if (ids.length === 0) return { ok: false, error: "Select at least one image." };
+  if (!ids.every(isUuid)) return { ok: false, error: IMAGES_NOT_FOUND };
 
-  const supabase = await createClient();
-  await requireRecycleBinUser(supabase, "You must be signed in to delete images.");
+  const supabase = await signedInClient();
+  if (!supabase) {
+    return { ok: false, error: "You must be signed in to delete images." };
+  }
 
   const { data, error } = await supabase.rpc("move_images_to_recycle_bin", {
     p_project_id: projectId,
     p_image_ids: ids,
   });
   if (error) {
-    throw new Error(
-      moveErrorMessage(error, "Could not move the images to the recycle bin"),
-    );
+    return {
+      ok: false,
+      error: moveErrorMessage(error, "Could not move the images to the Recycle Bin"),
+    };
   }
 
   revalidateAfterChange([projectId]);
-  return { itemIds: Array.isArray(data) ? data.map(String) : [] };
+  return { ok: true, itemIds: Array.isArray(data) ? data.map(String) : [] };
 }
 
 type RestoreRow = {
@@ -124,6 +146,10 @@ function restoreErrorMessage(error: RpcError, row: RestoreRow) {
   switch (error.code) {
     case RECYCLE_BIN_SQLSTATE.itemNotFound:
       return ITEM_NOT_FOUND;
+    case RECYCLE_BIN_SQLSTATE.itemDeleting:
+      return ITEM_DELETING;
+    case RECYCLE_BIN_SQLSTATE.itemExpired:
+      return ITEM_EXPIRED;
     case RECYCLE_BIN_SQLSTATE.projectInRecycleBin:
       return `Restore the project “${row.project_name}” first.`;
     case RECYCLE_BIN_SQLSTATE.projectNotFound:
@@ -223,10 +249,12 @@ export async function restoreRecycleBinItems(
 }
 
 /**
- * Permanently deletes recycle bin items: their S3 objects first, then the
- * rows. Deleting a project also removes any of its images still in the bin.
- * Unknown ids are ignored; storage failures are reported per item and leave
- * the item in the bin for a retry.
+ * Permanently deletes recycle bin items: each row is first marked so it can
+ * no longer be restored, then its S3 objects are removed, then the row.
+ * Deleting a project also removes any of its images still in the bin. Items
+ * whose files could not all be removed stay in the bin, marked, and are
+ * reported in `failed` (deleting again retries); ids no longer in the bin are
+ * returned in `skipped`.
  */
 export async function deleteRecycleBinItemsPermanently(
   itemIds: string[],
@@ -239,16 +267,10 @@ export async function deleteRecycleBinItemsPermanently(
     supabase,
     "You must be signed in to delete items.",
   );
-  const rows = await selectRecycleBinRowsById<RecycleBinDeletionRow>(
-    supabase,
-    user.id,
+  const result = await permanentlyDeleteRecycleBinItems(
+    { supabase, userId: user.id },
     ids,
-    RECYCLE_BIN_DELETION_COLUMNS,
   );
-  const result =
-    rows.length > 0
-      ? await deleteRecycleBinRowsPermanently(supabase, user.id, rows)
-      : { deleted: 0, failed: [] };
 
   revalidatePath("/recycle-bin");
   return result;

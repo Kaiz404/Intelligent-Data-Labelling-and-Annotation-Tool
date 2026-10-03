@@ -305,12 +305,15 @@ export function RecycleBinClient({
       : selectedImages.map((image) => image.id);
   const blockedReasons = new Set(
     tab === "images"
-      ? selectedImages.flatMap((image) => restoreBlockedReason(image.projectState) ?? [])
-      : [],
+      ? selectedImages.flatMap((image) => restoreBlockedReason(image) ?? [])
+      : selectedProjects.flatMap((project) =>
+          project.deletionPending ? ["Deletion didn't finish"] : [],
+        ),
   );
   const canRestoreSelection =
-    tab === "projects" ||
-    selectedImages.some((image) => image.projectState === "active");
+    tab === "projects"
+      ? selectedProjects.some((project) => !project.deletionPending)
+      : selectedImages.some((image) => restoreBlockedReason(image) === null);
 
   function toggleSelection(target: Tab, id: string, isSelected: boolean) {
     setSelectedIds((current) => {
@@ -407,25 +410,35 @@ export function RecycleBinClient({
     setDeleteError(null);
     setNotice(null);
     try {
-      const { failed } = await deleteRecycleBinItemsPermanently(ids);
+      const { failed, skipped } = await deleteRecycleBinItemsPermanently(ids);
       setErrorsFor(ids, failed, "Could not delete this item.");
-      const failedIds = new Set(failed.map((failure) => failure.id));
-      const deletedIds = ids.filter((id) => !failedIds.has(id));
+      const unfinished = new Set([...failed.map((failure) => failure.id), ...skipped]);
+      const deletedIds = ids.filter((id) => !unfinished.has(id));
 
-      if (failed.length === 0) {
-        setNotice({
-          tone: "success",
-          text: `Permanently deleted ${ids.length === 1 ? itemName(ids[0]) : countItems(ids)}.`,
-        });
-      } else {
-        setNotice({
-          tone: "error",
-          text:
-            deletedIds.length > 0
-              ? `Deleted ${countItems(deletedIds)}. ${failed.length} couldn't be deleted and stayed in the Recycle Bin: ${failed[0].error}`
-              : `Nothing was deleted: ${failed[0].error}`,
-        });
+      const parts: string[] = [];
+      if (deletedIds.length > 0) {
+        parts.push(
+          `Permanently deleted ${
+            deletedIds.length === 1 ? itemName(deletedIds[0]) : countItems(deletedIds)
+          }.`,
+        );
       }
+      if (skipped.length > 0) {
+        parts.push(
+          `${skipped.length} ${
+            skipped.length === 1 ? "item was" : "items were"
+          } no longer in the Recycle Bin.`,
+        );
+      }
+      if (failed.length > 0) {
+        parts.push(
+          `${failed.length} couldn't be fully deleted: ${failed[0].error}`,
+        );
+      }
+      setNotice({
+        tone: failed.length > 0 || deletedIds.length === 0 ? "error" : "success",
+        text: parts.join(" "),
+      });
       setDeleteIds(null);
       clearSelection();
       refresh();
@@ -667,7 +680,7 @@ export function RecycleBinClient({
               <TooltipContent>
                 {blockedReasons.size === 1
                   ? [...blockedReasons][0]
-                  : "These images' projects are not available to restore into"}
+                  : "None of the selected items can be restored"}
               </TooltipContent>
             </Tooltip>
           )}

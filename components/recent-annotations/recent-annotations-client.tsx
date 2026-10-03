@@ -272,7 +272,9 @@ export function RecentAnnotationsClient({
       // Moving to the Recycle Bin is scoped to one project, so run one call per group.
       for (const group of groupByProject(deleteTargets)) {
         const ids = group.images.map((image) => image.id);
-        await moveImagesToRecycleBin(group.projectId, ids);
+        const result = await moveImagesToRecycleBin(group.projectId, ids);
+        // Reuse the partial-progress handling below for returned failures.
+        if (!result.ok) throw new Error(result.error);
         deleted.push(...ids);
       }
       deselect(deleted);
@@ -547,7 +549,8 @@ export function RecentAnnotationsClient({
               {deleteSubject} {deleteScope} will be moved to the Recycle Bin
               with {deleteTargets.length === 1 ? "its" : "their"} annotations.
               You can restore {deleteTargets.length === 1 ? "it" : "them"} from
-              the Recycle Bin for 30 days.
+              the Recycle Bin for 30 days. Unreviewed AI suggestions aren&apos;t
+              kept.
             </DialogDescription>
           </DialogHeader>
 
