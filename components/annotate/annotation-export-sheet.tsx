@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import JSZip from "jszip";
-import { CheckCircle2, FileArchive, ImageIcon } from "lucide-react";
+import { FileArchive } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -34,6 +34,19 @@ const formats: Array<{ id: ExportFormat; name: string; extension: string }> = [
   { id: "yolo", name: "YOLO", extension: ".txt" },
   { id: "voc", name: "Pascal VOC", extension: ".xml" },
 ];
+
+const contentOptions: Array<{ id: ExportContent; name: string; description: string }> = [
+  { id: "labels", name: "Labels only", description: "Export annotation labels only" },
+  { id: "images", name: "Labels with images", description: "Export labels and source images" },
+];
+
+function RadioIndicator({ checked, className }: { checked: boolean; className?: string }) {
+  return (
+    <span aria-hidden className={cn("flex size-4 shrink-0 items-center justify-center rounded-full border", checked && "border-primary bg-primary text-primary-foreground", className)}>
+      {checked ? <span className="size-1.5 rounded-full bg-current" /> : null}
+    </span>
+  );
+}
 
 function safeName(value: string) {
   return value.trim().replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-|-$/g, "") || "annotations";
@@ -121,6 +134,10 @@ export function AnnotationExportSheet({
   const [compress, setCompress] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Several files (per-image YOLO/VOC labels, images, or many images) can
+  // only be delivered as one ZIP; a single COCO JSON can go either way.
+  const zipRequired = content === "images" || format !== "coco" || images.length > 1;
+  const exportAsZip = zipRequired || compress;
 
   const handleExport = async () => {
     setExporting(true);
@@ -153,8 +170,7 @@ export function AnnotationExportSheet({
         }));
       }
 
-      const requiresZip = compress || content === "images" || format !== "coco" || images.length > 1;
-      if (requiresZip) {
+      if (exportAsZip) {
         download(await zip.generateAsync({ type: "blob", compression: "DEFLATE" }), `${baseName}.zip`);
       } else {
         download(new Blob([createCoco(exportImages, labels)], { type: "application/json" }), `${baseName}.json`);
@@ -184,10 +200,8 @@ export function AnnotationExportSheet({
             <legend className="text-xs font-medium">Select format</legend>
             <p className="text-[11px] text-muted-foreground">Choose the annotation format.</p>
             {formats.map((item) => (
-              <button key={item.id} type="button" onClick={() => setFormat(item.id)} className={cn("flex w-full items-center rounded-lg border px-3 py-3 text-xs", format === item.id ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-muted/50")}>
-                <span className={cn("mr-3 flex size-4 items-center justify-center rounded-full border", format === item.id && "border-primary bg-primary text-primary-foreground")}>
-                  {format === item.id ? <span className="size-1.5 rounded-full bg-current" /> : null}
-                </span>
+              <button key={item.id} type="button" aria-pressed={format === item.id} onClick={() => setFormat(item.id)} className={cn("flex w-full items-center rounded-lg border px-3 py-3 text-xs", format === item.id ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-muted/50")}>
+                <RadioIndicator checked={format === item.id} className="mr-3" />
                 <span>{item.name}</span><span className="ml-auto text-muted-foreground">{item.extension}</span>
               </button>
             ))}
@@ -196,19 +210,22 @@ export function AnnotationExportSheet({
           <fieldset className="space-y-2">
             <legend className="text-xs font-medium">Export content</legend>
             <p className="text-[11px] text-muted-foreground">What would you like to export?</p>
-            <button type="button" onClick={() => setContent("labels")} className={cn("flex w-full items-start rounded-lg border px-3 py-3 text-left", content === "labels" ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-muted/50")}>
-              <CheckCircle2 className="mr-3 mt-0.5 size-4 text-primary" /><span><span className="block text-xs font-medium">Labels only</span><span className="text-[11px] text-muted-foreground">Export annotation labels only</span></span>
-            </button>
-            <button type="button" onClick={() => setContent("images")} className={cn("flex w-full items-start rounded-lg border px-3 py-3 text-left", content === "images" ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-muted/50")}>
-              <ImageIcon className="mr-3 mt-0.5 size-4 text-primary" /><span><span className="block text-xs font-medium">Labels with images</span><span className="text-[11px] text-muted-foreground">Export labels and source images</span></span>
-            </button>
+            {contentOptions.map((item) => (
+              <button key={item.id} type="button" aria-pressed={content === item.id} onClick={() => setContent(item.id)} className={cn("flex w-full items-start rounded-lg border px-3 py-3 text-left", content === item.id ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-muted/50")}>
+                <RadioIndicator checked={content === item.id} className="mr-3 mt-0.5" />
+                <span><span className="block text-xs font-medium">{item.name}</span><span className="text-[11px] text-muted-foreground">{item.description}</span></span>
+              </button>
+            ))}
           </fieldset>
 
           <div className="space-y-2">
             <p className="text-xs font-medium">Compress export</p>
-            <label className="flex items-start gap-3 text-xs">
-              <Checkbox checked={compress} onCheckedChange={(checked) => setCompress(checked === true)} />
-              <span><span className="block font-medium">Export as ZIP file</span><span className="text-[11px] text-muted-foreground">Package all selected files in a .zip archive</span></span>
+            <label className={cn("flex items-start gap-3 text-xs", zipRequired && "cursor-not-allowed")}>
+              <Checkbox checked={exportAsZip} disabled={zipRequired} onCheckedChange={(checked) => setCompress(checked === true)} />
+              <span>
+                <span className={cn("block font-medium", zipRequired && "text-muted-foreground")}>Export as ZIP file</span>
+                <span className="text-[11px] text-muted-foreground">{zipRequired ? "Required when exporting multiple files" : "Package all selected files in a .zip archive"}</span>
+              </span>
             </label>
           </div>
           {error ? <p className="rounded-md bg-destructive/10 p-3 text-xs text-destructive">{error}</p> : null}
