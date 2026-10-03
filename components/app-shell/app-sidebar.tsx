@@ -100,7 +100,9 @@ export function AppSidebar({ userEmail }: AppSidebarProps) {
                   const isActive =
                     !item.disabled &&
                     (item.label === "Annotate"
-                      ? pathname.includes("/annotate/")
+                      ? // Recent Annotations hub or an image workspace.
+                        pathname === item.href ||
+                        pathname.includes("/annotate/")
                       : item.href === "/dashboard"
                         ? pathname === "/dashboard"
                         : item.href === "/projects"

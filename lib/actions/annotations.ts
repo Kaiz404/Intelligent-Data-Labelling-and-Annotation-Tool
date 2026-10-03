@@ -95,9 +95,11 @@ export async function saveImageAnnotations(
     }
   }
 
+  // `modified_at` doubles as the "last annotated" time on /annotate.
+  const savedAt = new Date().toISOString();
   const { data: image, error: updateError } = await supabase
     .from("images")
-    .update({ annotation: boxes })
+    .update({ annotation: boxes, modified_at: savedAt })
     .eq("id", imageId)
     .eq("project_id", projectId)
     .select("id")
@@ -110,5 +112,5 @@ export async function saveImageAnnotations(
     throw new Error("Image not found or you do not have access.");
   }
 
-  return { savedAt: new Date().toISOString() };
+  return { savedAt };
 }

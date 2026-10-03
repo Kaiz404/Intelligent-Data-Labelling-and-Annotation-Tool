@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createImageReadUrl } from "@/lib/uploads/s3-server";
 import type { BoundingBox } from "@/lib/types/annotations";
 import type { ImageStatus, ProjectImage } from "@/lib/types/projects";
+import type { RecentAnnotationsResult } from "@/lib/types/recent-annotations";
 
 type ImageRow = {
   id: string;
@@ -36,6 +37,23 @@ function annotationStatus(annotation: unknown): {
     : { status: "Unannotated", progress: 0 };
 }
 
+async function toProjectImage(row: ImageRow): Promise<ProjectImage> {
+  const signedUrl = await createImageReadUrl(row.object_key);
+  const { status, progress } = annotationStatus(row.annotation);
+
+  return {
+    id: row.id,
+    fileName: row.name,
+    sizeBytes: row.size_bytes,
+    capturedAt: dateFormatter.format(new Date(row.created_at)),
+    status,
+    progress,
+    thumbnailUrl: signedUrl,
+    imageUrl: signedUrl,
+    annotations: parseAnnotations(row.annotation),
+  };
+}
+
 export async function fetchProjectImages(
   projectId: string,
 ): Promise<ProjectImage[]> {
@@ -50,24 +68,59 @@ export async function fetchProjectImages(
     throw new Error(`Could not load project images: ${error.message}`);
   }
 
-  return Promise.all(
-    ((data ?? []) as ImageRow[]).map(async (row) => {
-      const signedUrl = await createImageReadUrl(row.object_key);
-      const { status, progress } = annotationStatus(row.annotation);
+  return Promise.all(((data ?? []) as ImageRow[]).map(toProjectImage));
+}
 
+type RecentImageRow = ImageRow & {
+  project_id: string;
+  modified_at: string | null;
+  projects: { name: string } | { name: string }[] | null;
+};
+
+export const RECENT_ANNOTATIONS_LIMIT = 200;
+
+/**
+ * The current user's annotated images across all projects (RLS-filtered),
+ * newest annotation save first. An image counts as annotated once its
+ * `annotation` column has been written, even if every box was later removed.
+ * `modified_at` is bumped by `saveImageAnnotations`; rows saved before that
+ * fall back to `created_at`.
+ */
+export async function fetchRecentlyAnnotatedImages(
+  limit = RECENT_ANNOTATIONS_LIMIT,
+): Promise<RecentAnnotationsResult> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("images")
+    .select(
+      "id, project_id, name, object_key, size_bytes, created_at, modified_at, annotation, projects(name)",
+    )
+    .not("annotation", "is", null)
+    .order("modified_at", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false })
+    // One extra row tells us whether the list was capped.
+    .limit(limit + 1);
+
+  if (error) {
+    throw new Error(`Could not load recent annotations: ${error.message}`);
+  }
+
+  const rows = (data ?? []) as RecentImageRow[];
+  const images = await Promise.all(
+    rows.slice(0, limit).map(async (row) => {
+      const image = await toProjectImage(row);
+      const project = Array.isArray(row.projects) ? row.projects[0] : row.projects;
       return {
-        id: row.id,
-        fileName: row.name,
-        sizeBytes: row.size_bytes,
-        capturedAt: dateFormatter.format(new Date(row.created_at)),
-        status,
-        progress,
-        thumbnailUrl: signedUrl,
-        imageUrl: signedUrl,
-        annotations: parseAnnotations(row.annotation),
+        ...image,
+        projectId: row.project_id,
+        projectName: project?.name ?? "Untitled project",
+        annotationCount: image.annotations.length,
+        lastAnnotatedAt: row.modified_at ?? row.created_at,
       };
     }),
   );
+
+  return { images, limit, isCapped: rows.length > limit };
 }
 type ImageStatsRow = {
   project_id: string;

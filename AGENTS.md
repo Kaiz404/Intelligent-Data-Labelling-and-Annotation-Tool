@@ -36,7 +36,7 @@ Image annotation workspace for managing projects and annotating image datasets.
 - Root layout metadata title: **"Annotate"**
 - Sidebar brand label: **"SmartAnnoTool"** (SAT logo)
 
-**Product status:** UI is ahead of backend integration. Projects, auth, image metadata, direct S3 image uploads, image-count metrics, per-project labels, durable bounding-box saves, single-image AI Annotate, and bulk AI Annotate jobs with a review flow are real; several nav items are still placeholder.
+**Product status:** UI is ahead of backend integration. Projects, auth, image metadata, direct S3 image uploads, image-count metrics, per-project labels, durable bounding-box saves, single-image AI Annotate, bulk AI Annotate jobs with a review flow, and the cross-project Recent Annotations hub are real; several nav items are still placeholder.
 
 ---
 
@@ -63,6 +63,7 @@ Image annotation workspace for managing projects and annotating image datasets.
 data_annotation_tool/
 ├── app/                    # Next.js App Router
 │   ├── (app)/              # Authenticated shell (sidebar layout) — does NOT affect URLs
+│   │   ├── annotate/       # Recent Annotations hub (sidebar "Annotate")
 │   │   ├── dashboard/
 │   │   ├── projects/
 │   │   │   └── [id]/
@@ -80,7 +81,8 @@ data_annotation_tool/
 │   ├── annotate/           # Annotation workspace (toolbar, Konva canvas, side panel, AI Annotate dialog, suggestion review bar)
 │   ├── auth/               # Auth-specific shared UI
 │   ├── dashboard/          # Dashboard widgets
-│   └── projects/           # Project browser, detail, upload, bulk AI dialog + job banner, etc.
+│   ├── projects/           # Project browser, detail, upload, bulk AI dialog + job banner, etc.
+│   └── recent-annotations/ # Cross-project Recent Annotations grid, card, and bulk actions
 ├── hooks/                  # Shared React hooks (use-mobile, use-upload-queue, use-annotation-job, use-dataset-import)
 ├── lib/
 │   ├── actions/            # Server actions ("use server")
@@ -129,6 +131,7 @@ data_annotation_tool/
 | `/projects` | `app/(app)/projects/page.tsx` | Yes |
 | `/projects/[id]` | `app/(app)/projects/[id]/page.tsx` | Yes |
 | `/projects/[id]/annotate/[imageId]` | `app/(app)/projects/[id]/annotate/[imageId]/page.tsx` | Yes |
+| `/annotate` | `app/(app)/annotate/page.tsx` | Yes |
 | `/auth/login` | `app/auth/login/page.tsx` | No |
 | `/auth/sign-up` | `app/auth/sign-up/page.tsx` | No |
 | `/auth/sign-up-success` | `app/auth/sign-up-success/page.tsx` | No |
@@ -146,7 +149,7 @@ data_annotation_tool/
 | `/api/annotations/jobs/[jobId]` | `app/api/annotations/jobs/[jobId]/route.ts` | Route handler (GET: progress + per-image updates; restarts an idle worker) |
 | `/api/annotations/jobs/[jobId]/cancel` | `app/api/annotations/jobs/[jobId]/cancel/route.ts` | Route handler (POST: cancel an active run) |
 
-**Route group `(app)`:** Wraps dashboard and projects in the sidebar shell (`app/(app)/layout.tsx`). URLs are `/dashboard`, `/projects` — the group name is omitted from the path.
+**Route group `(app)`:** Wraps dashboard, projects, and annotate in the sidebar shell (`app/(app)/layout.tsx`). URLs are `/dashboard`, `/projects`, `/annotate` — the group name is omitted from the path.
 
 ---
 
@@ -197,7 +200,7 @@ Request → proxy.ts → lib/supabase/proxy.ts (updateSession)
 - `object_key` text (NOT NULL, UNIQUE) — private S3 key, never an expiring URL
 - `content_type` text (`image/jpeg` or `image/png`)
 - `size_bytes` bigint (> 0)
-- `created_at`, `modified_at` timestamptz
+- `created_at`, `modified_at` timestamptz — `saveImageAnnotations` sets `modified_at`, so it is the "last annotated" time on `/annotate`; app inserts (upload, copy/move) leave the column default
 - `annotation` jsonb (durable bounding-box array; sessionStorage remains a client draft backup)
 - Legacy nullable `notes` and `url` columns remain but are not used by the app.
 
@@ -256,7 +259,8 @@ Manual types in `lib/types/projects.ts` and `lib/types/annotations.ts` (`Boundin
 | Dashboard metrics (total/annotated/unannotated) | **Real** | RLS-filtered Supabase `images` rows aggregated by `lib/images.ts` |
 | Sidebar storage widget ("10 GB / 100 GB") | **Mock** | Hardcoded in `app-sidebar.tsx` |
 | Nav: Datasets, Recent Files, Starred, Recycle Bin, Settings, Get Help | **Placeholder** | `disabled: true` in `lib/nav.ts` |
-| Nav: Annotate | **Enabled (entry hub)** | Links to `/projects`; open a project image to reach `/projects/[id]/annotate/[imageId]` |
+| Recent Annotations (`/annotate`) | **Real** | `fetchRecentlyAnnotatedImages()` in `lib/images.ts` loads the user's images with a non-null `annotation` (RLS-filtered, project name embedded), newest `modified_at` first, capped at 200, with signed thumbnails. `components/recent-annotations/` filters, searches, and sorts client-side; a card opens the workspace. Move/Add use `ImageTransferDialog` with its `sources` prop (one `transferProjectImages` call per source project; a move skips images already in the target). Export loads `getProjectExportData` and needs a single-project selection. Delete calls `deleteProjectImages` per project and is permanent |
+| Nav: Annotate | **Enabled** | Links to `/annotate`; the sidebar highlights it there and in `/projects/[id]/annotate/[imageId]` |
 
 ---
 
@@ -348,7 +352,7 @@ Current actions: `lib/actions/projects.ts`, `lib/actions/images.ts`, `lib/action
 | `resolveDatasetLabels(projectId, categories)` | Validate project ownership and source categories, reuse labels by trimmed case-insensitive name, create missing palette-colored labels, and return `{ categoryId, labelId }` mappings; no image uploads |
 | `renameLabel(projectId, labelId, name)` | Rename a project label, updating its name everywhere that label is used |
 | `deleteLabel(projectId, labelId)` | Delete a `project_labels` row, revalidate |
-| `saveImageAnnotations(projectId, imageId, boxes)` | Validate ownership, bounding boxes, and every label's membership in the target project before persisting the current annotation array to `images.annotation` |
+| `saveImageAnnotations(projectId, imageId, boxes)` | Validate ownership, bounding boxes, and every label's membership in the target project before persisting the current annotation array to `images.annotation` and setting `images.modified_at` to the save time |
 | `resolveSuggestions(projectId, resolutions)` | After reviewing AI suggestions, set each job item's still-pending `suggestions` (empty clears it from review). No `revalidatePath` — it runs inside workspace auto-save |
 
 **Pattern for new actions:**

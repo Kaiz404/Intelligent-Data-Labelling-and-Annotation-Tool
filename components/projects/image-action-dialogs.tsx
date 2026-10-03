@@ -77,21 +77,31 @@ export function RenameImageDialog({
   );
 }
 
+/** Images that live in one source project. */
+export type ImageTransferSource = { projectId: string; imageIds: string[] };
+
 export function ImageTransferDialog({
   open,
   onOpenChange,
   mode,
   sourceProject,
   projects,
-  imageIds,
+  imageIds = [],
+  sources,
   onComplete,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   mode: "copy" | "move";
-  sourceProject: Project;
+  /** Single source project (project page). Ignored when `sources` is set. */
+  sourceProject?: Project;
   projects: Project[];
-  imageIds: string[];
+  imageIds?: string[];
+  /**
+   * Images grouped by source project, for selections spanning projects. One
+   * transfer runs per group; a move skips images already in the destination.
+   */
+  sources?: ImageTransferSource[];
   onComplete: () => void;
 }) {
   const router = useRouter();
@@ -106,6 +116,20 @@ export function ImageTransferDialog({
   );
   const title = mode === "move" ? "Move to Existing Project" : "Add to Existing Project";
   const verb = mode === "move" ? "moved" : "added";
+  const groups =
+    sources ??
+    (sourceProject ? [{ projectId: sourceProject.id, imageIds }] : []);
+  const sourceProjectIds = new Set(groups.map((group) => group.projectId));
+  const totalImages = groups.reduce((sum, group) => sum + group.imageIds.length, 0);
+  const groupsFor = (destinationId: string) =>
+    groups.filter(
+      (group) =>
+        group.imageIds.length > 0 &&
+        !(mode === "move" && group.projectId === destinationId),
+    );
+  const skippedImages = targetId
+    ? totalImages - groupsFor(targetId).reduce((sum, group) => sum + group.imageIds.length, 0)
+    : 0;
 
   useEffect(() => {
     if (!open) return;
@@ -120,19 +144,30 @@ export function ImageTransferDialog({
     if (!targetId) return;
     setPending(true);
     setError(null);
+    let transferred = 0;
     try {
-      await transferProjectImages(
-        sourceProject.id,
-        targetId,
-        imageIds,
-        mode,
-        keepAnnotations,
-      );
+      for (const group of groupsFor(targetId)) {
+        await transferProjectImages(
+          group.projectId,
+          targetId,
+          group.imageIds,
+          mode,
+          keepAnnotations,
+        );
+        transferred += group.imageIds.length;
+      }
       onOpenChange(false);
       onComplete();
       router.refresh();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : `Images could not be ${verb}.`);
+      const message = cause instanceof Error ? cause.message : `Images could not be ${verb}.`;
+      if (transferred > 0) {
+        // Earlier groups already succeeded; show them while reporting the failure.
+        setError(`${transferred} of ${totalImages} images were ${verb} before an error: ${message}`);
+        router.refresh();
+      } else {
+        setError(message);
+      }
     } finally {
       setPending(false);
     }
@@ -143,15 +178,16 @@ export function ImageTransferDialog({
       <DialogContent className="gap-5 sm:max-w-[430px]">
         <DialogHeader className="gap-1.5"><DialogTitle className="text-base">{title}</DialogTitle><DialogDescription className="text-xs">{mode === "move" ? "Move" : "Add"} selected image(s) to another project.</DialogDescription></DialogHeader>
         <form onSubmit={submit} className="space-y-4">
-          <div className="flex items-center gap-2 rounded-md bg-primary/10 px-3 py-2 text-xs font-medium text-primary"><Copy className="size-3.5" />{imageIds.length} {imageIds.length === 1 ? "image" : "images"} will be {verb} to the selected project.</div>
+          <div className="flex items-center gap-2 rounded-md bg-primary/10 px-3 py-2 text-xs font-medium text-primary"><Copy className="size-3.5" />{totalImages} {totalImages === 1 ? "image" : "images"} will be {verb} to the selected project.</div>
+          {skippedImages > 0 ? <p className="text-xs text-muted-foreground">{skippedImages} {skippedImages === 1 ? "image is" : "images are"} already in this project and will be skipped.</p> : null}
           <div className="space-y-2">
             <Label htmlFor={`${mode}-destination-search`}>Destination Project</Label>
             <div className="overflow-hidden rounded-lg border">
               <div className="relative border-b"><Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><Input id={`${mode}-destination-search`} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search for a project..." className="border-0 pl-9 shadow-none focus-visible:ring-0" /></div>
               <div className="max-h-36 overflow-y-auto p-1">
                 {filteredProjects.map((project) => {
-                  const disabled = mode === "move" && project.id === sourceProject.id;
-                  return <button key={project.id} type="button" disabled={disabled} onClick={() => setTargetId(project.id)} className={`flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-sm transition ${targetId === project.id ? "bg-primary/10 text-primary" : "hover:bg-muted"} disabled:cursor-not-allowed disabled:opacity-45`}><span className="truncate">{project.name}{project.id === sourceProject.id ? " (current)" : ""}</span><span className="ml-3 shrink-0 text-xs text-muted-foreground">{project.image_count ?? 0} images</span></button>;
+                  const disabled = mode === "move" && groupsFor(project.id).length === 0;
+                  return <button key={project.id} type="button" disabled={disabled} onClick={() => setTargetId(project.id)} className={`flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-sm transition ${targetId === project.id ? "bg-primary/10 text-primary" : "hover:bg-muted"} disabled:cursor-not-allowed disabled:opacity-45`}><span className="truncate">{project.name}{sourceProjectIds.has(project.id) ? " (current)" : ""}</span><span className="ml-3 shrink-0 text-xs text-muted-foreground">{project.image_count ?? 0} images</span></button>;
                 })}
                 {filteredProjects.length === 0 ? <p className="px-3 py-5 text-center text-xs text-muted-foreground">No projects found.</p> : null}
               </div>
