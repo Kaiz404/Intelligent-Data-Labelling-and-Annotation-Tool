@@ -7,6 +7,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   useSyncExternalStore,
@@ -318,19 +319,158 @@ function withoutSuggestion(meta: SuggestionMeta, boxId: string) {
   return next;
 }
 
-/** Still-pending suggestions per bulk job item, for `resolveSuggestions`. */
+/**
+ * Still-pending suggestions per bulk job item, for `resolveSuggestions`. Only
+ * suggestions resolved here are removed: accepted (box kept, no longer
+ * pending) or shown here and then rejected. Server suggestions never shown on
+ * this page (e.g. their label was unknown locally) are passed through as-is.
+ */
 function buildResolutions(
   boxes: BoundingBox[],
   meta: SuggestionMeta,
   sets: ImageSuggestionSet[],
+  shownIds: ReadonlySet<string>,
 ): SuggestionResolution[] {
+  const boxById = new Map(boxes.map((box) => [box.id, box]));
   return sets.map((set) => ({
     itemId: set.itemId,
-    remaining: boxes
-      .filter((box) => meta[box.id]?.itemId === set.itemId)
-      .map((box) => ({ ...box, confidence: meta[box.id].confidence })),
+    remaining: set.suggestions.flatMap((suggestion) => {
+      const box = boxById.get(suggestion.id);
+      const entry = meta[suggestion.id];
+      // Still pending here: persist local edits (e.g. a relabel).
+      if (box && entry) return [{ ...box, confidence: entry.confidence }];
+      if (box || shownIds.has(suggestion.id)) return [];
+      return [suggestion];
+    }),
   }));
 }
+
+/**
+ * Undoable editor state. Each history entry snapshots boxes together with
+ * which of them are pending suggestions, so undoing an edit that accepted a
+ * suggestion also restores it as a suggestion. Updates are pure (StrictMode
+ * double-invokes reducers).
+ */
+type EditorSnapshot = { boxes: BoundingBox[]; meta: SuggestionMeta };
+type EditorState = {
+  present: EditorSnapshot;
+  past: EditorSnapshot[];
+  future: EditorSnapshot[];
+};
+type EditorAction =
+  | { type: "reset"; snapshot: EditorSnapshot }
+  /** Push an undo step; return `present` unchanged for a no-op. */
+  | { type: "commit"; update: (present: EditorSnapshot) => EditorSnapshot }
+  | { type: "undo" }
+  | { type: "redo" }
+  /** Rewrite present and every history entry (server suggestion sync). */
+  | { type: "patchAll"; patch: (snapshot: EditorSnapshot) => EditorSnapshot };
+
+const INITIAL_EDITOR: EditorState = {
+  present: { boxes: [], meta: {} },
+  past: [],
+  future: [],
+};
+
+function editorReducer(state: EditorState, action: EditorAction): EditorState {
+  switch (action.type) {
+    case "reset":
+      return { present: action.snapshot, past: [], future: [] };
+    case "commit": {
+      const next = action.update(state.present);
+      if (next === state.present) return state;
+      return {
+        present: next,
+        past: [...state.past, state.present].slice(-MAX_HISTORY),
+        future: [],
+      };
+    }
+    case "undo": {
+      if (state.past.length === 0) return state;
+      return {
+        present: state.past[state.past.length - 1],
+        past: state.past.slice(0, -1),
+        future: [state.present, ...state.future].slice(0, MAX_HISTORY),
+      };
+    }
+    case "redo": {
+      if (state.future.length === 0) return state;
+      const [next, ...rest] = state.future;
+      return {
+        present: next,
+        past: [...state.past, state.present].slice(-MAX_HISTORY),
+        future: rest,
+      };
+    }
+    case "patchAll":
+      return {
+        present: action.patch(state.present),
+        past: state.past.map(action.patch),
+        future: state.future.map(action.patch),
+      };
+  }
+}
+
+function hasPendingSuggestions(snapshot: EditorSnapshot) {
+  return snapshot.boxes.some((box) => snapshot.meta[box.id]);
+}
+
+/**
+ * Local labels updated with fresh server labels: server versions win for
+ * shared IDs, local additions are kept, locally deleted labels stay deleted.
+ */
+function mergeLabels(
+  local: AnnotationLabel[],
+  server: AnnotationLabel[],
+  deletedIds: ReadonlySet<string>,
+) {
+  const serverById = new Map(server.map((label) => [label.id, label]));
+  const merged = local
+    .filter((label) => !deletedIds.has(label.id))
+    .map((label) => serverById.get(label.id) ?? label);
+  const known = new Set(merged.map((label) => label.id));
+  for (const label of server) {
+    if (!known.has(label.id) && !deletedIds.has(label.id)) merged.push(label);
+  }
+  return merged;
+}
+
+function isJobActive(job: AnnotationJobProgress) {
+  return job.status === "queued" || job.status === "running";
+}
+
+function processedCount(job: AnnotationJobProgress) {
+  return job.counts.succeeded + job.counts.failed + job.counts.cancelled;
+}
+
+/** Whether `incoming` may replace `stored` (late polls must not roll back). */
+function isNewerJobProgress(
+  incoming: AnnotationJobProgress,
+  stored: AnnotationJobProgress,
+) {
+  if (!isJobActive(stored)) return !isJobActive(incoming);
+  return !isJobActive(incoming) || processedCount(incoming) >= processedCount(stored);
+}
+
+/** Tailwind `xl` (80rem): the review card overlays the right column from here. */
+const XL_QUERY = "(min-width: 80rem)";
+
+function subscribeToXl(onChange: () => void) {
+  const query = window.matchMedia(XL_QUERY);
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+}
+
+function getIsXl() {
+  return window.matchMedia(XL_QUERY).matches;
+}
+
+function getIsXlOnServer() {
+  return true;
+}
+
+/** How long a fullscreen request may stay unresolved before the overlay fallback. */
+const FULLSCREEN_FALLBACK_MS = 400;
 
 export function AnnotationWorkspace({
   project,
@@ -342,6 +482,18 @@ export function AnnotationWorkspace({
 }: AnnotationWorkspaceProps) {
   const router = useRouter();
   const [labels, setLabels] = useState<AnnotationLabel[]>(initialLabels);
+  /** Labels deleted here, so a stale server list cannot bring them back. */
+  const deletedLabelIdsRef = useRef(new Set<string>());
+  // Fresh server labels (after a refresh) are merged in, keeping local
+  // additions; checking suggestions against the merge avoids hiding (and
+  // then clearing) suggestions whose label was only missing locally.
+  const [syncedInitialLabels, setSyncedInitialLabels] = useState(initialLabels);
+  if (initialLabels !== syncedInitialLabels) {
+    setSyncedInitialLabels(initialLabels);
+    setLabels((current) =>
+      mergeLabels(current, initialLabels, deletedLabelIdsRef.current),
+    );
+  }
 
   const imageIndex = Math.max(
     0,
@@ -349,14 +501,44 @@ export function AnnotationWorkspace({
   );
   const currentImage = images[imageIndex] ?? images[0];
 
+  // Signed S3 URLs change on every server render. Keep the first one per
+  // image so a refresh does not reload (and unmount) the canvas image or
+  // re-download thumbnails; swap only after a load error.
+  const freshCanvasUrl = currentImage
+    ? (currentImage.imageUrl ?? currentImage.thumbnailUrl)
+    : null;
+  const [canvasSource, setCanvasSource] = useState({
+    imageId: currentImage?.id ?? null,
+    url: freshCanvasUrl,
+    failed: false,
+  });
+  if (currentImage && canvasSource.imageId !== currentImage.id) {
+    setCanvasSource({ imageId: currentImage.id, url: freshCanvasUrl, failed: false });
+  } else if (canvasSource.failed && freshCanvasUrl !== canvasSource.url) {
+    setCanvasSource({ imageId: canvasSource.imageId, url: freshCanvasUrl, failed: false });
+  }
+  const [thumbnailUrls, setThumbnailUrls] = useState<Record<string, string | null>>(
+    () => Object.fromEntries(images.map((image) => [image.id, image.thumbnailUrl])),
+  );
+  const [syncedThumbnailImages, setSyncedThumbnailImages] = useState(images);
+  if (images !== syncedThumbnailImages) {
+    setSyncedThumbnailImages(images);
+    setThumbnailUrls((current) => {
+      const added = images.filter((image) => !(image.id in current));
+      if (added.length === 0) return current;
+      const next = { ...current };
+      for (const image of added) next[image.id] = image.thumbnailUrl;
+      return next;
+    });
+  }
+
   const [tool, setTool] = useState<AnnotationTool>("select");
   const [zoom, setZoom] = useState(100);
   const [fitToken, setFitToken] = useState(0);
   const [selectedLabelId, setSelectedLabelId] = useState(labels[0]?.id ?? "");
   const [selectedBoxId, setSelectedBoxId] = useState<string | null>(null);
-  const [boxes, setBoxes] = useState<BoundingBox[]>([]);
-  const [past, setPast] = useState<BoundingBox[][]>([]);
-  const [future, setFuture] = useState<BoundingBox[][]>([]);
+  const [editor, dispatchEditor] = useReducer(editorReducer, INITIAL_EDITOR);
+  const { boxes, meta: suggestionMeta } = editor.present;
   const [saveFlash, setSaveFlash] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -389,34 +571,43 @@ export function AnnotationWorkspace({
   const [isOverlayFullscreen, setIsOverlayFullscreen] = useState(false);
   const isFullscreen = isDocumentFullscreen || isOverlayFullscreen;
   const wasFullscreenRef = useRef(isFullscreen);
-  const [suggestionMeta, setSuggestionMeta] = useState<SuggestionMeta>({});
+  const isXl = useSyncExternalStore(subscribeToXl, getIsXl, getIsXlOnServer);
   const [reviewQueue, setReviewQueue] = useState(reviewImageIds);
+  // Reset to the server's list only when its content changes: a cached page
+  // shown again re-renders with its old props, which must not restore images
+  // already reviewed here.
+  const reviewImageIdsKey = reviewImageIds.join("\n");
+  const [syncedReviewImageIdsKey, setSyncedReviewImageIdsKey] =
+    useState(reviewImageIdsKey);
+  if (reviewImageIdsKey !== syncedReviewImageIdsKey) {
+    setSyncedReviewImageIdsKey(reviewImageIdsKey);
+    setReviewQueue(reviewImageIds);
+  }
   const autoSaveTimerRef = useRef<number | null>(null);
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const pendingSavesRef = useRef(0);
   const lastSavedSignatureRef = useRef("");
   const lastResolvedSignatureRef = useRef("");
   const activeImageIdRef = useRef<string | null>(currentImage?.id ?? null);
-  // Latest committed values for callbacks that run after an await and for the
-  // refresh merge (which must not re-run on every edit).
-  const boxesRef = useRef(boxes);
-  const suggestionMetaRef = useRef(suggestionMeta);
+  // Latest committed values for the refresh merge (which must not re-run on
+  // every edit).
+  const editorRef = useRef(editor);
   const labelsRef = useRef(labels);
   /** Image whose server data has been fully hydrated into this instance. */
   const hydratedImageIdRef = useRef<string | null>(null);
-  /** Every server suggestion ID already shown here (kept, accepted or rejected). */
-  const seenSuggestionIdsRef = useRef(new Set<string>());
+  /**
+   * Server suggestion IDs put on this canvas as suggestions. Never re-added,
+   * and only these can be resolved (rejected) from here.
+   */
+  const shownSuggestionIdsRef = useRef(new Set<string>());
   /** Bulk run whose results for this image were already fetched mid-run. */
   const liveSyncedJobIdRef = useRef<string | null>(null);
+  /** One automatic refresh to re-sign an image URL that failed to load. */
+  const imageRecoveryRequestedRef = useRef(false);
 
   activeImageIdRef.current = currentImage?.id ?? null;
-  boxesRef.current = boxes;
-  suggestionMetaRef.current = suggestionMeta;
+  editorRef.current = editor;
   labelsRef.current = labels;
-
-  useEffect(() => {
-    setReviewQueue(reviewImageIds);
-  }, [reviewImageIds]);
 
   // Only accepted boxes are real annotations: they are what gets auto-saved,
   // exported, and backed up. Pending suggestions stay dashed on the canvas.
@@ -449,67 +640,81 @@ export function AnnotationWorkspace({
     [project.id],
   );
 
-  const handleDeleteLabel = useCallback(
-    async (labelId: string) => {
-      await deleteLabel(project.id, labelId);
-      setLabels((current) => current.filter((label) => label.id !== labelId));
-      setSelectedLabelId((current) => (current === labelId ? "" : current));
-    },
-    [project.id],
-  );
-
   useEffect(() => {
     if (!currentImage) {
       return;
     }
+
+    const knownLabelIds = new Set(
+      [...labelsRef.current, ...initialLabels].map((label) => label.id),
+    );
 
     if (hydratedImageIdRef.current === currentImage.id) {
       // Same image, fresh server props (router.refresh, a server action that
       // refreshed the route, or this cached page shown again). Local state is
       // authoritative: keep boxes, history and review state, and only sync
       // server suggestions. Saves are flushed before our own refreshes.
-      const seen = seenSuggestionIdsRef.current;
-      const knownLabelIds = new Set(labelsRef.current.map((label) => label.id));
+      const shown = shownSuggestionIdsRef.current;
+      const { present, past, future } = editorRef.current;
+      const presentIds = new Set(present.boxes.map((box) => box.id));
       const serverIds = new Set<string>();
       const additions: BoundingBox[] = [];
       const additionMeta: SuggestionMeta = {};
       for (const set of suggestionSets) {
         for (const { confidence, ...box } of set.suggestions) {
           serverIds.add(box.id);
-          // Never re-add one already shown: it is still here, or was accepted
-          // or rejected locally (possibly not saved yet).
-          if (seen.has(box.id) || !knownLabelIds.has(box.labelId)) continue;
-          seen.add(box.id);
+          // Never re-add one already shown (still here, or accepted/rejected
+          // here, possibly unsaved) or one already accepted as a box.
+          if (
+            shown.has(box.id) ||
+            presentIds.has(box.id) ||
+            !knownLabelIds.has(box.labelId)
+          ) {
+            continue;
+          }
+          shown.add(box.id);
           additionMeta[box.id] = { itemId: set.itemId, confidence };
           additions.push(box);
         }
       }
-      // Bulk suggestions the server no longer has (e.g. cleared by a newer
-      // run) are dropped. Single-image results (itemId null) are local only.
-      const currentMeta = suggestionMetaRef.current;
-      const dropped = new Set(
-        Object.keys(currentMeta).filter(
-          (id) => currentMeta[id].itemId !== null && !serverIds.has(id),
-        ),
-      );
-      if (additions.length === 0 && dropped.size === 0) {
+      // Bulk suggestions the server no longer has (resolved here and saved,
+      // or cleared by a newer run). Single-image results (itemId null) are
+      // local only and never stale.
+      const staleIds = (snapshot: EditorSnapshot) =>
+        Object.keys(snapshot.meta).filter(
+          (id) => snapshot.meta[id].itemId !== null && !serverIds.has(id),
+        );
+      // Still pending in the present: cleared by the server, so dropped.
+      const dropped = new Set(staleIds(present).filter((id) => presentIds.has(id)));
+      if (
+        additions.length === 0 &&
+        ![present, ...past, ...future].some((snapshot) => staleIds(snapshot).length > 0)
+      ) {
         return;
       }
 
       // Patch undo/redo snapshots too, so undo never removes a new suggestion
-      // (which auto-save would persist as a rejection) or restores a dropped one.
-      const patch = (list: BoundingBox[]) => {
-        const kept = dropped.size > 0 ? list.filter((box) => !dropped.has(box.id)) : list;
-        const ids = new Set(kept.map((box) => box.id));
-        return [...kept, ...additions.filter((box) => !ids.has(box.id))];
-      };
-      setBoxes(patch);
-      setPast((history) => history.map(patch));
-      setFuture((redoStack) => redoStack.map(patch));
-      setSuggestionMeta((current) => {
-        const next = { ...current, ...additionMeta };
-        for (const id of dropped) delete next[id];
-        return next;
+      // (which auto-save would persist as a rejection) or restores a stale
+      // one. A stale entry whose box the present keeps as an accepted box
+      // stays a (now accepted) box in history; otherwise the box goes too.
+      dispatchEditor({
+        type: "patchAll",
+        patch: (snapshot) => {
+          const stale = staleIds(snapshot);
+          const removedBoxIds = new Set(
+            stale.filter((id) => dropped.has(id) || !presentIds.has(id)),
+          );
+          const kept =
+            removedBoxIds.size > 0
+              ? snapshot.boxes.filter((box) => !removedBoxIds.has(box.id))
+              : snapshot.boxes;
+          const ids = new Set(kept.map((box) => box.id));
+          const meta = { ...snapshot.meta };
+          for (const id of stale) delete meta[id];
+          const added = additions.filter((box) => !ids.has(box.id));
+          for (const box of added) meta[box.id] = additionMeta[box.id];
+          return { boxes: [...kept, ...added], meta };
+        },
       });
       setSelectedBoxId((current) => (current && dropped.has(current) ? null : current));
       return;
@@ -525,30 +730,27 @@ export function AnnotationWorkspace({
     lastSavedSignatureRef.current = JSON.stringify(currentImage.annotations);
 
     // Overlay unreviewed bulk-AI suggestions, skipping any already accepted
-    // (same box ID) and any whose label has since been deleted.
+    // (same box ID) and any whose label is unknown (left untouched on the
+    // server; see buildResolutions).
     const loadedIds = new Set(loaded.map((box) => box.id));
-    const knownLabelIds = new Set(initialLabels.map((label) => label.id));
     const meta: SuggestionMeta = {};
     const suggestionBoxes: BoundingBox[] = [];
-    const seen = new Set<string>();
+    const shown = new Set<string>();
     for (const set of suggestionSets) {
       for (const { confidence, ...box } of set.suggestions) {
-        seen.add(box.id);
         if (loadedIds.has(box.id) || !knownLabelIds.has(box.labelId)) continue;
+        shown.add(box.id);
         meta[box.id] = { itemId: set.itemId, confidence };
         suggestionBoxes.push(box);
       }
     }
-    seenSuggestionIdsRef.current = seen;
+    shownSuggestionIdsRef.current = shown;
     const initialBoxes = [...loaded, ...suggestionBoxes];
     lastResolvedSignatureRef.current = JSON.stringify(
-      buildResolutions(initialBoxes, meta, suggestionSets),
+      buildResolutions(initialBoxes, meta, suggestionSets, shown),
     );
 
-    setBoxes(initialBoxes);
-    setSuggestionMeta(meta);
-    setPast([]);
-    setFuture([]);
+    dispatchEditor({ type: "reset", snapshot: { boxes: initialBoxes, meta } });
     setSelectedBoxId(null);
     setLastSavedAt(null);
     setSaveError(null);
@@ -556,32 +758,41 @@ export function AnnotationWorkspace({
     setHydrated(true);
   }, [currentImage, initialLabels, project.id, suggestionSets]);
 
-  const commitBoxes = useCallback((next: BoundingBox[]) => {
-    setBoxes((current) => {
-      setPast((history) => [...history, current].slice(-MAX_HISTORY));
-      setFuture([]);
-      return next;
-    });
-  }, []);
+  const commit = useCallback(
+    (update: (present: EditorSnapshot) => EditorSnapshot) =>
+      dispatchEditor({ type: "commit", update }),
+    [],
+  );
 
-  const acceptSuggestion = useCallback((boxId: string) => {
-    setSuggestionMeta((current) => withoutSuggestion(current, boxId));
-  }, []);
+  const acceptSuggestion = useCallback(
+    (boxId: string) =>
+      commit((present) =>
+        present.meta[boxId]
+          ? { boxes: present.boxes, meta: withoutSuggestion(present.meta, boxId) }
+          : present,
+      ),
+    [commit],
+  );
 
   // Review card relabel: unlike other edits this keeps the box a pending
-  // suggestion; auto-save persists the new label into its job item. Reads the
-  // latest boxes because the card may call it after awaiting label creation.
+  // suggestion; auto-save persists the new label into its job item. A
+  // functional update, because the card may call it after awaiting label
+  // creation.
   const handleRelabelSuggestion = useCallback(
     (boxId: string, labelId: string) => {
-      const current = boxesRef.current;
-      const target = current.find((box) => box.id === boxId);
-      if (!target || target.labelId === labelId) return;
-      commitBoxes(
-        current.map((box) => (box.id === boxId ? { ...box, labelId } : box)),
-      );
+      commit((present) => {
+        const target = present.boxes.find((box) => box.id === boxId);
+        if (!target || target.labelId === labelId) return present;
+        return {
+          boxes: present.boxes.map((box) =>
+            box.id === boxId ? { ...box, labelId } : box,
+          ),
+          meta: present.meta,
+        };
+      });
       setSelectedLabelId(labelId);
     },
-    [commitBoxes],
+    [commit],
   );
 
   const handleAssignBoxLabel = useCallback(
@@ -602,23 +813,21 @@ export function AnnotationWorkspace({
       }
 
       const assignedLabelId = assignedLabel.id;
-      const nextBoxes = boxes.map((box) =>
-        box.id === boxId ? { ...box, labelId: assignedLabelId } : box,
-      );
+      // Functional update: boxes may have changed while the label was created.
       // Relabelling a suggestion counts as accepting it.
-      const nextMeta = withoutSuggestion(suggestionMeta, boxId);
-      commitBoxes(nextBoxes);
-      setSuggestionMeta(nextMeta);
-      if (currentImage) {
-        saveAnnotations(
-          project.id,
-          currentImage.id,
-          nextBoxes.filter((box) => !nextMeta[box.id]),
-        );
-      }
+      commit((present) =>
+        present.boxes.some((box) => box.id === boxId)
+          ? {
+              boxes: present.boxes.map((box) =>
+                box.id === boxId ? { ...box, labelId: assignedLabelId } : box,
+              ),
+              meta: withoutSuggestion(present.meta, boxId),
+            }
+          : present,
+      );
       setSelectedLabelId(assignedLabelId);
     },
-    [boxes, commitBoxes, currentImage, labels, project.id, suggestionMeta],
+    [commit, labels, project.id],
   );
 
   const handleRenameLabel = useCallback(
@@ -639,127 +848,150 @@ export function AnnotationWorkspace({
 
   const handleBoxesChange = useCallback(
     (next: BoundingBox[]) => {
-      // Moving or resizing a suggestion counts as accepting it.
-      const previousById = new Map(boxes.map((box) => [box.id, box]));
-      for (const box of next) {
-        const previous = previousById.get(box.id);
-        if (previous && suggestionMeta[box.id] && !sameGeometry(previous, box)) {
-          acceptSuggestion(box.id);
+      commit((present) => {
+        // Moving or resizing a suggestion counts as accepting it.
+        const previousById = new Map(present.boxes.map((box) => [box.id, box]));
+        let meta = present.meta;
+        for (const box of next) {
+          const previous = previousById.get(box.id);
+          if (previous && meta[box.id] && !sameGeometry(previous, box)) {
+            meta = withoutSuggestion(meta, box.id);
+          }
         }
-      }
-      commitBoxes(next);
+        return { boxes: next, meta };
+      });
     },
-    [acceptSuggestion, boxes, commitBoxes, suggestionMeta],
+    [commit],
   );
 
+  const canUndo = editor.past.length > 0;
+  const canRedo = editor.future.length > 0;
+
   const handleUndo = useCallback(() => {
-    setPast((history) => {
-      if (history.length === 0) {
-        return history;
-      }
-      const previous = history[history.length - 1];
-      setFuture((redoStack) => [boxes, ...redoStack].slice(0, MAX_HISTORY));
-      setBoxes(previous);
-      setSelectedBoxId(null);
-      return history.slice(0, -1);
-    });
-  }, [boxes]);
+    if (!canUndo) return;
+    dispatchEditor({ type: "undo" });
+    setSelectedBoxId(null);
+  }, [canUndo]);
 
   const handleRedo = useCallback(() => {
-    setFuture((redoStack) => {
-      if (redoStack.length === 0) {
-        return redoStack;
-      }
-      const [next, ...rest] = redoStack;
-      setPast((history) => [...history, boxes].slice(-MAX_HISTORY));
-      setBoxes(next);
-      setSelectedBoxId(null);
-      return rest;
-    });
-  }, [boxes]);
+    if (!canRedo) return;
+    dispatchEditor({ type: "redo" });
+    setSelectedBoxId(null);
+  }, [canRedo]);
+
+  const removeBox = useCallback(
+    (boxId: string) =>
+      commit((present) =>
+        present.boxes.some((box) => box.id === boxId)
+          ? {
+              boxes: present.boxes.filter((box) => box.id !== boxId),
+              meta: present.meta,
+            }
+          : present,
+      ),
+    [commit],
+  );
 
   // Deleting a suggestion rejects it; undo brings it back as a suggestion.
   const handleDelete = useCallback(() => {
     if (!selectedBoxId) {
       return;
     }
-    commitBoxes(boxes.filter((box) => box.id !== selectedBoxId));
+    removeBox(selectedBoxId);
     setSelectedBoxId(null);
-  }, [boxes, commitBoxes, selectedBoxId]);
+  }, [removeBox, selectedBoxId]);
 
   const handleDeleteBox = useCallback(
     (boxId: string) => {
-      commitBoxes(boxes.filter((box) => box.id !== boxId));
-      if (selectedBoxId === boxId) setSelectedBoxId(null);
+      removeBox(boxId);
+      setSelectedBoxId((current) => (current === boxId ? null : current));
     },
-    [boxes, commitBoxes, selectedBoxId],
+    [removeBox],
   );
 
-  const handleAcceptAll = useCallback(() => setSuggestionMeta({}), []);
+  const handleAcceptAll = useCallback(
+    () =>
+      commit((present) =>
+        hasPendingSuggestions(present) ? { boxes: present.boxes, meta: {} } : present,
+      ),
+    [commit],
+  );
 
   const handleRejectAll = useCallback(() => {
-    commitBoxes(boxes.filter((box) => !suggestionMeta[box.id]));
+    commit((present) =>
+      hasPendingSuggestions(present)
+        ? {
+            boxes: present.boxes.filter((box) => !present.meta[box.id]),
+            meta: present.meta,
+          }
+        : present,
+    );
     setSelectedBoxId(null);
-  }, [boxes, commitBoxes, suggestionMeta]);
+  }, [commit]);
+
+  /** Move a box within the boxes array (later = drawn on top). */
+  const moveBoxTo = useCallback(
+    (boxId: string, targetIndex: (currentIndex: number, lastIndex: number) => number) =>
+      commit((present) => {
+        const currentIndex = present.boxes.findIndex((box) => box.id === boxId);
+        if (currentIndex < 0) return present;
+        const next = [...present.boxes];
+        const [box] = next.splice(currentIndex, 1);
+        const index = Math.min(Math.max(targetIndex(currentIndex, next.length), 0), next.length);
+        if (index === currentIndex) return present;
+        next.splice(index, 0, box);
+        return { boxes: next, meta: present.meta };
+      }),
+    [commit],
+  );
 
   const handleMoveBox = useCallback(
     (
       boxId: string,
       action: "front" | "forward" | "back" | "backward",
-    ) => {
-      const currentIndex = boxes.findIndex((box) => box.id === boxId);
-      if (currentIndex < 0) return;
-      const next = [...boxes];
-      const [box] = next.splice(currentIndex, 1);
-      const nextIndex =
+    ) =>
+      moveBoxTo(boxId, (currentIndex, lastIndex) =>
         action === "front"
-          ? next.length
+          ? lastIndex
           : action === "back"
             ? 0
             : action === "forward"
-              ? Math.min(currentIndex + 1, next.length)
-              : Math.max(currentIndex - 1, 0);
-      next.splice(nextIndex, 0, box);
-      commitBoxes(next);
-    },
-    [boxes, commitBoxes],
+              ? currentIndex + 1
+              : currentIndex - 1,
+      ),
+    [moveBoxTo],
   );
 
   /** Drag-and-drop from the Layers list: move a box to `toIndex` (later = on top). */
   const handleReorderBox = useCallback(
-    (boxId: string, toIndex: number) => {
-      const currentIndex = boxes.findIndex((box) => box.id === boxId);
-      if (currentIndex < 0) return;
-      const next = [...boxes];
-      const [box] = next.splice(currentIndex, 1);
-      const targetIndex = Math.min(Math.max(toIndex, 0), next.length);
-      if (targetIndex === currentIndex) return;
-      next.splice(targetIndex, 0, box);
-      commitBoxes(next);
-    },
-    [boxes, commitBoxes],
+    (boxId: string, toIndex: number) => moveBoxTo(boxId, () => toIndex),
+    [moveBoxTo],
   );
 
   // The copy is a new accepted box (never in suggestionMeta), placed directly
   // above its source so it is drawn on top of it, and kept inside the image.
   const handleDuplicateBox = useCallback(
     (boxId: string) => {
-      const index = boxes.findIndex((box) => box.id === boxId);
-      if (index < 0) return;
-      const source = boxes[index];
-      const copy: BoundingBox = {
-        ...source,
-        id: `box-${crypto.randomUUID()}`,
-        x: duplicateOffset(source.x, source.width, imageSize?.width ?? null),
-        y: duplicateOffset(source.y, source.height, imageSize?.height ?? null),
-      };
-      const next = [...boxes];
-      next.splice(index + 1, 0, copy);
-      commitBoxes(next);
-      setSelectedBoxId(copy.id);
+      if (!boxes.some((box) => box.id === boxId)) return;
+      const copyId = `box-${crypto.randomUUID()}`;
+      commit((present) => {
+        const index = present.boxes.findIndex((box) => box.id === boxId);
+        if (index < 0) return present;
+        const source = present.boxes[index];
+        const copy: BoundingBox = {
+          ...source,
+          id: copyId,
+          x: duplicateOffset(source.x, source.width, imageSize?.width ?? null),
+          y: duplicateOffset(source.y, source.height, imageSize?.height ?? null),
+        };
+        const next = [...present.boxes];
+        next.splice(index + 1, 0, copy);
+        return { boxes: next, meta: present.meta };
+      });
+      setSelectedBoxId(copyId);
       setTool("select");
     },
-    [boxes, commitBoxes, imageSize],
+    [boxes, commit, imageSize],
   );
 
   const handleToggleFullscreen = useCallback(() => {
@@ -775,7 +1007,16 @@ export function AnnotationWorkspace({
       setIsOverlayFullscreen(true);
       return;
     }
-    root.requestFullscreen().catch(() => setIsOverlayFullscreen(true));
+    // Some embedded browsers neither enter fullscreen nor reject the request
+    // (or enter and immediately leave). If the document is not fullscreen
+    // shortly after asking, fill the viewport with the overlay instead.
+    const fallbackTimer = window.setTimeout(() => {
+      if (document.fullscreenElement !== root) setIsOverlayFullscreen(true);
+    }, FULLSCREEN_FALLBACK_MS);
+    root.requestFullscreen().catch(() => {
+      window.clearTimeout(fallbackTimer);
+      setIsOverlayFullscreen(true);
+    });
   }, [isFullscreen]);
 
   // Re-fit the image once the canvas has been resized for the new mode. Two
@@ -803,12 +1044,18 @@ export function AnnotationWorkspace({
       >,
     ) => {
       // Editing a suggestion's label or coordinates counts as accepting it.
-      acceptSuggestion(boxId);
-      commitBoxes(
-        boxes.map((box) => (box.id === boxId ? { ...box, ...patch } : box)),
+      commit((present) =>
+        present.boxes.some((box) => box.id === boxId)
+          ? {
+              boxes: present.boxes.map((box) =>
+                box.id === boxId ? { ...box, ...patch } : box,
+              ),
+              meta: withoutSuggestion(present.meta, boxId),
+            }
+          : present,
       );
     },
-    [acceptSuggestion, boxes, commitBoxes],
+    [commit],
   );
 
   /**
@@ -896,7 +1143,12 @@ export function AnnotationWorkspace({
       return persistAnnotations(
         currentImage.id,
         accepted,
-        buildResolutions(nextBoxes, nextMeta, suggestionSets),
+        buildResolutions(
+          nextBoxes,
+          nextMeta,
+          suggestionSets,
+          shownSuggestionIdsRef.current,
+        ),
         flash,
       );
     },
@@ -906,6 +1158,32 @@ export function AnnotationWorkspace({
   const handleSave = useCallback(async () => {
     await flushSave(boxes, suggestionMeta, true);
   }, [boxes, flushSave, suggestionMeta]);
+
+  const handleDeleteLabel = useCallback(
+    async (labelId: string) => {
+      const name = labels.find((label) => label.id === labelId)?.name ?? "This label";
+      // This image's unsaved boxes are invisible to the server check below.
+      const localUses = boxes.filter((box) => box.labelId === labelId).length;
+      if (localUses > 0) {
+        throw new Error(
+          `“${name}” is used by ${localUses} ${localUses === 1 ? "box" : "boxes"} on this image. Relabel or delete them first.`,
+        );
+      }
+      // Let the server see this image's latest boxes (e.g. ones just removed).
+      if (hydrated && autoSaveTimerRef.current !== null) {
+        await flushSave(boxes, suggestionMeta, false);
+      }
+      await saveQueueRef.current;
+      const result = await deleteLabel(project.id, labelId);
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+      deletedLabelIdsRef.current.add(labelId);
+      setLabels((current) => current.filter((label) => label.id !== labelId));
+      setSelectedLabelId((current) => (current === labelId ? "" : current));
+    },
+    [boxes, flushSave, hydrated, labels, project.id, suggestionMeta],
+  );
 
   const navigateToImage = useCallback(
     (nextIndex: number) => {
@@ -928,7 +1206,12 @@ export function AnnotationWorkspace({
     if (!hydrated || !currentImage) return;
     saveAnnotations(project.id, currentImage.id, acceptedBoxes);
 
-    const resolutions = buildResolutions(boxes, suggestionMeta, suggestionSets);
+    const resolutions = buildResolutions(
+      boxes,
+      suggestionMeta,
+      suggestionSets,
+      shownSuggestionIdsRef.current,
+    );
     if (
       JSON.stringify(acceptedBoxes) === lastSavedSignatureRef.current &&
       JSON.stringify(resolutions) === lastResolvedSignatureRef.current
@@ -974,13 +1257,14 @@ export function AnnotationWorkspace({
   }, [currentImage?.id, images, reviewQueue]);
 
   /**
-   * Save this image's review with `nextMeta`, then open the next image to
-   * review. Runs as a transition so `isAdvancingReview` covers the save and
-   * the navigation it starts.
+   * Save this image's review (accepting every pending suggestion first when
+   * `acceptAll`), then open the next image to review. Runs as a transition so
+   * `isAdvancingReview` covers the save and the navigation it starts.
    */
   const saveAndReviewNext = useCallback(
-    (nextMeta: SuggestionMeta) => {
-      setSuggestionMeta(nextMeta);
+    (acceptAll: boolean) => {
+      const nextMeta = acceptAll ? {} : suggestionMeta;
+      if (acceptAll) handleAcceptAll();
       startAdvancingReview(async () => {
         if (!(await flushSave(boxes, nextMeta, !nextReviewImageId))) return;
         if (nextReviewImageId) {
@@ -988,7 +1272,7 @@ export function AnnotationWorkspace({
         }
       });
     },
-    [boxes, flushSave, nextReviewImageId, project.id, router],
+    [boxes, flushSave, handleAcceptAll, nextReviewImageId, project.id, router, suggestionMeta],
   );
 
   /**
@@ -1010,8 +1294,10 @@ export function AnnotationWorkspace({
 
   const handleJobProgress = useCallback(
     (job: AnnotationJobProgress) => {
-      // Ignore a late update from a run that is no longer the tracked one.
-      if (parseTrackedJob(readTrackedJobRaw(project.id))?.id === job.id) {
+      // Ignore updates from a run that is no longer tracked, and older
+      // progress (e.g. a page shown again with its stale chip state).
+      const stored = parseTrackedJob(readTrackedJobRaw(project.id));
+      if (stored?.id === job.id && isNewerJobProgress(job, stored)) {
         writeTrackedJob(project.id, job);
       }
     },
@@ -1073,17 +1359,44 @@ export function AnnotationWorkspace({
     selectedBoxId && suggestionMeta[selectedBoxId],
   );
 
+  // Review card visibility for this image: re-expanded whenever suggestions
+  // it has not shown yet appear (a new AI run, or undo restoring one).
+  const [reviewCardView, setReviewCardView] = useState<
+    "expanded" | "collapsed" | "dismissed"
+  >("expanded");
+  const reviewSuggestionIdsKey = reviewSuggestions
+    .map((suggestion) => suggestion.id)
+    .join("\n");
+  const [syncedReviewSuggestionIdsKey, setSyncedReviewSuggestionIdsKey] =
+    useState(reviewSuggestionIdsKey);
+  if (reviewSuggestionIdsKey !== syncedReviewSuggestionIdsKey) {
+    const previousIds = new Set(
+      syncedReviewSuggestionIdsKey ? syncedReviewSuggestionIdsKey.split("\n") : [],
+    );
+    setSyncedReviewSuggestionIdsKey(reviewSuggestionIdsKey);
+    if (reviewSuggestions.some((suggestion) => !previousIds.has(suggestion.id))) {
+      setReviewCardView("expanded");
+    }
+  }
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      const isEditing =
-        target?.tagName === "INPUT" ||
-        target?.tagName === "TEXTAREA" ||
-        target?.isContentEditable;
-      if (isEditing) return;
-      // Keys pressed inside an open dialog, sheet, menu or select belong to
-      // it, not to the canvas (e.g. Delete while reading the Shortcuts dialog).
-      if (target?.closest?.('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) {
+      // Keys typed into a form control (including a Select trigger, whose
+      // typeahead also uses letters) or pressed inside an open dialog, sheet,
+      // menu or listbox belong to it, not to the canvas.
+      if (
+        target?.isContentEditable ||
+        target?.closest?.(
+          'input, textarea, select, [role="combobox"], [role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]',
+        )
+      ) {
+        return;
+      }
+
+      // Overlay full screen (no browser fullscreen to exit with Escape).
+      if (event.key === "Escape" && isOverlayFullscreen && !isDocumentFullscreen) {
+        setIsOverlayFullscreen(false);
         return;
       }
 
@@ -1122,29 +1435,42 @@ export function AnnotationWorkspace({
     handleDelete,
     handleRedo,
     handleUndo,
+    isDocumentFullscreen,
+    isOverlayFullscreen,
     pendingCount,
     selectedBoxId,
     selectedIsSuggestion,
   ]);
 
   // Single-image AI results join the canvas as suggestions to accept, so
-  // auto-save never persists unreviewed predictions.
+  // auto-save never persists unreviewed predictions. Functional update: the
+  // dialog calls this after awaiting the detector.
   const handleAiDetected = useCallback(
     (detected: AnnotationSuggestion[]) => {
       if (detected.length === 0) {
         return;
       }
-      const meta: SuggestionMeta = {};
+      const detectedMeta: SuggestionMeta = {};
       const detectedBoxes = detected.map(({ confidence, ...box }) => {
-        meta[box.id] = { itemId: null, confidence };
+        detectedMeta[box.id] = { itemId: null, confidence };
         return box;
       });
-      setSuggestionMeta((current) => ({ ...current, ...meta }));
-      // Latest boxes: the dialog calls this after awaiting the detector.
-      commitBoxes([...boxesRef.current, ...detectedBoxes]);
+      commit((present) => ({
+        boxes: [...present.boxes, ...detectedBoxes],
+        meta: { ...present.meta, ...detectedMeta },
+      }));
     },
-    [commitBoxes],
+    [commit],
   );
+
+  const handleCanvasImageError = useCallback(() => {
+    setCanvasSource((current) => (current.failed ? current : { ...current, failed: true }));
+    // Re-sign the URLs once; the swap happens when a different URL arrives.
+    if (!imageRecoveryRequestedRef.current) {
+      imageRecoveryRequestedRef.current = true;
+      router.refresh();
+    }
+  }, [router]);
 
   if (!currentImage) {
     return (
@@ -1161,6 +1487,40 @@ export function AnnotationWorkspace({
     ? "h-[max(420px,calc(100dvh_-_17.5rem))]"
     : "h-[510px]";
 
+  // From xl the expanded card floats over the Labels/Layers panel (below
+  // Save/Export, which stay usable); the covered panel is inert so keyboard
+  // focus cannot reach it. Minimised, it is a slim row in normal flow. Below
+  // xl it sits in normal flow above the canvas.
+  const showReviewCard =
+    (pendingCount > 0 || otherImagesToReview > 0) && reviewCardView !== "dismissed";
+  const reviewCardOverlaysPanel = showReviewCard && isXl && reviewCardView === "expanded";
+  const reviewCard = showReviewCard ? (
+    <SuggestionReviewCard
+      suggestions={reviewSuggestions}
+      labels={labels}
+      selectedBoxId={selectedBoxId}
+      otherImagesToReview={otherImagesToReview}
+      isSaving={isAdvancingReview}
+      error={saveError}
+      collapsed={reviewCardView === "collapsed"}
+      onCollapsedChange={(collapsed) =>
+        setReviewCardView(collapsed ? "collapsed" : "expanded")
+      }
+      onDismiss={() => setReviewCardView("dismissed")}
+      onSelect={(boxId) => {
+        setSelectedBoxId(boxId);
+        setTool("select");
+      }}
+      onChangeLabel={handleRelabelSuggestion}
+      onCreateLabel={handleCreateLabel}
+      onDeleteSelected={handleDeleteBox}
+      onAcceptAll={handleAcceptAll}
+      onRejectAll={handleRejectAll}
+      onAcceptAllAndNext={() => saveAndReviewNext(true)}
+      onNextToReview={() => saveAndReviewNext(false)}
+    />
+  ) : null;
+
   return (
     <div
       className={cn(
@@ -1174,8 +1534,8 @@ export function AnnotationWorkspace({
         imageCount={images.length}
         tool={tool}
         zoom={zoom}
-        canUndo={past.length > 0}
-        canRedo={future.length > 0}
+        canUndo={canUndo}
+        canRedo={canRedo}
         canDelete={Boolean(selectedBoxId)}
         isFullscreen={isFullscreen}
         onPrev={() => navigateToImage(imageIndex - 1)}
@@ -1208,35 +1568,9 @@ export function AnnotationWorkspace({
       />
 
       <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_290px] xl:items-start">
-        {/* Review card: from xl it shares the right column's grid cell and
-            floats over Save/Export and the Labels panel (Figma); below xl it
-            sits in normal flow above the canvas. Only the card (or its
-            minimised pill) takes pointer events, not the empty wrapper. */}
-        {pendingCount > 0 || otherImagesToReview > 0 ? (
-          <div className="pointer-events-none relative z-20 min-w-0 xl:col-start-2 xl:row-start-1 [&>*]:pointer-events-auto">
-            <SuggestionReviewCard
-              suggestions={reviewSuggestions}
-              labels={labels}
-              selectedBoxId={selectedBoxId}
-              otherImagesToReview={otherImagesToReview}
-              isSaving={isAdvancingReview}
-              error={saveError}
-              onSelect={(boxId) => {
-                setSelectedBoxId(boxId);
-                setTool("select");
-              }}
-              onChangeLabel={handleRelabelSuggestion}
-              onCreateLabel={handleCreateLabel}
-              onDeleteSelected={handleDeleteBox}
-              onAcceptAll={handleAcceptAll}
-              onRejectAll={handleRejectAll}
-              onAcceptAllAndNext={() => saveAndReviewNext({})}
-              onNextToReview={() => saveAndReviewNext(suggestionMeta)}
-            />
-          </div>
-        ) : null}
+        <div className="min-w-0 space-y-4">
+          {!isXl ? reviewCard : null}
 
-        <div className="min-w-0 space-y-4 xl:col-start-1 xl:row-start-1">
           <div
             className={cn(
               "overflow-hidden rounded-xl border bg-muted/30 shadow-sm",
@@ -1246,7 +1580,7 @@ export function AnnotationWorkspace({
             {hydrated ? (
               <AnnotationCanvas
                 key={currentImage.id}
-                imageUrl={currentImage.imageUrl ?? currentImage.thumbnailUrl}
+                imageUrl={canvasSource.url}
                 fileName={currentImage.fileName}
                 tool={tool}
                 zoom={zoom}
@@ -1266,6 +1600,7 @@ export function AnnotationWorkspace({
                 suggestionNumbers={suggestionNumbers}
                 fitNonce={fitToken}
                 onImageSizeChange={setImageSize}
+                onImageError={handleCanvasImageError}
                 className={canvasHeightClass}
               />
             ) : (
@@ -1285,7 +1620,9 @@ export function AnnotationWorkspace({
               <ChevronLeft className="size-4" />
             </Button>
             <div className="grid min-w-0 flex-1 auto-cols-[110px] grid-flow-col gap-3 overflow-x-auto py-1">
-              {images.map((image, index) => (
+              {images.map((image, index) => {
+                const thumbnailUrl = thumbnailUrls[image.id] ?? image.thumbnailUrl;
+                return (
                 <button
                   type="button"
                   key={image.id}
@@ -1295,7 +1632,7 @@ export function AnnotationWorkspace({
                 >
                   <span
                     className={`relative block h-16 rounded-md border bg-muted bg-cover bg-center transition ${image.id === currentImage.id ? "border-primary ring-2 ring-primary/20" : "hover:border-primary/50"}`}
-                    style={image.thumbnailUrl ? { backgroundImage: `url(${image.thumbnailUrl})` } : undefined}
+                    style={thumbnailUrl ? { backgroundImage: `url(${thumbnailUrl})` } : undefined}
                   >
                     {reviewSet.has(image.id) ? (
                       <span
@@ -1306,7 +1643,8 @@ export function AnnotationWorkspace({
                   </span>
                   <span className="mt-1 block truncate text-[10px]">{image.fileName}</span>
                 </button>
-              ))}
+                );
+              })}
             </div>
             <Button type="button" variant="ghost" size="icon" onClick={() => navigateToImage(imageIndex + 1)} disabled={imageIndex >= images.length - 1} aria-label="Next thumbnails">
               <ChevronRight className="size-4" />
@@ -1314,7 +1652,7 @@ export function AnnotationWorkspace({
           </div>
         </div>
 
-        <div className="space-y-4 xl:col-start-2 xl:row-start-1">
+        <div className="flex min-w-0 flex-col gap-4">
           <div className="grid grid-cols-2 gap-2">
             <Button type="button" onClick={handleSave} disabled={isSaving} className="rounded-lg">
               {saveFlash ? <CheckCircle2 className="size-4" /> : null}
@@ -1337,6 +1675,13 @@ export function AnnotationWorkspace({
               {saveError}
             </p>
           ) : null}
+          <div className="relative flex flex-col gap-4">
+          {isXl && reviewCard ? (
+            <div className={cn(reviewCardOverlaysPanel && "absolute inset-x-0 top-0 z-20")}>
+              {reviewCard}
+            </div>
+          ) : null}
+          <div inert={reviewCardOverlaysPanel}>
           <AnnotationSidePanel
             labels={labels}
             boxes={boxes}
@@ -1360,6 +1705,8 @@ export function AnnotationWorkspace({
             onAcceptSuggestion={acceptSuggestion}
             onRejectSuggestion={handleDeleteBox}
           />
+          </div>
+          </div>
         </div>
       </div>
 
@@ -1380,7 +1727,9 @@ export function AnnotationWorkspace({
         <div className="flex flex-wrap items-center justify-end gap-2">
           {trackedJob ? (
             <AiJobStatusChip
-              key={trackedJob.id}
+              // Remount when the run finishes, so a chip whose hook state is
+              // older (e.g. a cached page shown again) never polls a done run.
+              key={`${trackedJob.id}:${isJobActive(trackedJob) ? "active" : "done"}`}
               job={trackedJob}
               onProgress={handleJobProgress}
               onUpdates={handleJobUpdates}

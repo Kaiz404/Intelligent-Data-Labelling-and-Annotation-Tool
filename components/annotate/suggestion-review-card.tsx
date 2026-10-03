@@ -10,6 +10,7 @@ import {
   Plus,
   Sparkles,
   Trash2,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,6 +36,11 @@ type SuggestionReviewCardProps = {
   otherImagesToReview: number;
   isSaving: boolean;
   error: string | null;
+  /** Minimised to a slim row; owned by the parent, which also lays it out. */
+  collapsed: boolean;
+  onCollapsedChange: (collapsed: boolean) => void;
+  /** Hide the review for this image (the suggestions stay on the canvas). */
+  onDismiss: () => void;
   onSelect: (boxId: string) => void;
   /** Relabel a suggestion; the box stays a pending suggestion. */
   onChangeLabel: (boxId: string, labelId: string) => void;
@@ -59,10 +65,10 @@ const primaryButtonClass =
   "w-full bg-violet-600 text-white hover:bg-violet-700 focus-visible:ring-violet-500/40";
 
 /**
- * Floating review card for AI suggestions (dashed boxes): step through
- * detections, relabel or delete one, then add or discard the rest. Keeps the
- * cross-image review queue ("Add & review next"). Placement is up to the
- * parent; the card can be minimised to a pill to get it out of the way.
+ * Review card for AI suggestions (dashed boxes): step through detections,
+ * relabel or delete one, then add or discard the rest. Keeps the cross-image
+ * review queue ("Add & review next"). Placement and the minimised/dismissed
+ * state are up to the parent; minimised, it renders as a slim row.
  */
 export function SuggestionReviewCard({
   suggestions,
@@ -71,6 +77,9 @@ export function SuggestionReviewCard({
   otherImagesToReview,
   isSaving,
   error,
+  collapsed,
+  onCollapsedChange,
+  onDismiss,
   onSelect,
   onChangeLabel,
   onCreateLabel,
@@ -80,54 +89,80 @@ export function SuggestionReviewCard({
   onAcceptAllAndNext,
   onNextToReview,
 }: SuggestionReviewCardProps) {
-  const [collapsed, setCollapsed] = useState(false);
   const pendingCount = suggestions.length;
+  const expandButtonRef = useRef<HTMLButtonElement>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  /** Set when our own minimise/expand button moved focus out of the DOM. */
+  const focusAfterToggleRef = useRef(false);
 
-  // Re-open when new suggestions arrive (a new AI run or another image).
-  const suggestionKey = suggestions.map((suggestion) => suggestion.id).join("\n");
-  const [previousKey, setPreviousKey] = useState(suggestionKey);
-  if (suggestionKey !== previousKey) {
-    const previousIds = new Set(previousKey ? previousKey.split("\n") : []);
-    setPreviousKey(suggestionKey);
-    if (suggestions.some((suggestion) => !previousIds.has(suggestion.id))) {
-      setCollapsed(false);
-    }
-  }
+  useEffect(() => {
+    if (!focusAfterToggleRef.current) return;
+    focusAfterToggleRef.current = false;
+    (collapsed ? expandButtonRef.current : sectionRef.current)?.focus();
+  }, [collapsed]);
+
+  const toggle = (next: boolean) => {
+    focusAfterToggleRef.current = true;
+    onCollapsedChange(next);
+  };
 
   if (pendingCount === 0 && otherImagesToReview === 0) {
     return null;
   }
 
-  if (collapsed) {
-    return (
-      <button
-        type="button"
-        aria-expanded={false}
-        onClick={() => setCollapsed(false)}
-        className="ml-auto flex w-fit items-center gap-2 rounded-full bg-violet-600 px-3.5 py-2 text-sm font-medium text-white shadow-lg transition-colors outline-none hover:bg-violet-700 focus-visible:ring-[3px] focus-visible:ring-violet-500/40"
-      >
-        <Sparkles className="size-4" aria-hidden />
-        {pendingCount > 0
-          ? `Review ${plural(pendingCount, "suggestion")}`
-          : `${plural(otherImagesToReview, "image")} to review`}
-        <ChevronDown className="size-4" aria-hidden />
-      </button>
-    );
-  }
-
-  const minimiseButton = (
+  const dismissButton = (
     <Button
       type="button"
       variant="ghost"
       size="icon-xs"
-      className="-mt-1 -mr-1 shrink-0 text-muted-foreground"
-      aria-expanded
-      aria-label="Minimise AI review"
-      title="Minimise"
-      onClick={() => setCollapsed(true)}
+      className="shrink-0 text-muted-foreground"
+      aria-label="Dismiss AI review for this image"
+      title="Dismiss for this image"
+      onClick={onDismiss}
     >
-      <ChevronUp />
+      <X />
     </Button>
+  );
+
+  if (collapsed) {
+    return (
+      <div className="flex items-center gap-1 rounded-lg border border-violet-200 bg-violet-50 p-1 dark:border-violet-900 dark:bg-violet-950/40">
+        <button
+          ref={expandButtonRef}
+          type="button"
+          aria-expanded={false}
+          onClick={() => toggle(false)}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1 text-left text-sm font-medium text-violet-800 transition-colors outline-none hover:bg-violet-100 focus-visible:ring-[3px] focus-visible:ring-violet-500/40 dark:text-violet-200 dark:hover:bg-violet-900/40"
+        >
+          <Sparkles className="size-4 shrink-0" aria-hidden />
+          <span className="truncate">
+            {pendingCount > 0
+              ? `Review ${plural(pendingCount, "suggestion")}`
+              : `${plural(otherImagesToReview, "image")} to review`}
+          </span>
+          <ChevronDown className="ml-auto size-4 shrink-0" aria-hidden />
+        </button>
+        {dismissButton}
+      </div>
+    );
+  }
+
+  const minimiseButton = (
+    <div className="-mt-1 -mr-1 flex shrink-0 items-center">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        className="text-muted-foreground"
+        aria-expanded
+        aria-label="Minimise AI review"
+        title="Minimise"
+        onClick={() => toggle(true)}
+      >
+        <ChevronUp />
+      </Button>
+      {dismissButton}
+    </div>
   );
 
   const errorMessage = error ? (
@@ -139,8 +174,10 @@ export function SuggestionReviewCard({
   if (pendingCount === 0) {
     return (
       <section
+        ref={sectionRef}
+        tabIndex={-1}
         aria-label="Review AI suggestions"
-        className="w-full space-y-3 rounded-xl border bg-card p-4 text-card-foreground shadow-lg"
+        className="w-full space-y-3 rounded-xl border bg-card p-4 text-card-foreground shadow-lg outline-none"
       >
         <div className="flex items-start gap-2">
           <Sparkles className="mt-0.5 size-4 shrink-0 text-violet-600" aria-hidden />
@@ -193,8 +230,10 @@ export function SuggestionReviewCard({
 
   return (
     <section
+      ref={sectionRef}
+      tabIndex={-1}
       aria-label="Review AI suggestions"
-      className="w-full space-y-3 rounded-xl border bg-card p-4 text-card-foreground shadow-lg"
+      className="w-full space-y-3 rounded-xl border bg-card p-4 text-card-foreground shadow-lg outline-none"
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">

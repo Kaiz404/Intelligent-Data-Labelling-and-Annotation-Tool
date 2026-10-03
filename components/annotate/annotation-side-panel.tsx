@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, BringToFront, Check, Copy, GripVertical, MoreVertical, Pencil, Plus, Search, SendToBack, Sparkles, SquarePen, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -133,6 +134,8 @@ export function AnnotationSidePanel({ labels, boxes, selectedLabelId, selectedBo
   const [newLabelName, setNewLabelName] = useState("");
   const [isCreatingLabel, setIsCreatingLabel] = useState(false);
   const [labelError, setLabelError] = useState<string | null>(null);
+  const [labelPendingDelete, setLabelPendingDelete] = useState<AnnotationLabel | null>(null);
+  const [isDeletingLabel, setIsDeletingLabel] = useState(false);
   const [editingLabelId, setEditingLabelId] = useState<string | null>(null);
   const [renamingBoxId, setRenamingBoxId] = useState<string | null>(null);
   const [layerError, setLayerError] = useState<string | null>(null);
@@ -202,12 +205,17 @@ export function AnnotationSidePanel({ labels, boxes, selectedLabelId, selectedBo
     }
   };
 
-  const handleDeleteLabel = async (labelId: string) => {
+  const confirmDeleteLabel = async () => {
+    if (!labelPendingDelete) return;
+    setIsDeletingLabel(true);
     setLabelError(null);
     try {
-      await onDeleteLabel(labelId);
+      await onDeleteLabel(labelPendingDelete.id);
     } catch (error) {
       setLabelError(error instanceof Error ? error.message : "Could not delete label.");
+    } finally {
+      setIsDeletingLabel(false);
+      setLabelPendingDelete(null);
     }
   };
 
@@ -307,7 +315,7 @@ export function AnnotationSidePanel({ labels, boxes, selectedLabelId, selectedBo
                           <span className="ml-auto tabular-nums text-muted-foreground">{count}</span>
                         </button>
                         <Button type="button" variant="ghost" size="icon" aria-label={`Rename ${label.name}`} onClick={() => { setLabelError(null); setEditingLabelId(label.id); }} className="size-6 shrink-0 text-muted-foreground hover:text-foreground"><Pencil className="size-3.5" /></Button>
-                        <Button type="button" variant="ghost" size="icon" aria-label={`Delete ${label.name}`} onClick={() => handleDeleteLabel(label.id)} className="size-6 shrink-0 text-muted-foreground hover:text-destructive"><Trash2 className="size-3.5" /></Button>
+                        <Button type="button" variant="ghost" size="icon" aria-label={`Delete ${label.name}`} onClick={() => { setLabelError(null); setLabelPendingDelete(label); }} className="size-6 shrink-0 text-muted-foreground hover:text-destructive"><Trash2 className="size-3.5" /></Button>
                       </>
                     )}
                   </li>
@@ -402,11 +410,12 @@ export function AnnotationSidePanel({ labels, boxes, selectedLabelId, selectedBo
       <section className="space-y-3 rounded-xl border bg-card p-3 shadow-sm" aria-label="Bounding box properties">
         <h2 className="text-sm font-semibold">Properties</h2>
         {selectedBox && selectedConfidence !== undefined ? (
-          <div className="flex items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 p-2 text-xs dark:border-violet-900 dark:bg-violet-950/40">
-            <Sparkles className="size-3.5 shrink-0 text-violet-600" />
-            <span className="min-w-0 flex-1">AI suggestion · {Math.round(selectedConfidence * 100)}% confident</span>
-            <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-emerald-700 hover:text-emerald-700" onClick={() => onAcceptSuggestion?.(selectedBox.id)}><Check className="size-3.5" />Accept</Button>
-            <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-destructive hover:text-destructive" onClick={() => onRejectSuggestion?.(selectedBox.id)}><X className="size-3.5" />Reject</Button>
+          <div className="space-y-2 rounded-lg border border-violet-200 bg-violet-50 p-2 text-xs dark:border-violet-900 dark:bg-violet-950/40">
+            <p className="flex items-center gap-1.5 whitespace-nowrap"><Sparkles className="size-3.5 shrink-0 text-violet-600" />AI suggestion · {Math.round(selectedConfidence * 100)}% confident</p>
+            <div className="grid grid-cols-2 gap-2">
+              <Button type="button" size="sm" variant="outline" className="h-7 bg-background text-emerald-700 hover:text-emerald-700" onClick={() => onAcceptSuggestion?.(selectedBox.id)}><Check className="size-3.5" />Accept</Button>
+              <Button type="button" size="sm" variant="outline" className="h-7 bg-background text-destructive hover:text-destructive" onClick={() => onRejectSuggestion?.(selectedBox.id)}><X className="size-3.5" />Reject</Button>
+            </div>
           </div>
         ) : null}
         <div className="space-y-1.5">
@@ -430,6 +439,21 @@ export function AnnotationSidePanel({ labels, boxes, selectedLabelId, selectedBo
           </div>
         </div>
       </section>
+
+      <Dialog open={labelPendingDelete !== null} onOpenChange={(open) => {
+        if (!open && !isDeletingLabel) setLabelPendingDelete(null);
+      }}>
+        <DialogContent className="sm:max-w-sm" showCloseButton={!isDeletingLabel}>
+          <DialogHeader>
+            <DialogTitle>Delete label “{labelPendingDelete?.name}”?</DialogTitle>
+            <DialogDescription>The label is removed from this project. Labels still used by boxes cannot be deleted; relabel or delete those boxes first.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" disabled={isDeletingLabel} onClick={() => setLabelPendingDelete(null)}>Cancel</Button>
+            <Button type="button" variant="destructive" disabled={isDeletingLabel} onClick={() => void confirmDeleteLabel()}>{isDeletingLabel ? "Deleting..." : "Delete label"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </aside>
   );
 }

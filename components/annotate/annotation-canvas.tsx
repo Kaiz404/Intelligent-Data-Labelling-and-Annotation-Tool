@@ -49,8 +49,16 @@ type AnnotationCanvasProps = {
   fitNonce?: number;
   /** Natural size (image pixels) of the loaded image, reported once it loads. */
   onImageSizeChange?: (size: { width: number; height: number }) => void;
+  /** The image URL failed to load (e.g. an expired signed URL). */
+  onImageError?: () => void;
   className?: string;
 };
+
+/** Box outline width in screen pixels, independent of zoom. */
+const BOX_STROKE_WIDTH = 2;
+const SELECTED_BOX_STROKE_WIDTH = 2.5;
+/** Screen-pixel gap reserved above a box for its tag (12px text + padding). */
+const TAG_HEIGHT = 22;
 
 function useHtmlImage(url: string | null) {
   const [image, setImage] = useState<HTMLImageElement | null>(null);
@@ -142,6 +150,7 @@ export function AnnotationCanvas({
   suggestionNumbers,
   fitNonce = 0,
   onImageSizeChange,
+  onImageError,
   className,
 }: AnnotationCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -179,6 +188,10 @@ export function AnnotationCanvas({
       onImageSizeChange?.({ width: imageWidth, height: imageHeight });
     }
   }, [imageHeight, imageWidth, onImageSizeChange]);
+
+  useEffect(() => {
+    if (loadFailed) onImageError?.();
+  }, [loadFailed, onImageError]);
 
   const labelById = useMemo(
     () => new Map(labels.map((label) => [label.id, label])),
@@ -287,12 +300,10 @@ export function AnnotationCanvas({
     });
   }, [imageHeight, imageWidth, onZoomChange, size.height, size.width]);
 
+  // Fits once per mount: the workspace keys this component by image ID, so a
+  // new URL for the same image (re-signed after a refresh) keeps the view.
   const hasFittedRef = useRef(false);
   const lastFitNonceRef = useRef(fitNonce);
-
-  useEffect(() => {
-    hasFittedRef.current = false;
-  }, [imageUrl]);
 
   useEffect(() => {
     if (!image || !imageWidth || !imageHeight) {
@@ -656,7 +667,10 @@ export function AnnotationCanvas({
                   width={box.width}
                   height={box.height}
                   stroke={color}
-                  strokeWidth={isSelected ? 2 : 1.5}
+                  // Screen-space stroke (and dash, and hit stroke) so boxes
+                  // stay visible when a large image is zoomed far out.
+                  strokeScaleEnabled={false}
+                  strokeWidth={isSelected ? SELECTED_BOX_STROKE_WIDTH : BOX_STROKE_WIDTH}
                   // Unaccepted AI suggestions are dashed and nearly unfilled.
                   dash={isSuggestion ? [6, 4] : undefined}
                   fill={hexToRgba(
@@ -664,9 +678,8 @@ export function AnnotationCanvas({
                     isSelected ? 0.22 : isSuggestion ? 0.015 : 0.045,
                   )}
                   opacity={selectedBoxId && !isSelected ? 0.58 : 1}
-                  cornerRadius={isSelected ? 2 : 0}
                   shadowColor={color}
-                  shadowBlur={isSelected ? 6 : 0}
+                  shadowBlur={isSelected ? 6 / scale : 0}
                   shadowOpacity={isSelected ? 0.45 : 0}
                   shadowForStrokeEnabled={isSelected}
                   hitStrokeWidth={10}
@@ -698,11 +711,15 @@ export function AnnotationCanvas({
               }
               const confidence = suggestionConfidence?.[box.id];
               const number = suggestionNumbers?.[box.id];
+              // Tags keep a constant screen size: counter-scale by 1/scale and
+              // sit just above the box's top-left (inside it at the image top).
               return (
                 <Label
                   key={`label-${box.id}`}
                   x={box.x}
-                  y={Math.max(box.y - 22, 0)}
+                  y={Math.max(box.y - TAG_HEIGHT / scale, 0)}
+                  scaleX={1 / scale}
+                  scaleY={1 / scale}
                   opacity={selectedBoxId && box.id !== selectedBoxId ? 0.62 : 1}
                   onMouseDown={(event) => {
                     event.cancelBubble = true;
@@ -738,7 +755,8 @@ export function AnnotationCanvas({
                 height={Math.abs(draft.height)}
                 stroke={selectedLabel?.color ?? "#2563eb"}
                 dash={[6, 4]}
-                strokeWidth={2}
+                strokeScaleEnabled={false}
+                strokeWidth={BOX_STROKE_WIDTH}
                 fill={hexToRgba(selectedLabel?.color ?? "#2563eb", 0.12)}
                 listening={false}
               />
@@ -749,6 +767,9 @@ export function AnnotationCanvas({
                 ref={transformerRef}
                 rotateEnabled={false}
                 keepRatio={false}
+                // Size from geometry only: the screen-space stroke must not
+                // leak into resize maths.
+                ignoreStroke
                 borderStroke={selectedBoxColor}
                 borderStrokeWidth={1}
                 anchorStroke={selectedBoxColor}

@@ -173,7 +173,20 @@ export async function renameLabel(
   return data;
 }
 
-export async function deleteLabel(projectId: string, labelId: string) {
+/**
+ * `ok: false` is an expected refusal (the label is still in use), returned
+ * rather than thrown so its message also reaches the client in production.
+ */
+export type DeleteLabelResult = { ok: true } | { ok: false; error: string };
+
+function countLabel(count: number, singular: string, pluralForm: string) {
+  return `${count} ${count === 1 ? singular : pluralForm}`;
+}
+
+export async function deleteLabel(
+  projectId: string,
+  labelId: string,
+): Promise<DeleteLabelResult> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -181,6 +194,54 @@ export async function deleteLabel(projectId: string, labelId: string) {
 
   if (!user) {
     throw new Error("You must be signed in to delete a label.");
+  }
+
+  const { data: label, error: labelError } = await supabase
+    .from("project_labels")
+    .select("id, name")
+    .eq("id", labelId)
+    .eq("project_id", projectId)
+    .maybeSingle();
+
+  if (labelError) {
+    throw new Error(`Could not load the label: ${labelError.message}`);
+  }
+  if (!label) {
+    throw new Error("Label not found or you do not have access.");
+  }
+
+  // Saved boxes reference labels by ID, and saveImageAnnotations rejects
+  // unknown labels: deleting a label in use would break every later save of
+  // those images. Find images whose annotation array contains the label.
+  const { data: usedImages, error: usageError } = await supabase
+    .from("images")
+    .select("annotation")
+    .eq("project_id", projectId)
+    .contains("annotation", JSON.stringify([{ labelId }]));
+
+  if (usageError) {
+    throw new Error(`Could not check where the label is used: ${usageError.message}`);
+  }
+
+  if (usedImages && usedImages.length > 0) {
+    const boxCount = usedImages.reduce((total, image) => {
+      const annotation: unknown = image.annotation;
+      return (
+        total +
+        (Array.isArray(annotation)
+          ? annotation.filter(
+              (box) =>
+                typeof box === "object" &&
+                box !== null &&
+                (box as { labelId?: unknown }).labelId === labelId,
+            ).length
+          : 0)
+      );
+    }, 0);
+    return {
+      ok: false,
+      error: `“${label.name}” is used by ${countLabel(boxCount, "box", "boxes")} in ${countLabel(usedImages.length, "image", "images")}. Relabel or delete them first.`,
+    };
   }
 
   const { error } = await supabase
@@ -193,4 +254,5 @@ export async function deleteLabel(projectId: string, labelId: string) {
     throw new Error(error.message);
   }
 
+  return { ok: true };
 }

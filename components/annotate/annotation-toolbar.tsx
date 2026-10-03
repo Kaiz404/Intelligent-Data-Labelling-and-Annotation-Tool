@@ -91,9 +91,9 @@ export function AnnotationToolbar({ imageIndex, imageCount, tool, zoom, canUndo,
             <DropdownMenuTrigger asChild>
               <Button type="button" aria-label="AI Annotate options" className="h-9 w-8 rounded-none border-l border-white/25 bg-transparent px-0 text-white shadow-none hover:bg-violet-700 data-[state=open]:bg-violet-700"><ChevronDown className="size-4" /></Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuItem onSelect={() => onAiAnnotate("current")}><ImageIcon />Annotate this image</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => onAiAnnotate("range")}><Images />Annotate multiple images…</DropdownMenuItem>
+            <DropdownMenuContent align="end" className="w-max min-w-60">
+              <DropdownMenuItem className="whitespace-nowrap" onSelect={() => onAiAnnotate("current")}><ImageIcon />Annotate this image</DropdownMenuItem>
+              <DropdownMenuItem className="whitespace-nowrap" onSelect={() => onAiAnnotate("range")}><Images />Annotate multiple images…</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
