@@ -2,6 +2,7 @@ import { connection } from "next/server";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatBytes, numberFormatter, toPercent } from "@/lib/format";
+import { fetchRecycleBinProjectIds } from "@/lib/recycle-bin";
 import { getStorageUsage, type StorageUsage } from "@/lib/storage-usage";
 
 function StorageCard({
@@ -59,10 +60,19 @@ export function StorageUsageSkeleton() {
 export async function StorageUsageWidget() {
   await connection();
 
+  // Binned items keep their S3 objects until deleted permanently, so their
+  // project prefixes still count. Any failure (e.g. the Recycle Bin migration
+  // not applied yet) just measures live projects.
+  let binnedProjectIds: string[] = [];
+  try {
+    binnedProjectIds = await fetchRecycleBinProjectIds();
+  } catch (error) {
+    console.error("[storage-usage] Could not load Recycle Bin projects", error);
+  }
+
   let usage: StorageUsage | null = null;
   try {
-    // Recycle Bin project IDs (objects still in S3) can be passed here.
-    usage = await getStorageUsage();
+    usage = await getStorageUsage(binnedProjectIds);
   } catch (error) {
     console.error("[storage-usage] Could not load storage usage", error);
   }

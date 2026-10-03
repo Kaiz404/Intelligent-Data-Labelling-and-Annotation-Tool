@@ -11,7 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { startTransition, useCallback, useEffect, useMemo, useState } from "react";
+import { startTransition, useCallback, useMemo, useState } from "react";
 import { AnnotationExportSheet } from "@/components/annotate/annotation-export-sheet";
 import {
   ImageTransferDialog,
@@ -47,8 +47,9 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { deleteProjectImages } from "@/lib/actions/images";
+import { useNow } from "@/hooks/use-now";
 import { getProjectExportData } from "@/lib/actions/projects";
+import { moveImagesToRecycleBin } from "@/lib/actions/recycle-bin";
 import type { AnnotationLabel } from "@/lib/types/annotations";
 import type { Project, ProjectImage } from "@/lib/types/projects";
 import type { RecentAnnotatedImage } from "@/lib/types/recent-annotations";
@@ -92,20 +93,6 @@ function groupByProject(images: RecentAnnotatedImage[]): ProjectGroup[] {
 
 function errorMessage(cause: unknown, fallback: string) {
   return cause instanceof Error ? cause.message : fallback;
-}
-
-/** Server render time advanced by client-side elapsed time (immune to clock skew). */
-function useNow(serverNow: number) {
-  const [tick, setTick] = useState({ base: serverNow, elapsed: 0 });
-  useEffect(() => {
-    const startedAt = Date.now();
-    const id = window.setInterval(
-      () => setTick({ base: serverNow, elapsed: Date.now() - startedAt }),
-      60_000,
-    );
-    return () => window.clearInterval(id);
-  }, [serverNow]);
-  return serverNow + (tick.base === serverNow ? tick.elapsed : 0);
 }
 
 type RecentAnnotationsClientProps = {
@@ -282,21 +269,21 @@ export function RecentAnnotationsClient({
 
     const deleted: string[] = [];
     try {
-      // deleteProjectImages verifies ownership per project, so run one call per group.
+      // Moving to the Recycle Bin is scoped to one project, so run one call per group.
       for (const group of groupByProject(deleteTargets)) {
         const ids = group.images.map((image) => image.id);
-        await deleteProjectImages(ids, group.projectId);
+        await moveImagesToRecycleBin(group.projectId, ids);
         deleted.push(...ids);
       }
       deselect(deleted);
       setDeleteTargets([]);
       refresh();
     } catch (cause) {
-      const message = errorMessage(cause, "Could not delete the images.");
+      const message = errorMessage(cause, "Could not move the images to the Recycle Bin.");
       if (deleted.length > 0) {
         // Keep the remaining images in the dialog so the user can retry them.
         setDeleteError(
-          `${deleted.length} of ${deleteTargets.length} images were deleted before an error: ${message}`,
+          `${deleted.length} of ${deleteTargets.length} images were moved to the Recycle Bin before an error: ${message}`,
         );
         deselect(deleted);
         setDeleteTargets((current) =>
@@ -314,7 +301,7 @@ export function RecentAnnotationsClient({
   const deleteProjectCount = new Set(deleteTargets.map((image) => image.projectId)).size;
   const deleteSubject =
     deleteTargets.length === 1
-      ? deleteTargets[0].fileName
+      ? `“${deleteTargets[0].fileName}”`
       : `${deleteTargets.length} images`;
   const deleteScope =
     deleteProjectCount > 1
@@ -555,14 +542,12 @@ export function RecentAnnotationsClient({
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>
-              Delete {deleteTargets.length === 1 ? "image" : "images"}?
-            </DialogTitle>
+            <DialogTitle>Move to Recycle Bin?</DialogTitle>
             <DialogDescription>
-              This will permanently delete {deleteSubject} {deleteScope},
-              including {deleteTargets.length === 1 ? "its" : "their"}{" "}
-              annotations. There is no Recycle Bin yet, so this cannot be
-              undone.
+              {deleteSubject} {deleteScope} will be moved to the Recycle Bin
+              with {deleteTargets.length === 1 ? "its" : "their"} annotations.
+              You can restore {deleteTargets.length === 1 ? "it" : "them"} from
+              the Recycle Bin for 30 days.
             </DialogDescription>
           </DialogHeader>
 
@@ -590,9 +575,7 @@ export function RecentAnnotationsClient({
               disabled={isDeleting}
               onClick={() => void handleDelete()}
             >
-              {isDeleting
-                ? "Deleting..."
-                : `Delete ${deleteTargets.length === 1 ? "image" : `${deleteTargets.length} images`}`}
+              {isDeleting ? "Moving..." : "Move to Recycle Bin"}
             </Button>
           </DialogFooter>
         </DialogContent>

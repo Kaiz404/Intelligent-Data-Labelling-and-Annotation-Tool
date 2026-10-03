@@ -3,12 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { fetchProjectImages } from "@/lib/images";
 import { fetchProjectLabels } from "@/lib/labels";
-import {
-  copyImageObject,
-  deleteImageObject,
-  deleteImageObjects,
-  deleteProjectThumbnail,
-} from "@/lib/uploads/s3-server";
+import { copyImageObject, deleteImageObject } from "@/lib/uploads/s3-server";
 import type { BoundingBox } from "@/lib/types/annotations";
 import type { Project } from "@/lib/types/projects";
 import { revalidatePath } from "next/cache";
@@ -445,32 +440,6 @@ export async function transferProjectImages(
   revalidatePath(`/projects/${sourceProjectId}`);
   revalidatePath(`/projects/${targetProjectId}`);
   return { transferred: createdKeys.length };
-}
-
-export async function deleteProject(projectId: string) {
-  const { supabase } = await requireOwnedProject(projectId);
-  const { data: images, error } = await supabase
-    .from("images")
-    .select("object_key")
-    .eq("project_id", projectId);
-  if (error) throw new Error(`Could not load project images: ${error.message}`);
-
-  await deleteImageObjects((images ?? []).map((image) => image.object_key));
-  await deleteProjectThumbnail(projectId);
-  const { error: imageError } = await supabase
-    .from("images")
-    .delete()
-    .eq("project_id", projectId);
-  if (imageError) throw new Error(`Could not delete image records: ${imageError.message}`);
-  await supabase.from("project_labels").delete().eq("project_id", projectId);
-  const { error: projectError } = await supabase
-    .from("projects")
-    .delete()
-    .eq("id", projectId);
-  if (projectError) throw new Error(`Could not delete the project: ${projectError.message}`);
-
-  revalidatePath("/dashboard");
-  revalidatePath("/projects");
 }
 
 export async function getProjectExportData(projectId: string) {

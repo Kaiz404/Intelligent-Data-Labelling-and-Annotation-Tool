@@ -36,7 +36,7 @@ Image annotation workspace for managing projects and annotating image datasets.
 - Root layout metadata title: **"Annotate"**
 - Sidebar brand label: **"SmartAnnoTool"** (SAT logo)
 
-**Product status:** UI is ahead of backend integration. Projects, auth, image metadata, direct S3 image uploads, image-count metrics, per-project labels, durable bounding-box saves, single-image AI Annotate, bulk AI Annotate jobs with a review flow, and the cross-project Recent Annotations hub are real; several nav items are still placeholder.
+**Product status:** UI is ahead of backend integration. Projects, auth, image metadata, direct S3 image uploads, image-count metrics, per-project labels, durable bounding-box saves, single-image AI Annotate, bulk AI Annotate jobs with a review flow, the cross-project Recent Annotations hub, and the Recycle Bin (soft delete, 30-day retention) are real; several nav items are still placeholder.
 
 ---
 
@@ -68,6 +68,7 @@ data_annotation_tool/
 │   │   ├── projects/
 │   │   │   └── [id]/
 │   │   │       └── annotate/[imageId]/
+│   │   ├── recycle-bin/    # Recycle Bin (restore / delete permanently)
 │   │   └── layout.tsx
 │   ├── auth/               # Auth pages + route handlers
 │   ├── api/uploads/        # Authenticated S3 multipart orchestration routes
@@ -82,8 +83,9 @@ data_annotation_tool/
 │   ├── auth/               # Auth-specific shared UI
 │   ├── dashboard/          # Dashboard widgets
 │   ├── projects/           # Project browser, detail, upload, bulk AI dialog + job banner, etc.
-│   └── recent-annotations/ # Cross-project Recent Annotations grid, card, and bulk actions
-├── hooks/                  # Shared React hooks (use-mobile, use-upload-queue, use-annotation-job, use-dataset-import)
+│   ├── recent-annotations/ # Cross-project Recent Annotations grid, card, and bulk actions
+│   └── recycle-bin/        # Recycle Bin tabs, project rows, image cards, selection bar, setup notice
+├── hooks/                  # Shared React hooks (use-mobile, use-now, use-upload-queue, use-annotation-job, use-dataset-import)
 ├── lib/
 │   ├── actions/            # Server actions ("use server")
 │   ├── annotations/        # Client annotation draft backup (sessionStorage), COCO/YOLO/VOC conversion, shared detection (auto-label.ts), bulk job queue + worker (jobs.ts, server-only)
@@ -95,6 +97,7 @@ data_annotation_tool/
 │   ├── images.ts           # Supabase image queries + signed S3 read URLs
 │   ├── labels.ts           # Supabase project_labels queries
 │   ├── nav.ts              # Sidebar navigation config
+│   ├── recycle-bin.ts      # Recycle Bin listing, lazy purge, permanent deletion (server-only)
 │   └── utils.ts            # cn() — clsx + tailwind-merge
 ├── supabase/               # Local Supabase CLI config + migrations (GITIGNORED — see below)
 ├── proxy.ts                # Auth session proxy entry (replaces middleware.ts)
@@ -132,6 +135,7 @@ data_annotation_tool/
 | `/projects/[id]` | `app/(app)/projects/[id]/page.tsx` | Yes |
 | `/projects/[id]/annotate/[imageId]` | `app/(app)/projects/[id]/annotate/[imageId]/page.tsx` | Yes |
 | `/annotate` | `app/(app)/annotate/page.tsx` | Yes |
+| `/recycle-bin` | `app/(app)/recycle-bin/page.tsx` | Yes |
 | `/auth/login` | `app/auth/login/page.tsx` | No |
 | `/auth/sign-up` | `app/auth/sign-up/page.tsx` | No |
 | `/auth/sign-up-success` | `app/auth/sign-up-success/page.tsx` | No |
@@ -149,7 +153,7 @@ data_annotation_tool/
 | `/api/annotations/jobs/[jobId]` | `app/api/annotations/jobs/[jobId]/route.ts` | Route handler (GET: progress + per-image updates; restarts an idle worker) |
 | `/api/annotations/jobs/[jobId]/cancel` | `app/api/annotations/jobs/[jobId]/cancel/route.ts` | Route handler (POST: cancel an active run) |
 
-**Route group `(app)`:** Wraps dashboard, projects, and annotate in the sidebar shell (`app/(app)/layout.tsx`). URLs are `/dashboard`, `/projects`, `/annotate` — the group name is omitted from the path.
+**Route group `(app)`:** Wraps dashboard, projects, annotate, and the Recycle Bin in the sidebar shell (`app/(app)/layout.tsx`). URLs are `/dashboard`, `/projects`, `/annotate`, `/recycle-bin` — the group name is omitted from the path.
 
 ---
 
@@ -224,13 +228,22 @@ Request → proxy.ts → lib/supabase/proxy.ts (updateSession)
 - `suggestions` jsonb — pending AI boxes (`BoundingBox` + `confidence`) awaiting review; shrinks as the user accepts/rejects; `suggestion_count` is a generated column. Accepted boxes move into `images.annotation`.
 - A newer successful run clears older unreviewed suggestions for the same image.
 
-**SQL functions (SECURITY INVOKER, `authenticated` only):** `claim_annotation_job_items(project, limit, lock_seconds)` leases items with `FOR UPDATE SKIP LOCKED`; `finalize_annotation_jobs(project)`; `annotation_image_states(project)` (latest status + pending suggestion count per image); `annotation_job_counts(job)`.
+**`recycle_bin_items` table** (one deleted project or image; migration `20261004120000_add_recycle_bin.sql`, **not live until someone runs `npx supabase db push`**. Until then the bin page shows a setup notice and every delete fails with a setup message without changing anything):
+- `id`, `user_id` (default `auth.uid()`, → `auth.users` CASCADE), `kind`: `project` | `image`
+- `project_id` (original id, no FK), `image_id` (kind = image only), `name`, `project_name`, `description`, `image_count`, `size_bytes`
+- `object_keys` text[]: S3 keys removed on permanent deletion (kind = project: every image key, oldest first); `cover_object_key` is generated (first key, used as the list thumbnail)
+- `snapshot` jsonb: kind = project → `{ project, labels, images }` full rows; kind = image → `{ image, labels: [{ id, name, color }] }` (the labels its boxes use)
+- `deleted_at`; `expires_at` is generated (`deleted_at` + 30 days, UTC). Partial unique indexes: a project or image is in the bin at most once
+- Moving to the bin deletes the live rows (annotation jobs and pending AI suggestions cascade away and are not restored) but **keeps S3 objects** (including `projects/{id}/thumbnail`), so every existing query ignores binned data
+- Retention is lazy: `/recycle-bin` hides expired rows and purges them in `after()` on page load (`purgeExpiredRecycleBinItems`); there is no cron
 
-**RLS:** Users can only SELECT/INSERT/UPDATE/DELETE their own projects (`auth.uid() = user_id`). Image, `project_labels`, `annotation_jobs`, and `annotation_job_items` policies grant the same operations only when the parent project belongs to the current user.
+**SQL functions (SECURITY INVOKER, `authenticated` only):** `claim_annotation_job_items(project, limit, lock_seconds)` leases items with `FOR UPDATE SKIP LOCKED`; `finalize_annotation_jobs(project)`; `annotation_image_states(project)` (latest status + pending suggestion count per image); `annotation_job_counts(job)`. Recycle Bin: `move_project_to_recycle_bin(project) → uuid` and `move_images_to_recycle_bin(project, image_ids[]) → uuid[]` (all-or-nothing; they lock rows so concurrent uploads/saves are not silently lost); `restore_recycle_bin_item(item) → jsonb` (re-inserts snapshot rows with the same ids and timestamps; an image restore remaps labels by id, then trimmed case-insensitive name, else recreates them). They raise SQLSTATEs `RB001`–`RB007` (listed in the migration header) that `lib/actions/recycle-bin.ts` maps to user-facing messages. Permanent deletion lives in TypeScript (`lib/recycle-bin.ts`) because it needs S3: objects first, then rows.
+
+**RLS:** Users can only SELECT/INSERT/UPDATE/DELETE their own projects (`auth.uid() = user_id`). Image, `project_labels`, `annotation_jobs`, and `annotation_job_items` policies grant the same operations only when the parent project belongs to the current user. `recycle_bin_items` allows SELECT/DELETE of own rows and has no UPDATE; INSERT also requires `current_setting('app.recycle_bin_writer') = 'on'`, which only the two `move_*` functions set (function-level `SET`), so clients cannot forge rows that would point permanent deletion at arbitrary S3 keys.
 
 ### Types
 
-Manual types in `lib/types/projects.ts` and `lib/types/annotations.ts` (`BoundingBox`, `AnnotationLabel` — the latter also shapes `project_labels` rows). **No Supabase codegen** (`database.types.ts` does not exist). When schema stabilizes, consider adding `supabase gen types`.
+Manual types in `lib/types/projects.ts`, `lib/types/annotations.ts` (`BoundingBox`, `AnnotationLabel` — the latter also shapes `project_labels` rows), and `lib/types/recycle-bin.ts`. **No Supabase codegen** (`database.types.ts` does not exist). When schema stabilizes, consider adding `supabase gen types`.
 
 ### Supabase folder is gitignored
 
@@ -248,19 +261,21 @@ Manual types in `lib/types/projects.ts` and `lib/types/annotations.ts` (`Boundin
 | Feature | Status | Source |
 |---------|--------|--------|
 | User auth (sign up, login, OAuth, reset) | **Real** | Supabase Auth |
-| Projects list / create / star | **Real** | Supabase `projects` table + `lib/actions/projects.ts` |
+| Projects list / create / star / delete | **Real** | Supabase `projects` table + `lib/actions/projects.ts`; Delete (project cards and dashboard table, `DeleteProjectDialog`) moves the project to the Recycle Bin |
 | Project detail — metadata | **Real** | Supabase `projects` |
-| Project detail — images | **Real** | Supabase `images` metadata + private S3 objects loaded with short-lived signed GET URLs from `lib/images.ts`; card and multi-select actions support rename, copy/add, move, export, and permanent delete |
+| Project detail — images | **Real** | Supabase `images` metadata + private S3 objects loaded with short-lived signed GET URLs from `lib/images.ts`; card and multi-select actions support rename, copy/add, move, export, and delete (moves to the Recycle Bin via `moveImagesToRecycleBin`) |
 | Annotation workspace UI + bbox editor | **Real images, labels, and durable saves** | Images come from Supabase + S3; labels come from Supabase `project_labels`; changes are debounced for 1.5 seconds and auto-saved to `images.annotation`, the Save button persists immediately through the same serialized save queue, and `sessionStorage` remains a local draft backup. Toolbar: zoom with RESET (fit), full screen (document Fullscreen API + fixed overlay, so Radix portals stay visible), AI Annotate split button. Side panel: labels with inline rename/delete and a "New label" toggle; layers with inline rename (relabel), z-order menu, duplicate (clamped to the image), drag-and-drop reorder; Properties always visible. Footer: auto-save status, last saved, Shortcuts dialog. Each image page is its own workspace instance (Next keeps recent pages alive); a same-image server refresh merges new server suggestions into local state instead of resetting boxes/undo history |
 | AI Annotate | **Real (zero-shot; saved after review)** | Toolbar split button ("Annotate this image" / "Annotate multiple images…") opens `components/annotate/ai-annotate-dialog.tsx` with that scope; user picks labels (can create one inline) + confidence. Current image: `POST /api/annotations/auto-label` calls the shared Roboflow zero-shot workflow (`lib/roboflow/`) with a short-lived signed image URL, converts center-pixel predictions to top-left boxes (`lib/annotations/formats.ts`), and returns them to the canvas as dashed, numbered suggestions. Range: the dialog queues a bulk run (`POST /api/annotations/jobs`); the workspace tracks it per project (in-memory + `sessionStorage`, so it survives image navigation and reload) with a footer chip driven by `hooks/use-annotation-job.ts` (progress, Cancel), loads the open image's results as soon as they land, and flushes + `router.refresh()`es when the run ends. Suggestions are reviewed in `components/annotate/suggestion-review-card.tsx` (floats over the right column from `xl`): detection stepper, relabel (stays a pending suggestion), delete (= reject), Add all, Add & review next, Discard. Suggestions are excluded from auto-save until accepted (card, move/resize, canvas/side-panel relabel, `A`/`Shift+A`) |
 | Bulk AI Annotate (many images / whole project) | **Real** | Project page "AI Annotate" button or selection bar opens `components/projects/batch-ai-annotate-dialog.tsx` (scope: selected / not yet AI-annotated / entire project, max 2000). `POST /api/annotations/jobs` inserts `annotation_jobs` + items, then drains the queue in `after()` (`lib/annotations/jobs.ts`: 4 parallel Roboflow calls, 240s budget, retry with backoff). The drain runs as the signed-in user (RLS, no service-role key); `hooks/use-annotation-job.ts` polls every 2.5s and each poll restarts the drain if no worker holds a live lease, so runs progress while the project page is open. Runs can also be queued from the workspace AI Annotate dialog (see above). Results show as card badges + an "AI suggestions" filter, and as dashed suggestions in the workspace with the review card. The workspace auto-save persists accepted boxes to `images.annotation` and remaining suggestions via `resolveSuggestions` through the same serialized save queue |
 | Upload images dialog | **Real** | UI + queue in `components/projects/upload-images-dialog.tsx` + `hooks/use-upload-queue.ts`; `createS3Uploader()` uploads directly to S3, and successful completion persists an `images` row before refreshing the project grid. |
-| Annotated dataset import | **Parser, label resolution, and orchestration hook; no import UI** | `lib/annotations/coco-import.ts` validates COCO bounding boxes into format-independent types in `lib/types/dataset-import.ts`. `lib/uploads/dataset-zip.ts` matches ZIP paths and verifies decoded JPEG/PNG dimensions; parsing performs no writes. `hooks/use-dataset-import.ts` accepts a validated plan, resolves all labels once, then runs up to three image upload/save pipelines through the existing S3 provider and `saveImageAnnotations`. Success requires the annotation save; failures retain prior uploads and report the failed stage. The hook prevents overlapping runs per instance, exposes per-image outcomes and aggregate counts/progress, and has no persistent jobs or automatic image retries. Keep its owner mounted during a run. Ordinary ZIP image uploads remain separate. Tests: `node --test lib/annotations/coco-import.test.mjs lib/actions/dataset-labels.test.mjs hooks/use-dataset-import.test.mjs lib/actions/projects.test.mjs lib/actions/suggestions.test.mjs`. |
+| Annotated dataset import | **Parser, label resolution, and orchestration hook; no import UI** | `lib/annotations/coco-import.ts` validates COCO bounding boxes into format-independent types in `lib/types/dataset-import.ts`. `lib/uploads/dataset-zip.ts` matches ZIP paths and verifies decoded JPEG/PNG dimensions; parsing performs no writes. `hooks/use-dataset-import.ts` accepts a validated plan, resolves all labels once, then runs up to three image upload/save pipelines through the existing S3 provider and `saveImageAnnotations`. Success requires the annotation save; failures retain prior uploads and report the failed stage. The hook prevents overlapping runs per instance, exposes per-image outcomes and aggregate counts/progress, and has no persistent jobs or automatic image retries. Keep its owner mounted during a run. Ordinary ZIP image uploads remain separate. Tests: see [Scripts](#scripts). |
 | Dashboard metrics (total/annotated/unannotated) | **Real** | RLS-filtered Supabase `images` rows aggregated by `lib/images.ts` |
-| Sidebar storage widget ("Storage used") | **Real (S3, with DB fallback)** | `app/(app)/layout.tsx` passes `components/app-shell/storage-usage-widget.tsx` (server component, own Suspense + skeleton) into `AppSidebar` as `storageSlot`. `getStorageUsage()` in `lib/storage-usage.ts` (React `cache()`, per request) lists every RLS-visible project's `projects/{id}/` prefix with `measureProjectStorage()` in `lib/uploads/s3-server.ts` (paginated ListObjectsV2, 4 prefixes at a time, 10s budget; needs `s3:ListBucket` on the `projects/` prefix) and accepts `extraProjectIds` for deleted-but-retained projects. Any S3 failure logs one `console.warn` per error type and falls back to summing the user's `images.size_bytes` (excludes thumbnails); a Supabase failure renders "Storage unavailable". Quota is `STORAGE_QUOTA_GB` (default 100); the card's `title` says "Measured from S3" or "Estimated from uploaded files" |
-| Nav: Datasets, Recent Files, Starred, Recycle Bin, Settings, Get Help | **Placeholder** | `disabled: true` in `lib/nav.ts` |
-| Recent Annotations (`/annotate`) | **Real** | `fetchRecentlyAnnotatedImages()` in `lib/images.ts` loads the user's images with a non-null `annotation` (RLS-filtered, project name embedded), newest `modified_at` first, capped at 200, with signed thumbnails. `components/recent-annotations/` filters, searches, and sorts client-side; a card opens the workspace. Move/Add use `ImageTransferDialog` with its `sources` prop (one `transferProjectImages` call per source project; a move skips images already in the target). Export loads `getProjectExportData` and needs a single-project selection. Delete calls `deleteProjectImages` per project and is permanent |
+| Sidebar storage widget ("Storage used") | **Real (S3, with DB fallback)** | `app/(app)/layout.tsx` passes `components/app-shell/storage-usage-widget.tsx` (server component, own Suspense + skeleton) into `AppSidebar` as `storageSlot`. `getStorageUsage()` in `lib/storage-usage.ts` (React `cache()`, per request) lists every RLS-visible project's `projects/{id}/` prefix with `measureProjectStorage()` in `lib/uploads/s3-server.ts` (paginated ListObjectsV2, 4 prefixes at a time, 10s budget; needs `s3:ListBucket` on the `projects/` prefix) plus `extraProjectIds`: the widget passes `fetchRecycleBinProjectIds()` (projects of binned items, whose S3 objects still exist; none if the migration is missing). Any S3 failure logs one `console.warn` per error type and falls back to summing the user's `images.size_bytes` (excludes thumbnails); a Supabase failure renders "Storage unavailable". Quota is `STORAGE_QUOTA_GB` (default 100); the card's `title` says "Measured from S3" or "Estimated from uploaded files" |
+| Nav: Datasets, Recent Files, Starred, Settings, Get Help | **Placeholder** | `disabled: true` in `lib/nav.ts` |
+| Recent Annotations (`/annotate`) | **Real** | `fetchRecentlyAnnotatedImages()` in `lib/images.ts` loads the user's images with a non-null `annotation` (RLS-filtered, project name embedded), newest `modified_at` first, capped at 200, with signed thumbnails. `components/recent-annotations/` filters, searches, and sorts client-side; a card opens the workspace. Move/Add use `ImageTransferDialog` with its `sources` prop (one `transferProjectImages` call per source project; a move skips images already in the target). Export loads `getProjectExportData` and needs a single-project selection. Delete calls `moveImagesToRecycleBin` per project (restorable for 30 days) |
 | Nav: Annotate | **Enabled** | Links to `/annotate`; the sidebar highlights it there and in `/projects/[id]/annotate/[imageId]` |
+| Recycle Bin (`/recycle-bin`) | **Real (needs the migration applied)** | `fetchRecycleBin()` in `lib/recycle-bin.ts` loads unexpired `recycle_bin_items` with signed thumbnails (project thumbnail, else first image) and each image's `projectState` (`active` / `in_bin` / `gone`). `components/recycle-bin/` has Projects and Images tabs with search, sort (Deleted Date / Name + direction), a project filter for images, per-item Restore / Delete Permanently, and a bulk selection bar. Images whose project is in the bin or gone show that state and cannot be restored. Delete Permanently always confirms; per-item failures from `restoreRecycleBinItems` / `deleteRecycleBinItemsPermanently` show inline. Missing migration → `RecycleBinUnavailableError` → setup notice |
+| Nav: Recycle Bin | **Enabled** | Links to `/recycle-bin` (sidebar "Pages" section) |
 
 ---
 
@@ -333,7 +348,9 @@ Update the installed list above after adding.
 
 ## Server actions
 
-Current actions: `lib/actions/projects.ts`, `lib/actions/images.ts`, `lib/actions/labels.ts`, `lib/actions/annotations.ts`, `lib/actions/suggestions.ts`
+Current actions: `lib/actions/projects.ts`, `lib/actions/images.ts`, `lib/actions/labels.ts`, `lib/actions/annotations.ts`, `lib/actions/suggestions.ts`, `lib/actions/recycle-bin.ts`
+
+There is no hard-delete action for projects or images (`deleteProject`, `deleteProjectImage`, and `deleteProjectImages` were removed). Deleting moves items to the Recycle Bin; only `deleteRecycleBinItemsPermanently` or the lazy purge removes their S3 objects.
 
 | Action | What it does |
 |--------|--------------|
@@ -343,16 +360,17 @@ Current actions: `lib/actions/projects.ts`, `lib/actions/images.ts`, `lib/action
 | `duplicateProject(sourceProjectId, name, description)` | Duplicate an owned project together with its labels, S3 images, and saved annotations |
 | `copyProjectImages(sourceProjectId, targetProjectId, keepAnnotations)` | Copy every image into another owned project; optionally copy required labels and saved annotations |
 | `transferProjectImages(sourceProjectId, targetProjectId, imageIds, mode, keepAnnotations)` | Copy/add or move selected S3 images to an owned project, optionally remapping labels and annotations; copy-to-current duplicates images while move-to-current is rejected |
-| `deleteProject(projectId)` | Permanently delete an owned project's S3 objects, image and label rows, and project row |
 | `getProjectExportData(projectId)` | Load an owned project, its signed image URLs, labels, and annotations for the shared export sheet |
-| `deleteProjectImage(imageId, projectId)` | Verify image access, permanently delete its S3 object and Supabase row, then revalidate project metrics |
-| `deleteProjectImages(imageIds, projectId)` | Verify and permanently delete a selected image batch from S3 and Supabase |
 | `renameProjectImage(imageId, projectId, fileName)` | Rename an owned image's display/export file name |
 | `createLabel(projectId, name)` | Insert a `project_labels` row with an auto-assigned palette color, revalidate |
 | `resolveDatasetLabels(projectId, categories)` | Validate project ownership and source categories, reuse labels by trimmed case-insensitive name, create missing palette-colored labels, and return `{ categoryId, labelId }` mappings; no image uploads |
 | `renameLabel(projectId, labelId, name)` | Rename a project label, updating its name everywhere that label is used |
 | `deleteLabel(projectId, labelId)` | Delete a `project_labels` row and revalidate. Returns `{ ok: false, error }` (instead of throwing) while any saved annotation in the project still uses the label |
 | `saveImageAnnotations(projectId, imageId, boxes)` | Validate ownership, bounding boxes, and every label's membership in the target project before persisting the current annotation array to `images.annotation` and setting `images.modified_at` to the save time |
+| `moveProjectToRecycleBin(projectId)` | RPC `move_project_to_recycle_bin`: snapshot an owned project with its labels and images into the bin and delete the live rows (S3 objects kept). Returns `{ itemId }` |
+| `moveImagesToRecycleBin(projectId, imageIds)` | RPC `move_images_to_recycle_bin`: one bin item per image of one owned project, all-or-nothing. Returns `{ itemIds }` |
+| `restoreRecycleBinItems(itemIds)` | Restores projects first (one at a time), then images (4 at a time) via `restore_recycle_bin_item`; returns `{ id, ok, error?, kind?, projectId?, imageId? }[]` in input order with friendly errors (e.g. "Restore the project “X” first") |
+| `deleteRecycleBinItemsPermanently(itemIds)` | Deletes S3 objects (only keys under the item's own project prefix), then rows; a project also takes its binned images and thumbnail. Items restored concurrently are skipped. Returns `{ deleted, failed: { id, error }[] }`; failed items stay in the bin |
 | `resolveSuggestions(projectId, resolutions)` | After reviewing AI suggestions, set each job item's still-pending `suggestions` (empty clears it from review). Writes are narrowed to suggestion IDs still pending server-side (compare-and-swap on `updated_at`), so a stale client can only shrink the list. No `revalidatePath` — it runs inside workspace auto-save |
 
 **Pattern for new actions:**
@@ -454,6 +472,7 @@ npm run dev      # Start dev server
 npm run build    # Production build
 npm run start    # Start production server
 npm run lint     # ESLint
+node --test lib/annotations/coco-import.test.mjs lib/actions/dataset-labels.test.mjs hooks/use-dataset-import.test.mjs lib/actions/projects.test.mjs lib/actions/suggestions.test.mjs lib/recycle-bin.test.mjs   # Unit tests (no DB/S3 needed)
 ```
 
 ---

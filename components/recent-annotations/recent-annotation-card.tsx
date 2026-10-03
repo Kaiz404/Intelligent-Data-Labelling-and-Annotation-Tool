@@ -22,34 +22,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { formatRelativeTime } from "@/lib/format";
 import type { RecentAnnotatedImage } from "@/lib/types/recent-annotations";
 import { cn } from "@/lib/utils";
-
-const relativeTimeFormat = new Intl.RelativeTimeFormat("en", {
-  numeric: "always",
-});
-
-const MINUTE = 60_000;
-const relativeTimeUnits: Array<[Intl.RelativeTimeFormatUnit, number]> = [
-  ["year", 365 * 24 * 60 * MINUTE],
-  ["month", 30 * 24 * 60 * MINUTE],
-  ["week", 7 * 24 * 60 * MINUTE],
-  ["day", 24 * 60 * MINUTE],
-  ["hour", 60 * MINUTE],
-  ["minute", MINUTE],
-];
-
-/** "Just now", "5 minutes ago", "2 hours ago", "1 day ago", ... */
-function formatRelativeTime(isoTimestamp: string, now: number) {
-  const elapsed = now - Date.parse(isoTimestamp);
-  if (!Number.isFinite(elapsed)) return "Unknown";
-  for (const [unit, size] of relativeTimeUnits) {
-    if (elapsed >= size) {
-      return relativeTimeFormat.format(-Math.floor(elapsed / size), unit);
-    }
-  }
-  return "Just now";
-}
 
 function workspaceHref(image: RecentAnnotatedImage) {
   return `/projects/${image.projectId}/annotate/${image.id}`;

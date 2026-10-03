@@ -59,9 +59,8 @@ export const navSections: NavSection[] = [
       },
       {
         label: "Recycle Bin",
-        href: "#",
+        href: "/recycle-bin",
         icon: Trash2,
-        disabled: true,
       },
     ],
   },

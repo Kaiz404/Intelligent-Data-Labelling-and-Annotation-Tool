@@ -5,10 +5,10 @@ import { Copy, ImageIcon, Search, Upload } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
   copyProjectImages,
-  deleteProject,
   duplicateProject,
   updateProject,
 } from "@/lib/actions/projects";
+import { moveProjectToRecycleBin } from "@/lib/actions/recycle-bin";
 import type { Project } from "@/lib/types/projects";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -265,11 +265,11 @@ export function DeleteProjectDialog({ project, open, onOpenChange }: CommonProps
     setPending(true);
     setError(null);
     try {
-      await deleteProject(project.id);
+      await moveProjectToRecycleBin(project.id);
       onOpenChange(false);
       router.refresh();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not delete the project.");
+      setError(cause instanceof Error ? cause.message : "Could not move the project to the Recycle Bin.");
     } finally {
       setPending(false);
     }
@@ -278,9 +278,9 @@ export function DeleteProjectDialog({ project, open, onOpenChange }: CommonProps
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
-        <DialogHeader><DialogTitle>Delete Project?</DialogTitle><DialogDescription>This permanently deletes “{project?.name}”, its images from S3, labels, and annotations. This action cannot be undone.</DialogDescription></DialogHeader>
+        <DialogHeader><DialogTitle>Move to Recycle Bin?</DialogTitle><DialogDescription>“{project?.name}” will be moved to the Recycle Bin with its images, labels, and annotations. You can restore it from the Recycle Bin for 30 days.</DialogDescription></DialogHeader>
         <ErrorMessage message={error} />
-        <DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>Cancel</Button><Button type="button" variant="destructive" onClick={confirmDelete} disabled={pending}>{pending ? "Deleting..." : "Delete Project"}</Button></DialogFooter>
+        <DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>Cancel</Button><Button type="button" variant="destructive" onClick={confirmDelete} disabled={pending}>{pending ? "Moving..." : "Move to Recycle Bin"}</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   );

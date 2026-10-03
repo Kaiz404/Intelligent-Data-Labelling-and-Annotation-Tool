@@ -44,8 +44,9 @@ export const RECYCLE_BIN_SQLSTATE = {
   snapshotInvalid: "RB007",
 } as const;
 
-export const RECYCLE_BIN_SETUP_MESSAGE =
-  "The recycle bin is not set up yet. Apply the Supabase migration 20261004120000_add_recycle_bin.sql.";
+export const RECYCLE_BIN_MIGRATION = "20261004120000_add_recycle_bin.sql";
+
+export const RECYCLE_BIN_SETUP_MESSAGE = `The Recycle Bin isn't set up yet, so nothing was changed. Apply the database migration ${RECYCLE_BIN_MIGRATION} (npx supabase db push) and try again.`;
 
 /** Thrown when the recycle bin table or functions do not exist yet. */
 export class RecycleBinUnavailableError extends Error {
@@ -95,6 +96,22 @@ export async function requireRecycleBinUser(
   } = await supabase.auth.getUser();
   if (!user) throw new Error(message);
   return user;
+}
+
+/** A cookie-bound Supabase client plus the signed-in user's id. */
+export type RecycleBinSession = {
+  supabase: SupabaseServerClient;
+  userId: string;
+};
+
+/**
+ * Creates the session once so it can be reused, including inside `after()`
+ * callbacks of Server Components, which cannot read cookies themselves.
+ */
+export async function getRecycleBinSession(): Promise<RecycleBinSession> {
+  const supabase = await createClient();
+  const user = await requireRecycleBinUser(supabase);
+  return { supabase, userId: user.id };
 }
 
 const PAGE_SIZE = 1000;
@@ -190,9 +207,10 @@ type RecycleBinListRow = {
  * hidden even before {@link purgeExpiredRecycleBinItems} removes them.
  * Throws {@link RecycleBinUnavailableError} if the migration is not applied.
  */
-export async function fetchRecycleBin(): Promise<RecycleBinContents> {
-  const supabase = await createClient();
-  const user = await requireRecycleBinUser(supabase);
+export async function fetchRecycleBin(
+  session?: RecycleBinSession,
+): Promise<RecycleBinContents> {
+  const { supabase, userId } = session ?? (await getRecycleBinSession());
   const serverNow = new Date().toISOString();
 
   const rows = await selectAllPages<RecycleBinListRow>(
@@ -201,7 +219,7 @@ export async function fetchRecycleBin(): Promise<RecycleBinContents> {
       supabase
         .from("recycle_bin_items")
         .select(LIST_COLUMNS)
-        .eq("user_id", user.id)
+        .eq("user_id", userId)
         .gt("expires_at", serverNow)
         .order("deleted_at", { ascending: false })
         .order("id", { ascending: true })
@@ -262,6 +280,31 @@ export async function fetchRecycleBin(): Promise<RecycleBinContents> {
   ]);
 
   return { projects, images, serverNow };
+}
+
+/**
+ * Distinct original project ids of the signed-in user's bin items (RLS
+ * filtered). Their S3 objects still exist, so storage usage should include
+ * them. Returns an empty list when the migration is not applied yet.
+ */
+export async function fetchRecycleBinProjectIds(): Promise<string[]> {
+  const supabase = await createClient();
+  let rows: Array<{ project_id: string }>;
+  try {
+    rows = await selectAllPages<{ project_id: string }>(
+      "Could not load recycle bin projects",
+      (from, to) =>
+        supabase
+          .from("recycle_bin_items")
+          .select("project_id")
+          .order("id", { ascending: true })
+          .range(from, to),
+    );
+  } catch (error) {
+    if (error instanceof RecycleBinUnavailableError) return [];
+    throw error;
+  }
+  return [...new Set(rows.map((row) => row.project_id))];
 }
 
 // ---------------------------------------------------------------------------
@@ -451,9 +494,10 @@ export async function deleteRecycleBinRowsPermanently(
  * are logged and retried on the next purge. Throws
  * {@link RecycleBinUnavailableError} if the migration is not applied.
  */
-export async function purgeExpiredRecycleBinItems(): Promise<number> {
-  const supabase = await createClient();
-  const user = await requireRecycleBinUser(supabase);
+export async function purgeExpiredRecycleBinItems(
+  session?: RecycleBinSession,
+): Promise<number> {
+  const { supabase, userId } = session ?? (await getRecycleBinSession());
   const now = new Date().toISOString();
 
   const rows = await selectAllPages<RecycleBinDeletionRow>(
@@ -462,7 +506,7 @@ export async function purgeExpiredRecycleBinItems(): Promise<number> {
       supabase
         .from("recycle_bin_items")
         .select(RECYCLE_BIN_DELETION_COLUMNS)
-        .eq("user_id", user.id)
+        .eq("user_id", userId)
         .lt("expires_at", now)
         .order("id", { ascending: true })
         .range(from, to),
@@ -471,7 +515,7 @@ export async function purgeExpiredRecycleBinItems(): Promise<number> {
 
   const { deleted, failed } = await deleteRecycleBinRowsPermanently(
     supabase,
-    user.id,
+    userId,
     rows,
   );
   if (failed.length > 0) {

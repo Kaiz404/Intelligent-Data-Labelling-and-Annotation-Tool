@@ -3,7 +3,7 @@
 import { CopyPlus, Download, FolderInput, Pencil, Search, Trash2, Upload, WandSparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { startTransition, useCallback, useMemo, useState } from "react";
-import { deleteProjectImages } from "@/lib/actions/images";
+import { moveImagesToRecycleBin } from "@/lib/actions/recycle-bin";
 import { AnnotationExportSheet } from "@/components/annotate/annotation-export-sheet";
 import { AiJobBanner } from "@/components/projects/ai-job-banner";
 import { BatchAiAnnotateDialog } from "@/components/projects/batch-ai-annotate-dialog";
@@ -195,7 +195,7 @@ export function ProjectDetailClient({
 
     try {
       const ids = deleteTargets.map((image) => image.id);
-      await deleteProjectImages(ids, project.id);
+      await moveImagesToRecycleBin(project.id, ids);
       setSelectedImageIds((currentIds) =>
         currentIds.filter((id) => !ids.includes(id)),
       );
@@ -203,7 +203,7 @@ export function ProjectDetailClient({
       router.refresh();
     } catch (error) {
       setDeleteError(
-        error instanceof Error ? error.message : "Could not delete the image.",
+        error instanceof Error ? error.message : "Could not move the images to the Recycle Bin.",
       );
     } finally {
       setIsDeleting(false);
@@ -467,13 +467,11 @@ export function ProjectDetailClient({
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Delete {deleteTargets.length === 1 ? "image" : "images"}?</DialogTitle>
+            <DialogTitle>Move to Recycle Bin?</DialogTitle>
             <DialogDescription>
               {deleteTargets.length === 1
-                ? `This will permanently delete ${deleteTargets[0].fileName} from the project. This action cannot be undone.`
-                : deleteTargets.length > 1
-                  ? `This will permanently delete ${deleteTargets.length} images from the project. This action cannot be undone.`
-                : "This action cannot be undone."}
+                ? `“${deleteTargets[0].fileName}” will be moved to the Recycle Bin with its annotations. You can restore it from the Recycle Bin for 30 days.`
+                : `${deleteTargets.length} images will be moved to the Recycle Bin with their annotations. You can restore them from the Recycle Bin for 30 days.`}
             </DialogDescription>
           </DialogHeader>
 
@@ -496,7 +494,7 @@ export function ProjectDetailClient({
               disabled={isDeleting}
               onClick={() => void handleDeleteImage()}
             >
-              {isDeleting ? "Deleting..." : `Delete ${deleteTargets.length === 1 ? "image" : "images"}`}
+              {isDeleting ? "Moving..." : "Move to Recycle Bin"}
             </Button>
           </DialogFooter>
         </DialogContent>
