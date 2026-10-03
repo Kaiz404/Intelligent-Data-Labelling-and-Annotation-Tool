@@ -6,6 +6,7 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
   UploadPartCommand,
@@ -392,6 +393,100 @@ export async function copyImageObject(
 
 export async function deleteImageObjects(keys: string[]) {
   await Promise.all(keys.map((key) => deleteImageObject(key)));
+}
+
+const STORAGE_LIST_CONCURRENCY = 4;
+const STORAGE_LIST_PAGE_SIZE = 1000;
+const STORAGE_LIST_TIMEOUT_MS = 10_000;
+const STORAGE_PROJECT_ID_PATTERN = /^[\w-]+$/;
+
+export type ProjectStorageMeasurement = {
+  bytes: number;
+  objectCount: number;
+};
+
+/**
+ * Sums the size of every S3 object under `projects/{projectId}/` (images and
+ * the optional project thumbnail) for each project ID. Each prefix is listed
+ * with paginated ListObjectsV2 calls (1000 keys per page), at most
+ * `STORAGE_LIST_CONCURRENCY` prefixes at a time, within an overall timeout.
+ * Requires `s3:ListBucket` on the bucket for the `projects/` prefix.
+ *
+ * Callers must only pass project IDs the signed-in user owns. The first
+ * failure aborts every in-flight listing and rejects, so a result is never
+ * partial. Parts of incomplete multipart uploads are not counted.
+ */
+export async function measureProjectStorage(
+  projectIds: string[],
+): Promise<ProjectStorageMeasurement> {
+  const { bucket } = getS3Config();
+  const prefixes = [...new Set(projectIds)].map((projectId) => {
+    if (!STORAGE_PROJECT_ID_PATTERN.test(projectId)) {
+      throw new UploadApiError("Invalid project ID.", 400);
+    }
+    return `projects/${projectId}/`;
+  });
+  if (!prefixes.length) return { bytes: 0, objectCount: 0 };
+
+  const client = getS3Client();
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, STORAGE_LIST_TIMEOUT_MS);
+
+  let bytes = 0;
+  let objectCount = 0;
+  let nextPrefix = 0;
+
+  async function listPrefix(prefix: string) {
+    let continuationToken: string | undefined;
+    do {
+      controller.signal.throwIfAborted();
+      const page = await client.send(
+        new ListObjectsV2Command({
+          Bucket: bucket,
+          Prefix: prefix,
+          MaxKeys: STORAGE_LIST_PAGE_SIZE,
+          ContinuationToken: continuationToken,
+        }),
+        { abortSignal: controller.signal },
+      );
+      for (const object of page.Contents ?? []) {
+        bytes += object.Size ?? 0;
+        objectCount += 1;
+      }
+      continuationToken = page.IsTruncated
+        ? page.NextContinuationToken
+        : undefined;
+    } while (continuationToken);
+  }
+
+  async function worker() {
+    while (nextPrefix < prefixes.length) {
+      controller.signal.throwIfAborted();
+      await listPrefix(prefixes[nextPrefix++]);
+    }
+  }
+
+  try {
+    await Promise.all(
+      Array.from(
+        { length: Math.min(STORAGE_LIST_CONCURRENCY, prefixes.length) },
+        worker,
+      ),
+    );
+  } catch (error) {
+    controller.abort();
+    throw timedOut
+      ? new UploadApiError("S3 storage listing timed out.", 504)
+      : error;
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  return { bytes, objectCount };
 }
 
 export async function abortMultipartUpload(input: Record<string, unknown>) {

@@ -14,7 +14,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Progress } from "@/components/ui/progress";
 import {
   Sidebar,
   SidebarContent,
@@ -34,6 +33,8 @@ import { cn } from "@/lib/utils";
 
 type AppSidebarProps = {
   userEmail?: string | null;
+  /** Server-rendered storage usage card (streamed in its own Suspense boundary). */
+  storageSlot?: React.ReactNode;
 };
 
 function getInitials(email: string) {
@@ -78,7 +79,7 @@ function SidebarBrand() {
   );
 }
 
-export function AppSidebar({ userEmail }: AppSidebarProps) {
+export function AppSidebar({ userEmail, storageSlot }: AppSidebarProps) {
   const pathname = usePathname();
   const { setTheme } = useTheme();
   const displayEmail = userEmail ?? "user@example.com";
@@ -144,14 +145,7 @@ export function AppSidebar({ userEmail }: AppSidebarProps) {
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border">
-        <div className="rounded-lg border bg-card p-3 group-data-[collapsible=icon]:hidden">
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">Storage used</span>
-            <span className="font-medium">10 GB / 100 GB</span>
-          </div>
-          <Progress value={10} className="mt-2 h-1.5" />
-          <p className="mt-1 text-xs text-muted-foreground">10% used</p>
-        </div>
+        {storageSlot}
 
         <SidebarMenu>
           <SidebarMenuItem>

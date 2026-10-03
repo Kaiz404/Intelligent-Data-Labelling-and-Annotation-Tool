@@ -1,6 +1,10 @@
 import { Suspense } from "react";
 import { connection } from "next/server";
 import { AppSidebar } from "@/components/app-shell/app-sidebar";
+import {
+  StorageUsageSkeleton,
+  StorageUsageWidget,
+} from "@/components/app-shell/storage-usage-widget";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -13,7 +17,16 @@ async function AppSidebarWithUser() {
     data: { user },
   } = await supabase.auth.getUser();
 
-  return <AppSidebar userEmail={user?.email} />;
+  return (
+    <AppSidebar
+      userEmail={user?.email}
+      storageSlot={
+        <Suspense fallback={<StorageUsageSkeleton />}>
+          <StorageUsageWidget />
+        </Suspense>
+      }
+    />
+  );
 }
 
 function SidebarFallback() {
