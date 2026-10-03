@@ -43,8 +43,12 @@ type AnnotationCanvasProps = {
   onZoomChange: (zoom: number) => void;
   /** Confidence (0..1) keyed by box ID for AI suggestions not yet accepted. */
   suggestionConfidence?: Record<string, number>;
+  /** Display number keyed by box ID; numbered boxes show "{n}. {label}" tags. */
+  suggestionNumbers?: Record<string, number>;
   /** Increment to re-fit the image in the viewport. */
   fitNonce?: number;
+  /** Natural size (image pixels) of the loaded image, reported once it loads. */
+  onImageSizeChange?: (size: { width: number; height: number }) => void;
   className?: string;
 };
 
@@ -135,7 +139,9 @@ export function AnnotationCanvas({
   onRenameLabel,
   onZoomChange,
   suggestionConfidence,
+  suggestionNumbers,
   fitNonce = 0,
+  onImageSizeChange,
   className,
 }: AnnotationCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -167,6 +173,12 @@ export function AnnotationCanvas({
   const imageWidth = image?.width ?? 0;
   const imageHeight = image?.height ?? 0;
   const scale = zoom / 100;
+
+  useEffect(() => {
+    if (imageWidth && imageHeight) {
+      onImageSizeChange?.({ width: imageWidth, height: imageHeight });
+    }
+  }, [imageHeight, imageWidth, onImageSizeChange]);
 
   const labelById = useMemo(
     () => new Map(labels.map((label) => [label.id, label])),
@@ -685,6 +697,7 @@ export function AnnotationCanvas({
                 return null;
               }
               const confidence = suggestionConfidence?.[box.id];
+              const number = suggestionNumbers?.[box.id];
               return (
                 <Label
                   key={`label-${box.id}`}
@@ -702,9 +715,11 @@ export function AnnotationCanvas({
                   <Tag fill={label.color} cornerRadius={4} />
                   <Text
                     text={
-                      confidence !== undefined
-                        ? `✦ ${label.name} ${Math.round(confidence * 100)}%`
-                        : label.name
+                      number !== undefined
+                        ? `${number}. ${label.name}`
+                        : confidence !== undefined
+                          ? `✦ ${label.name} ${Math.round(confidence * 100)}%`
+                          : label.name
                     }
                     fontSize={12}
                     fontFamily="inherit"

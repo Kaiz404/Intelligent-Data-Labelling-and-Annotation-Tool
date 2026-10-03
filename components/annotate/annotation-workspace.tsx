@@ -2,14 +2,42 @@
 
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, ChevronLeft, ChevronRight, Download, Keyboard } from "lucide-react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  useTransition,
+} from "react";
+import {
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  Keyboard,
+  Loader2,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { AiAnnotateDialog } from "@/components/annotate/ai-annotate-dialog";
 import { AnnotationSidePanel } from "@/components/annotate/annotation-side-panel";
 import { AnnotationExportSheet } from "@/components/annotate/annotation-export-sheet";
-import { AnnotationToolbar } from "@/components/annotate/annotation-toolbar";
-import { SuggestionReviewBar } from "@/components/annotate/suggestion-review-bar";
+import {
+  AnnotationToolbar,
+  type AiAnnotateScope,
+} from "@/components/annotate/annotation-toolbar";
+import { SuggestionReviewCard } from "@/components/annotate/suggestion-review-card";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { saveImageAnnotations } from "@/lib/actions/annotations";
 import {
   createLabel,
@@ -17,18 +45,22 @@ import {
   renameLabel,
 } from "@/lib/actions/labels";
 import { resolveSuggestions } from "@/lib/actions/suggestions";
+import { useAnnotationJob } from "@/hooks/use-annotation-job";
 import {
   loadAnnotations,
   saveAnnotations,
 } from "@/lib/annotations/storage";
 import type {
+  AnnotationJobProgress,
   AnnotationLabel,
   AnnotationSuggestion,
   AnnotationTool,
   BoundingBox,
+  ImageAiState,
   ImageSuggestionSet,
 } from "@/lib/types/annotations";
 import type { Project, ProjectImage } from "@/lib/types/projects";
+import { cn } from "@/lib/utils";
 
 const AnnotationCanvas = dynamic(
   () =>
@@ -72,6 +104,203 @@ type SuggestionResolution = {
 };
 
 const MAX_HISTORY = 50;
+
+/** Offset (image pixels) applied to a duplicated box so it does not hide its source. */
+const DUPLICATE_OFFSET = 12;
+
+/** Keys handled by the workspace keydown effect below — keep the two in sync. */
+const KEYBOARD_SHORTCUTS: Array<{ combos: string[][]; description: string }> = [
+  {
+    combos: [["Delete"], ["Backspace"]],
+    description: "Delete the selected box (rejects an AI suggestion)",
+  },
+  { combos: [["Ctrl / ⌘", "Z"]], description: "Undo" },
+  { combos: [["Ctrl / ⌘", "Shift", "Z"]], description: "Redo" },
+  { combos: [["A"]], description: "Accept the selected AI suggestion" },
+  { combos: [["Shift", "A"]], description: "Accept all AI suggestions on this image" },
+];
+
+// Full screen targets the whole document rather than the workspace element:
+// Radix menus, selects, dialogs and sheets portal into <body>, so they would
+// be hidden behind a fullscreen workspace element. The workspace instead
+// covers the viewport with a fixed overlay while the document is fullscreen.
+function subscribeToFullscreen(onChange: () => void) {
+  document.addEventListener("fullscreenchange", onChange);
+  return () => document.removeEventListener("fullscreenchange", onChange);
+}
+
+function getIsDocumentFullscreen() {
+  return document.fullscreenElement === document.documentElement;
+}
+
+function getIsDocumentFullscreenOnServer() {
+  return false;
+}
+
+/**
+ * Bulk AI run started from this workspace, per project. Next keeps recently
+ * visited image pages alive (hidden), so each image has its own workspace
+ * instance: the run is tracked here, outside any one instance, so whichever
+ * image is open keeps polling it (polling also restarts the server worker).
+ * Mirrored to sessionStorage so tracking survives a reload.
+ */
+const TRACKED_JOB_KEY_PREFIX = "sat:annotate:ai-job:";
+const trackedJobMemory = new Map<string, string | null>();
+const trackedJobListeners = new Set<() => void>();
+
+function readTrackedJobRaw(projectId: string) {
+  if (!trackedJobMemory.has(projectId)) {
+    let stored: string | null = null;
+    try {
+      stored = window.sessionStorage.getItem(TRACKED_JOB_KEY_PREFIX + projectId);
+    } catch {
+      // Storage unavailable: track for this page session only.
+    }
+    trackedJobMemory.set(projectId, stored);
+  }
+  return trackedJobMemory.get(projectId) ?? null;
+}
+
+function writeTrackedJob(projectId: string, job: AnnotationJobProgress | null) {
+  const raw = job ? JSON.stringify(job) : null;
+  if (readTrackedJobRaw(projectId) === raw) return;
+  trackedJobMemory.set(projectId, raw);
+  try {
+    if (raw) {
+      window.sessionStorage.setItem(TRACKED_JOB_KEY_PREFIX + projectId, raw);
+    } else {
+      window.sessionStorage.removeItem(TRACKED_JOB_KEY_PREFIX + projectId);
+    }
+  } catch {
+    // Storage unavailable: the in-memory copy still drives this page.
+  }
+  trackedJobListeners.forEach((listener) => listener());
+}
+
+function subscribeToTrackedJob(listener: () => void) {
+  trackedJobListeners.add(listener);
+  return () => {
+    trackedJobListeners.delete(listener);
+  };
+}
+
+function parseTrackedJob(raw: string | null): AnnotationJobProgress | null {
+  if (!raw) return null;
+  try {
+    const job = JSON.parse(raw) as AnnotationJobProgress;
+    return typeof job?.id === "string" && job.counts ? job : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Stable empty map: useAnnotationJob resets its states when this identity changes. */
+const NO_AI_STATES: Record<string, ImageAiState> = {};
+
+/**
+ * Position for a duplicated box along one axis: offset forward, or backward
+ * when that would leave the image (`limit` is unknown until it loads).
+ */
+function duplicateOffset(start: number, size: number, limit: number | null) {
+  const forward = start + DUPLICATE_OFFSET;
+  if (limit === null || forward + size <= limit) return forward;
+  return Math.min(Math.max(start - DUPLICATE_OFFSET, 0), Math.max(limit - size, 0));
+}
+
+/**
+ * Compact progress chip for a bulk AI run queued from this workspace.
+ * Mounted (keyed by job ID) while the run is tracked; polling also keeps the
+ * server worker going.
+ */
+function AiJobStatusChip({
+  job,
+  onProgress,
+  onUpdates,
+  onFinished,
+  onDismiss,
+}: {
+  job: AnnotationJobProgress;
+  onProgress: (job: AnnotationJobProgress) => void;
+  /** Per-image AI states whose status or pending count changed. */
+  onUpdates: (jobId: string, updates: Array<[string, ImageAiState]>) => void;
+  onFinished: () => void;
+  onDismiss: () => void;
+}) {
+  const { job: progress, states, isActive, cancel } = useAnnotationJob({
+    initialJob: job,
+    initialStates: NO_AI_STATES,
+    onFinished,
+  });
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+  const callbacksRef = useRef({ onProgress, onUpdates });
+  const previousStatesRef = useRef(states);
+
+  useEffect(() => {
+    callbacksRef.current = { onProgress, onUpdates };
+  });
+
+  useEffect(() => {
+    if (progress) callbacksRef.current.onProgress(progress);
+  }, [progress]);
+
+  // Compare values: polls replay a few seconds of updates as new objects.
+  useEffect(() => {
+    const previous = previousStatesRef.current;
+    previousStatesRef.current = states;
+    const updates = Object.entries(states).filter(
+      ([imageId, state]) =>
+        previous[imageId]?.status !== state.status ||
+        previous[imageId]?.pendingSuggestions !== state.pendingSuggestions,
+    );
+    if (updates.length > 0) callbacksRef.current.onUpdates(job.id, updates);
+  }, [job.id, states]);
+
+  if (!progress) return null;
+
+  const { succeeded, failed, cancelled } = progress.counts;
+  const processed = succeeded + failed + cancelled;
+  const summary = isActive
+    ? `AI labelling ${processed}/${progress.total} images`
+    : progress.status === "cancelled"
+      ? `AI run cancelled · ${succeeded}/${progress.total} labelled`
+      : `AI labelling done · ${succeeded}/${progress.total} images${failed > 0 ? ` · ${failed} failed` : ""}`;
+
+  const handleCancel = async () => {
+    setIsCancelling(true);
+    setCancelError(null);
+    try {
+      await cancel();
+    } catch (error) {
+      setCancelError(error instanceof Error ? error.message : "Could not cancel the AI run.");
+    } finally {
+      setIsCancelling(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2 rounded-full border border-violet-200 bg-violet-50 py-0.5 pl-2.5 pr-1 text-xs text-violet-800 dark:border-violet-900 dark:bg-violet-950/40 dark:text-violet-200">
+      {isActive ? (
+        <Loader2 className="size-3.5 animate-spin" aria-hidden />
+      ) : (
+        <Sparkles className="size-3.5" aria-hidden />
+      )}
+      <span className="tabular-nums">{summary}</span>
+      {cancelError ? (
+        <span className="text-destructive" role="alert">{cancelError}</span>
+      ) : null}
+      {isActive ? (
+        <Button type="button" variant="ghost" size="sm" className="h-6 rounded-full px-2 text-xs" disabled={isCancelling} onClick={() => void handleCancel()}>
+          {isCancelling ? "Cancelling..." : "Cancel"}
+        </Button>
+      ) : (
+        <Button type="button" variant="ghost" size="icon" className="size-6 rounded-full" aria-label="Dismiss AI run status" onClick={onDismiss}>
+          <X className="size-3.5" />
+        </Button>
+      )}
+    </div>
+  );
+}
 
 function sameGeometry(first: BoundingBox, second: BoundingBox) {
   return (
@@ -135,6 +364,31 @@ export function AnnotationWorkspace({
   const [hydrated, setHydrated] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [aiAnnotateOpen, setAiAnnotateOpen] = useState(false);
+  // Chosen from the toolbar's AI Annotate split button.
+  const [aiAnnotateScope, setAiAnnotateScope] =
+    useState<AiAnnotateScope>("current");
+  /** Natural size of the current image, once the canvas has loaded it. */
+  const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
+  // Only while "Add & review next" / "Save & review next" saves and navigates;
+  // routine auto-saves must not disable the review card.
+  const [isAdvancingReview, startAdvancingReview] = useTransition();
+  const trackedJobRaw = useSyncExternalStore(
+    subscribeToTrackedJob,
+    () => readTrackedJobRaw(project.id),
+    () => null,
+  );
+  const trackedJob = useMemo(() => parseTrackedJob(trackedJobRaw), [trackedJobRaw]);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const isDocumentFullscreen = useSyncExternalStore(
+    subscribeToFullscreen,
+    getIsDocumentFullscreen,
+    getIsDocumentFullscreenOnServer,
+  );
+  // Used when the Fullscreen API is unavailable or refused: the workspace
+  // still fills the browser viewport.
+  const [isOverlayFullscreen, setIsOverlayFullscreen] = useState(false);
+  const isFullscreen = isDocumentFullscreen || isOverlayFullscreen;
+  const wasFullscreenRef = useRef(isFullscreen);
   const [suggestionMeta, setSuggestionMeta] = useState<SuggestionMeta>({});
   const [reviewQueue, setReviewQueue] = useState(reviewImageIds);
   const autoSaveTimerRef = useRef<number | null>(null);
@@ -143,8 +397,22 @@ export function AnnotationWorkspace({
   const lastSavedSignatureRef = useRef("");
   const lastResolvedSignatureRef = useRef("");
   const activeImageIdRef = useRef<string | null>(currentImage?.id ?? null);
+  // Latest committed values for callbacks that run after an await and for the
+  // refresh merge (which must not re-run on every edit).
+  const boxesRef = useRef(boxes);
+  const suggestionMetaRef = useRef(suggestionMeta);
+  const labelsRef = useRef(labels);
+  /** Image whose server data has been fully hydrated into this instance. */
+  const hydratedImageIdRef = useRef<string | null>(null);
+  /** Every server suggestion ID already shown here (kept, accepted or rejected). */
+  const seenSuggestionIdsRef = useRef(new Set<string>());
+  /** Bulk run whose results for this image were already fetched mid-run. */
+  const liveSyncedJobIdRef = useRef<string | null>(null);
 
   activeImageIdRef.current = currentImage?.id ?? null;
+  boxesRef.current = boxes;
+  suggestionMetaRef.current = suggestionMeta;
+  labelsRef.current = labels;
 
   useEffect(() => {
     setReviewQueue(reviewImageIds);
@@ -176,6 +444,7 @@ export function AnnotationWorkspace({
     async (name: string) => {
       const label = await createLabel(project.id, name);
       setLabels((current) => [...current, label]);
+      return label;
     },
     [project.id],
   );
@@ -193,6 +462,60 @@ export function AnnotationWorkspace({
     if (!currentImage) {
       return;
     }
+
+    if (hydratedImageIdRef.current === currentImage.id) {
+      // Same image, fresh server props (router.refresh, a server action that
+      // refreshed the route, or this cached page shown again). Local state is
+      // authoritative: keep boxes, history and review state, and only sync
+      // server suggestions. Saves are flushed before our own refreshes.
+      const seen = seenSuggestionIdsRef.current;
+      const knownLabelIds = new Set(labelsRef.current.map((label) => label.id));
+      const serverIds = new Set<string>();
+      const additions: BoundingBox[] = [];
+      const additionMeta: SuggestionMeta = {};
+      for (const set of suggestionSets) {
+        for (const { confidence, ...box } of set.suggestions) {
+          serverIds.add(box.id);
+          // Never re-add one already shown: it is still here, or was accepted
+          // or rejected locally (possibly not saved yet).
+          if (seen.has(box.id) || !knownLabelIds.has(box.labelId)) continue;
+          seen.add(box.id);
+          additionMeta[box.id] = { itemId: set.itemId, confidence };
+          additions.push(box);
+        }
+      }
+      // Bulk suggestions the server no longer has (e.g. cleared by a newer
+      // run) are dropped. Single-image results (itemId null) are local only.
+      const currentMeta = suggestionMetaRef.current;
+      const dropped = new Set(
+        Object.keys(currentMeta).filter(
+          (id) => currentMeta[id].itemId !== null && !serverIds.has(id),
+        ),
+      );
+      if (additions.length === 0 && dropped.size === 0) {
+        return;
+      }
+
+      // Patch undo/redo snapshots too, so undo never removes a new suggestion
+      // (which auto-save would persist as a rejection) or restores a dropped one.
+      const patch = (list: BoundingBox[]) => {
+        const kept = dropped.size > 0 ? list.filter((box) => !dropped.has(box.id)) : list;
+        const ids = new Set(kept.map((box) => box.id));
+        return [...kept, ...additions.filter((box) => !ids.has(box.id))];
+      };
+      setBoxes(patch);
+      setPast((history) => history.map(patch));
+      setFuture((redoStack) => redoStack.map(patch));
+      setSuggestionMeta((current) => {
+        const next = { ...current, ...additionMeta };
+        for (const id of dropped) delete next[id];
+        return next;
+      });
+      setSelectedBoxId((current) => (current && dropped.has(current) ? null : current));
+      return;
+    }
+
+    hydratedImageIdRef.current = currentImage.id;
     setHydrated(false);
     const loaded = loadAnnotations(
       project.id,
@@ -207,13 +530,16 @@ export function AnnotationWorkspace({
     const knownLabelIds = new Set(initialLabels.map((label) => label.id));
     const meta: SuggestionMeta = {};
     const suggestionBoxes: BoundingBox[] = [];
+    const seen = new Set<string>();
     for (const set of suggestionSets) {
       for (const { confidence, ...box } of set.suggestions) {
+        seen.add(box.id);
         if (loadedIds.has(box.id) || !knownLabelIds.has(box.labelId)) continue;
         meta[box.id] = { itemId: set.itemId, confidence };
         suggestionBoxes.push(box);
       }
     }
+    seenSuggestionIdsRef.current = seen;
     const initialBoxes = [...loaded, ...suggestionBoxes];
     lastResolvedSignatureRef.current = JSON.stringify(
       buildResolutions(initialBoxes, meta, suggestionSets),
@@ -226,6 +552,7 @@ export function AnnotationWorkspace({
     setSelectedBoxId(null);
     setLastSavedAt(null);
     setSaveError(null);
+    setImageSize(null);
     setHydrated(true);
   }, [currentImage, initialLabels, project.id, suggestionSets]);
 
@@ -240,6 +567,22 @@ export function AnnotationWorkspace({
   const acceptSuggestion = useCallback((boxId: string) => {
     setSuggestionMeta((current) => withoutSuggestion(current, boxId));
   }, []);
+
+  // Review card relabel: unlike other edits this keeps the box a pending
+  // suggestion; auto-save persists the new label into its job item. Reads the
+  // latest boxes because the card may call it after awaiting label creation.
+  const handleRelabelSuggestion = useCallback(
+    (boxId: string, labelId: string) => {
+      const current = boxesRef.current;
+      const target = current.find((box) => box.id === boxId);
+      if (!target || target.labelId === labelId) return;
+      commitBoxes(
+        current.map((box) => (box.id === boxId ? { ...box, labelId } : box)),
+      );
+      setSelectedLabelId(labelId);
+    },
+    [commitBoxes],
+  );
 
   const handleAssignBoxLabel = useCallback(
     async (boxId: string, name: string) => {
@@ -382,6 +725,76 @@ export function AnnotationWorkspace({
     [boxes, commitBoxes],
   );
 
+  /** Drag-and-drop from the Layers list: move a box to `toIndex` (later = on top). */
+  const handleReorderBox = useCallback(
+    (boxId: string, toIndex: number) => {
+      const currentIndex = boxes.findIndex((box) => box.id === boxId);
+      if (currentIndex < 0) return;
+      const next = [...boxes];
+      const [box] = next.splice(currentIndex, 1);
+      const targetIndex = Math.min(Math.max(toIndex, 0), next.length);
+      if (targetIndex === currentIndex) return;
+      next.splice(targetIndex, 0, box);
+      commitBoxes(next);
+    },
+    [boxes, commitBoxes],
+  );
+
+  // The copy is a new accepted box (never in suggestionMeta), placed directly
+  // above its source so it is drawn on top of it, and kept inside the image.
+  const handleDuplicateBox = useCallback(
+    (boxId: string) => {
+      const index = boxes.findIndex((box) => box.id === boxId);
+      if (index < 0) return;
+      const source = boxes[index];
+      const copy: BoundingBox = {
+        ...source,
+        id: `box-${crypto.randomUUID()}`,
+        x: duplicateOffset(source.x, source.width, imageSize?.width ?? null),
+        y: duplicateOffset(source.y, source.height, imageSize?.height ?? null),
+      };
+      const next = [...boxes];
+      next.splice(index + 1, 0, copy);
+      commitBoxes(next);
+      setSelectedBoxId(copy.id);
+      setTool("select");
+    },
+    [boxes, commitBoxes, imageSize],
+  );
+
+  const handleToggleFullscreen = useCallback(() => {
+    if (isFullscreen) {
+      setIsOverlayFullscreen(false);
+      if (document.fullscreenElement) {
+        void document.exitFullscreen().catch(() => undefined);
+      }
+      return;
+    }
+    const root = document.documentElement;
+    if (!document.fullscreenEnabled || typeof root.requestFullscreen !== "function") {
+      setIsOverlayFullscreen(true);
+      return;
+    }
+    root.requestFullscreen().catch(() => setIsOverlayFullscreen(true));
+  }, [isFullscreen]);
+
+  // Re-fit the image once the canvas has been resized for the new mode. Two
+  // frames let the canvas's ResizeObserver report the new size first.
+  useEffect(() => {
+    if (wasFullscreenRef.current === isFullscreen) return;
+    wasFullscreenRef.current = isFullscreen;
+    let innerFrame = 0;
+    const outerFrame = window.requestAnimationFrame(() => {
+      innerFrame = window.requestAnimationFrame(() =>
+        setFitToken((value) => value + 1),
+      );
+    });
+    return () => {
+      window.cancelAnimationFrame(outerFrame);
+      window.cancelAnimationFrame(innerFrame);
+    };
+  }, [isFullscreen]);
+
   const handleUpdateBox = useCallback(
     (
       boxId: string,
@@ -396,17 +809,6 @@ export function AnnotationWorkspace({
       );
     },
     [acceptSuggestion, boxes, commitBoxes],
-  );
-
-  const navigateToImage = useCallback(
-    (nextIndex: number) => {
-      const nextImage = images[nextIndex];
-      if (!nextImage) {
-        return;
-      }
-      router.push(`/projects/${project.id}/annotate/${nextImage.id}`);
-    },
-    [images, project.id, router],
   );
 
   /**
@@ -505,6 +907,23 @@ export function AnnotationWorkspace({
     await flushSave(boxes, suggestionMeta, true);
   }, [boxes, flushSave, suggestionMeta]);
 
+  const navigateToImage = useCallback(
+    (nextIndex: number) => {
+      const nextImage = images[nextIndex];
+      if (!nextImage) {
+        return;
+      }
+      // This page is kept alive but hidden after navigating, which cancels the
+      // auto-save timer; start a pending save now (it completes in the
+      // background through the serialized save queue).
+      if (hydrated && autoSaveTimerRef.current !== null) {
+        void flushSave(boxes, suggestionMeta, false);
+      }
+      router.push(`/projects/${project.id}/annotate/${nextImage.id}`);
+    },
+    [boxes, flushSave, hydrated, images, project.id, router, suggestionMeta],
+  );
+
   useEffect(() => {
     if (!hydrated || !currentImage) return;
     saveAnnotations(project.id, currentImage.id, acceptedBoxes);
@@ -554,16 +973,100 @@ export function AnnotationWorkspace({
     ).length;
   }, [currentImage?.id, images, reviewQueue]);
 
-  /** Save this image's review with `nextMeta`, then open the next image to review. */
+  /**
+   * Save this image's review with `nextMeta`, then open the next image to
+   * review. Runs as a transition so `isAdvancingReview` covers the save and
+   * the navigation it starts.
+   */
   const saveAndReviewNext = useCallback(
-    async (nextMeta: SuggestionMeta) => {
+    (nextMeta: SuggestionMeta) => {
       setSuggestionMeta(nextMeta);
-      if (!(await flushSave(boxes, nextMeta, !nextReviewImageId))) return;
-      if (nextReviewImageId) {
-        router.push(`/projects/${project.id}/annotate/${nextReviewImageId}`);
-      }
+      startAdvancingReview(async () => {
+        if (!(await flushSave(boxes, nextMeta, !nextReviewImageId))) return;
+        if (nextReviewImageId) {
+          router.push(`/projects/${project.id}/annotate/${nextReviewImageId}`);
+        }
+      });
     },
     [boxes, flushSave, nextReviewImageId, project.id, router],
+  );
+
+  /**
+   * Flush any pending save, then re-fetch server data. The hydrate effect
+   * merges it into this image without resetting local edits.
+   */
+  const syncWithServer = useCallback(async () => {
+    if (hydrated && autoSaveTimerRef.current !== null) {
+      await flushSave(boxes, suggestionMeta, false);
+    }
+    await saveQueueRef.current;
+    router.refresh();
+  }, [boxes, flushSave, hydrated, router, suggestionMeta]);
+
+  const handleJobQueued = useCallback(
+    (job: AnnotationJobProgress) => writeTrackedJob(project.id, job),
+    [project.id],
+  );
+
+  const handleJobProgress = useCallback(
+    (job: AnnotationJobProgress) => {
+      // Ignore a late update from a run that is no longer the tracked one.
+      if (parseTrackedJob(readTrackedJobRaw(project.id))?.id === job.id) {
+        writeTrackedJob(project.id, job);
+      }
+    },
+    [project.id],
+  );
+
+  const handleJobUpdates = useCallback(
+    (jobId: string, updates: Array<[string, ImageAiState]>) => {
+      const ready = updates
+        .filter(([, state]) => state.pendingSuggestions > 0)
+        .map(([imageId]) => imageId);
+      if (ready.length === 0) return;
+      // "k more" grows live as images get suggestions.
+      setReviewQueue((queue) => {
+        const known = new Set(queue);
+        const added = ready.filter((id) => !known.has(id));
+        return added.length > 0 ? [...queue, ...added] : queue;
+      });
+      // Results for the open image: load them now (once per run) rather than
+      // at the end of the run.
+      if (
+        currentImage &&
+        ready.includes(currentImage.id) &&
+        liveSyncedJobIdRef.current !== jobId
+      ) {
+        liveSyncedJobIdRef.current = jobId;
+        void syncWithServer();
+      }
+    },
+    [currentImage, syncWithServer],
+  );
+
+  const handleJobDismiss = useCallback(
+    () => writeTrackedJob(project.id, null),
+    [project.id],
+  );
+
+  const reviewSuggestions = useMemo(
+    () =>
+      boxes
+        .filter((box) => suggestionMeta[box.id])
+        .map((box) => ({
+          id: box.id,
+          labelId: box.labelId,
+          confidence: suggestionMeta[box.id].confidence,
+        })),
+    [boxes, suggestionMeta],
+  );
+  // "1. car" tags on the canvas match the card's "Detection 1 of n".
+  const suggestionNumbers = useMemo(
+    () =>
+      Object.fromEntries(
+        reviewSuggestions.map((suggestion, index) => [suggestion.id, index + 1]),
+      ),
+    [reviewSuggestions],
   );
 
   const selectedIsSuggestion = Boolean(
@@ -578,6 +1081,11 @@ export function AnnotationWorkspace({
         target?.tagName === "TEXTAREA" ||
         target?.isContentEditable;
       if (isEditing) return;
+      // Keys pressed inside an open dialog, sheet, menu or select belong to
+      // it, not to the canvas (e.g. Delete while reading the Shortcuts dialog).
+      if (target?.closest?.('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) {
+        return;
+      }
 
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
         event.preventDefault();
@@ -632,9 +1140,10 @@ export function AnnotationWorkspace({
         return box;
       });
       setSuggestionMeta((current) => ({ ...current, ...meta }));
-      commitBoxes([...boxes, ...detectedBoxes]);
+      // Latest boxes: the dialog calls this after awaiting the detector.
+      commitBoxes([...boxesRef.current, ...detectedBoxes]);
     },
-    [boxes, commitBoxes],
+    [commitBoxes],
   );
 
   if (!currentImage) {
@@ -646,9 +1155,20 @@ export function AnnotationWorkspace({
   }
 
   const reviewSet = new Set(reviewQueue);
+  // Full screen: the canvas grows to fill the viewport left after the
+  // toolbar, thumbnail strip and footer (about 17.5rem).
+  const canvasHeightClass = isFullscreen
+    ? "h-[max(420px,calc(100dvh_-_17.5rem))]"
+    : "h-[510px]";
 
   return (
-    <div className="flex flex-col gap-4">
+    <div
+      className={cn(
+        "flex flex-col gap-4",
+        isFullscreen &&
+          "fixed inset-0 z-40 overflow-y-auto overscroll-contain bg-background p-4 md:p-6",
+      )}
+    >
       <AnnotationToolbar
         imageIndex={imageIndex}
         imageCount={images.length}
@@ -657,6 +1177,7 @@ export function AnnotationWorkspace({
         canUndo={past.length > 0}
         canRedo={future.length > 0}
         canDelete={Boolean(selectedBoxId)}
+        isFullscreen={isFullscreen}
         onPrev={() => navigateToImage(imageIndex - 1)}
         onNext={() => navigateToImage(imageIndex + 1)}
         onToolChange={setTool}
@@ -665,40 +1186,63 @@ export function AnnotationWorkspace({
         onDelete={handleDelete}
         onZoomOut={() => setZoom((value) => Math.max(10, value - 10))}
         onZoomIn={() => setZoom((value) => Math.min(400, value + 10))}
-        onFit={() => setFitToken((value) => value + 1)}
-        onAiAnnotate={() => setAiAnnotateOpen(true)}
+        onResetView={() => setFitToken((value) => value + 1)}
+        onToggleFullscreen={handleToggleFullscreen}
+        onAiAnnotate={(scope) => {
+          setAiAnnotateScope(scope);
+          setAiAnnotateOpen(true);
+        }}
       />
 
       <AiAnnotateDialog
         open={aiAnnotateOpen}
         onOpenChange={setAiAnnotateOpen}
         projectId={project.id}
-        imageId={currentImage.id}
+        currentImageId={currentImage.id}
+        images={images}
         labels={labels}
+        initialScope={aiAnnotateScope}
+        onCreateLabel={handleCreateLabel}
         onDetected={handleAiDetected}
+        onJobQueued={handleJobQueued}
       />
 
       <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_290px] xl:items-start">
-        <div className="min-w-0 space-y-4">
-          <SuggestionReviewBar
-            pendingCount={pendingCount}
-            otherImagesToReview={otherImagesToReview}
-            selectedIsSuggestion={selectedIsSuggestion}
-            isSaving={isSaving}
-            error={saveError}
-            onAcceptSelected={() => {
-              if (selectedBoxId) acceptSuggestion(selectedBoxId);
-            }}
-            onRejectSelected={() => {
-              if (selectedBoxId) handleDeleteBox(selectedBoxId);
-            }}
-            onAcceptAll={handleAcceptAll}
-            onRejectAll={handleRejectAll}
-            onAcceptAllAndNext={() => void saveAndReviewNext({})}
-            onNextToReview={() => void saveAndReviewNext(suggestionMeta)}
-          />
+        {/* Review card: from xl it shares the right column's grid cell and
+            floats over Save/Export and the Labels panel (Figma); below xl it
+            sits in normal flow above the canvas. Only the card (or its
+            minimised pill) takes pointer events, not the empty wrapper. */}
+        {pendingCount > 0 || otherImagesToReview > 0 ? (
+          <div className="pointer-events-none relative z-20 min-w-0 xl:col-start-2 xl:row-start-1 [&>*]:pointer-events-auto">
+            <SuggestionReviewCard
+              suggestions={reviewSuggestions}
+              labels={labels}
+              selectedBoxId={selectedBoxId}
+              otherImagesToReview={otherImagesToReview}
+              isSaving={isAdvancingReview}
+              error={saveError}
+              onSelect={(boxId) => {
+                setSelectedBoxId(boxId);
+                setTool("select");
+              }}
+              onChangeLabel={handleRelabelSuggestion}
+              onCreateLabel={handleCreateLabel}
+              onDeleteSelected={handleDeleteBox}
+              onAcceptAll={handleAcceptAll}
+              onRejectAll={handleRejectAll}
+              onAcceptAllAndNext={() => saveAndReviewNext({})}
+              onNextToReview={() => saveAndReviewNext(suggestionMeta)}
+            />
+          </div>
+        ) : null}
 
-          <div className="min-h-[510px] overflow-hidden rounded-xl border bg-muted/30 shadow-sm">
+        <div className="min-w-0 space-y-4 xl:col-start-1 xl:row-start-1">
+          <div
+            className={cn(
+              "overflow-hidden rounded-xl border bg-muted/30 shadow-sm",
+              !isFullscreen && "min-h-[510px]",
+            )}
+          >
             {hydrated ? (
               <AnnotationCanvas
                 key={currentImage.id}
@@ -719,11 +1263,18 @@ export function AnnotationWorkspace({
                 onRenameLabel={handleRenameLabel}
                 onZoomChange={setZoom}
                 suggestionConfidence={suggestionConfidence}
+                suggestionNumbers={suggestionNumbers}
                 fitNonce={fitToken}
-                className="h-[510px]"
+                onImageSizeChange={setImageSize}
+                className={canvasHeightClass}
               />
             ) : (
-              <div className="flex h-[510px] items-center justify-center text-sm text-muted-foreground">
+              <div
+                className={cn(
+                  "flex items-center justify-center text-sm text-muted-foreground",
+                  canvasHeightClass,
+                )}
+              >
                 Loading annotations...
               </div>
             )}
@@ -763,7 +1314,7 @@ export function AnnotationWorkspace({
           </div>
         </div>
 
-        <div className="space-y-4">
+        <div className="space-y-4 xl:col-start-2 xl:row-start-1">
           <div className="grid grid-cols-2 gap-2">
             <Button type="button" onClick={handleSave} disabled={isSaving} className="rounded-lg">
               {saveFlash ? <CheckCircle2 className="size-4" /> : null}
@@ -793,6 +1344,7 @@ export function AnnotationWorkspace({
             selectedBoxId={selectedBoxId}
             onSelectLabel={setSelectedLabelId}
             onCreateLabel={handleCreateLabel}
+            onRenameLabel={handleRenameLabel}
             onDeleteLabel={handleDeleteLabel}
             onSelectBox={(id) => {
               setSelectedBoxId(id);
@@ -800,6 +1352,9 @@ export function AnnotationWorkspace({
             }}
             onUpdateBox={handleUpdateBox}
             onMoveBox={handleMoveBox}
+            onReorderBox={handleReorderBox}
+            onDuplicateBox={handleDuplicateBox}
+            onRenameBox={handleAssignBoxLabel}
             onDeleteBox={handleDeleteBox}
             suggestionConfidence={suggestionConfidence}
             onAcceptSuggestion={acceptSuggestion}
@@ -809,18 +1364,68 @@ export function AnnotationWorkspace({
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
-        <div className="flex items-center gap-2">
-          <span className={`size-2 rounded-full ${saveError ? "bg-destructive" : isSaving ? "bg-amber-500" : "bg-emerald-500"}`} />
-          <span>{saveError ? "Auto-save failed" : isSaving ? "Saving..." : "Auto-save enabled"}</span>
-          {lastSavedAt ? (
-            <><span aria-hidden>·</span><span>Last saved {lastSavedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span></>
-          ) : null}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="flex items-center gap-2">
+            <span className={cn("size-2 rounded-full", saveError ? "bg-destructive" : isSaving ? "bg-amber-500" : "bg-emerald-500")} />
+            {saveError ? "Auto-save failed" : isSaving ? "Saving…" : "Auto-save: On"}
+          </span>
+          <span aria-hidden className="h-3.5 w-px bg-border" />
+          <span>
+            Last saved:{" "}
+            {lastSavedAt
+              ? `${lastSavedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })} ${lastSavedAt.toLocaleDateString()}`
+              : "–"}
+          </span>
         </div>
-        <span className="flex items-center gap-1">
-          <Keyboard className="size-3.5" /> Shortcuts: Delete, undo and redo
-          {pendingCount > 0 ? " · A accept suggestion · Shift+A accept all" : ""}
-        </span>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {trackedJob ? (
+            <AiJobStatusChip
+              key={trackedJob.id}
+              job={trackedJob}
+              onProgress={handleJobProgress}
+              onUpdates={handleJobUpdates}
+              onFinished={syncWithServer}
+              onDismiss={handleJobDismiss}
+            />
+          ) : null}
+          <Button type="button" variant="ghost" size="sm" onClick={() => setShortcutsOpen(true)} className="h-7 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground">
+            Shortcuts <Keyboard className="size-3.5" />
+          </Button>
+        </div>
       </div>
+
+      <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Keyboard shortcuts</DialogTitle>
+            <DialogDescription>
+              Shortcuts are paused while you type in a text field or have a
+              dialog or menu open.
+            </DialogDescription>
+          </DialogHeader>
+          <dl className="divide-y rounded-lg border">
+            {KEYBOARD_SHORTCUTS.map((shortcut) => (
+              <div key={shortcut.description} className="flex items-center justify-between gap-4 px-3 py-2.5 text-sm">
+                <dt>{shortcut.description}</dt>
+                <dd className="flex shrink-0 flex-wrap items-center justify-end gap-1 text-xs text-muted-foreground">
+                  {shortcut.combos.map((combo, index) => (
+                    <Fragment key={combo.join("+")}>
+                      {index > 0 ? <span>or</span> : null}
+                      <span className="flex items-center gap-0.5">
+                        {combo.map((key) => (
+                          <kbd key={key} className="rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground">
+                            {key}
+                          </kbd>
+                        ))}
+                      </span>
+                    </Fragment>
+                  ))}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </DialogContent>
+      </Dialog>
 
       <AnnotationExportSheet
         open={exportOpen}

@@ -1,11 +1,15 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { ChevronLeft, ChevronRight, Hand, Maximize2, Minus, MousePointer2, Plus, Redo2, Square, Trash2, Undo2, WandSparkles } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Hand, ImageIcon, Images, Maximize, Minimize, Minus, MousePointer2, Plus, Redo2, Square, Trash2, Undo2, WandSparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { AnnotationTool } from "@/lib/types/annotations";
 import { cn } from "@/lib/utils";
+
+/** Which images an AI Annotate run should cover when the dialog opens. */
+export type AiAnnotateScope = "current" | "range";
 
 type AnnotationToolbarProps = {
   imageIndex: number;
@@ -15,6 +19,7 @@ type AnnotationToolbarProps = {
   canUndo: boolean;
   canRedo: boolean;
   canDelete: boolean;
+  isFullscreen: boolean;
   onPrev: () => void;
   onNext: () => void;
   onToolChange: (tool: AnnotationTool) => void;
@@ -23,8 +28,10 @@ type AnnotationToolbarProps = {
   onDelete: () => void;
   onZoomOut: () => void;
   onZoomIn: () => void;
-  onFit: () => void;
-  onAiAnnotate: () => void;
+  /** Reset zoom and position so the whole image fits the canvas. */
+  onResetView: () => void;
+  onToggleFullscreen: () => void;
+  onAiAnnotate: (scope: AiAnnotateScope) => void;
 };
 
 function ToolButton({ label, active, disabled, onClick, children }: {
@@ -44,7 +51,8 @@ function ToolButton({ label, active, disabled, onClick, children }: {
   );
 }
 
-export function AnnotationToolbar({ imageIndex, imageCount, tool, zoom, canUndo, canRedo, canDelete, onPrev, onNext, onToolChange, onUndo, onRedo, onDelete, onZoomOut, onZoomIn, onFit, onAiAnnotate }: AnnotationToolbarProps) {
+export function AnnotationToolbar({ imageIndex, imageCount, tool, zoom, canUndo, canRedo, canDelete, isFullscreen, onPrev, onNext, onToolChange, onUndo, onRedo, onDelete, onZoomOut, onZoomIn, onResetView, onToggleFullscreen, onAiAnnotate }: AnnotationToolbarProps) {
+  const fullscreenLabel = isFullscreen ? "Exit full screen" : "Full screen";
   return (
     <div className="flex flex-wrap items-center justify-between gap-4">
       <div className="flex items-center gap-3">
@@ -64,13 +72,31 @@ export function AnnotationToolbar({ imageIndex, imageCount, tool, zoom, canUndo,
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <div className="flex items-center shadow-sm">
-          <Button type="button" variant="outline" size="icon" className="size-9 rounded-r-none" onClick={onZoomOut} aria-label="Zoom out"><Minus className="size-4" /></Button>
-          <div className="flex h-9 min-w-[3.5rem] items-center justify-center border-y px-2 text-sm tabular-nums">{zoom}%</div>
-          <Button type="button" variant="outline" size="icon" className="size-9 rounded-l-none" onClick={onZoomIn} aria-label="Zoom in"><Plus className="size-4" /></Button>
+        <div className="flex h-9 items-center gap-0.5 rounded-lg border bg-card px-1 shadow-sm">
+          <Button type="button" variant="ghost" size="icon" className="size-7" onClick={onZoomOut} aria-label="Zoom out"><Minus className="size-4" /></Button>
+          <div className="min-w-[3.25rem] text-center text-sm tabular-nums">{zoom}%</div>
+          <Button type="button" variant="ghost" size="icon" className="size-7" onClick={onZoomIn} aria-label="Zoom in"><Plus className="size-4" /></Button>
+          <Button type="button" variant="ghost" className="h-7 px-2 text-[11px] font-semibold tracking-wide" onClick={onResetView} aria-label="Reset view to fit image">RESET</Button>
         </div>
-        <Button type="button" variant="outline" size="icon" className="size-9 rounded-lg" onClick={onFit} aria-label="Fit to view"><Maximize2 className="size-4" /></Button>
-        <Button type="button" onClick={onAiAnnotate} className="h-9 gap-1.5 rounded-lg bg-violet-600 px-3 text-sm text-white hover:bg-violet-700"><WandSparkles className="size-4" />AI Annotate</Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button type="button" variant="outline" size="icon" className="size-9 rounded-lg" onClick={onToggleFullscreen} aria-label={fullscreenLabel} aria-pressed={isFullscreen}>{isFullscreen ? <Minimize className="size-4" /> : <Maximize className="size-4" />}</Button>
+          </TooltipTrigger>
+          <TooltipContent>{fullscreenLabel}</TooltipContent>
+        </Tooltip>
+        <div className="flex h-9 items-stretch overflow-hidden rounded-lg bg-violet-600 text-white shadow-sm">
+          <Button type="button" onClick={() => onAiAnnotate("current")} className="h-9 gap-1.5 rounded-none bg-transparent px-3 text-sm text-white shadow-none hover:bg-violet-700"><WandSparkles className="size-4" />AI Annotate</Button>
+          {/* Non-modal so the AI Annotate dialog can take focus as this menu closes. */}
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" aria-label="AI Annotate options" className="h-9 w-8 rounded-none border-l border-white/25 bg-transparent px-0 text-white shadow-none hover:bg-violet-700 data-[state=open]:bg-violet-700"><ChevronDown className="size-4" /></Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuItem onSelect={() => onAiAnnotate("current")}><ImageIcon />Annotate this image</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => onAiAnnotate("range")}><Images />Annotate multiple images…</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
     </div>
   );
