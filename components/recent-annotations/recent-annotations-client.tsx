@@ -526,7 +526,7 @@ export function RecentAnnotationsClient({
           mode={transfer.mode}
           projects={projects}
           sources={transfer.sources}
-          onComplete={() => deselect(transfer.imageIds)}
+          onComplete={deselect}
         />
       ) : null}
 

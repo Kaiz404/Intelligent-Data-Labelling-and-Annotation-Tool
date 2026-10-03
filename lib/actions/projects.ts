@@ -5,6 +5,7 @@ import { fetchProjectImages } from "@/lib/images";
 import { fetchProjectLabels } from "@/lib/labels";
 import {
   copyImageObject,
+  deleteImageObject,
   deleteImageObjects,
   deleteProjectThumbnail,
 } from "@/lib/uploads/s3-server";
@@ -136,6 +137,23 @@ function remapAnnotation(
   });
 }
 
+/**
+ * Removes S3 objects that no image row references any more. Failures only
+ * leave orphaned objects behind, so they are logged instead of thrown.
+ */
+async function deleteUnreferencedObjects(keys: string[]) {
+  const results = await Promise.allSettled(keys.map((key) => deleteImageObject(key)));
+  results.forEach((result, index) => {
+    if (result.status === "rejected") {
+      console.error(`Could not delete orphaned S3 object ${keys[index]}`, result.reason);
+    }
+  });
+}
+
+/**
+ * Copies image objects and inserts their destination rows. The source is never
+ * modified, so on failure the partial copy is rolled back without risking data.
+ */
 async function copyImages(
   supabase: Awaited<ReturnType<typeof createClient>>,
   sourceProjectId: string,
@@ -173,25 +191,35 @@ async function copyImages(
           object_key: objectKey,
           content_type: image.content_type,
           size_bytes: image.size_bytes,
+          // A raw copy is unannotated (null), not "annotated with zero boxes".
           annotation: keepAnnotations
             ? remapAnnotation(image.annotation, labelIds)
-            : [],
+            : null,
         })
         .select("id")
         .single();
       if (insertError) throw insertError;
       createdImageIds.push(createdImage.id);
     }
-    return createdKeys;
+    return { createdKeys, createdImageIds };
   } catch (error) {
-    if (createdImageIds.length > 0) {
+    let rowsRemoved = createdImageIds.length === 0;
+    if (!rowsRemoved) {
       try {
-        await supabase.from("images").delete().in("id", createdImageIds);
+        const { error: cleanupError } = await supabase
+          .from("images")
+          .delete()
+          .in("id", createdImageIds);
+        rowsRemoved = !cleanupError;
       } catch {
-        // Preserve the original copy error; S3 cleanup still runs below.
+        // Preserve the original copy error.
       }
     }
-    await deleteImageObjects(createdKeys).catch(() => undefined);
+    // createdKeys[i] belongs to createdImageIds[i]; a trailing key has no row.
+    // Keep objects whose rows survived so those rows never point at nothing.
+    await deleteUnreferencedObjects(
+      rowsRemoved ? createdKeys : createdKeys.slice(createdImageIds.length),
+    );
     throw new Error(
       error instanceof Error
         ? `Could not copy project images: ${error.message}`
@@ -281,7 +309,7 @@ export async function copyProjectImages(
   const labelIds = keepAnnotations
     ? await copyLabels(supabase, sourceProjectId, targetProjectId)
     : new Map<string, string>();
-  const createdKeys = await copyImages(
+  const { createdKeys } = await copyImages(
     supabase,
     sourceProjectId,
     targetProjectId,
@@ -296,6 +324,61 @@ export async function copyProjectImages(
   revalidatePath("/projects");
   revalidatePath(`/projects/${targetProjectId}`);
   return { copied: createdKeys.length };
+}
+
+/**
+ * Second half of a move, after the destination copies exist: delete the source
+ * rows, then their S3 objects. Destination copies are rolled back only when
+ * the source is verifiably untouched; once any source row may be gone, every
+ * copy is kept so an image can never be lost (a duplicate or an orphaned
+ * object is the worst case).
+ */
+async function removeMovedSourceImages(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  sourceProjectId: string,
+  targetProjectId: string,
+  imageIds: string[],
+  createdKeys: string[],
+  createdImageIds: string[],
+) {
+  const { data: deletedRows, error: deleteError } = await supabase
+    .from("images")
+    .delete()
+    .eq("project_id", sourceProjectId)
+    .in("id", imageIds)
+    .select("id, object_key");
+
+  if (deleteError) {
+    // A failed response can still mean the delete committed, so look before undoing.
+    const { data: remaining, error: checkError } = await supabase
+      .from("images")
+      .select("id")
+      .eq("project_id", sourceProjectId)
+      .in("id", imageIds);
+    if (!checkError && (remaining?.length ?? 0) === imageIds.length) {
+      const { error: rollbackError } = await supabase
+        .from("images")
+        .delete()
+        .eq("project_id", targetProjectId)
+        .in("id", createdImageIds);
+      if (!rollbackError) {
+        await deleteUnreferencedObjects(createdKeys);
+        throw new Error(
+          `Images could not be moved, so nothing was changed: ${deleteError.message}`,
+        );
+      }
+    }
+    throw new Error(
+      `Images were copied, but removing them from the source project may not have finished (${deleteError.message}). No images were lost; check both projects before retrying.`,
+    );
+  }
+
+  // Rows are gone, so source objects are unreferenced: delete best-effort.
+  await deleteUnreferencedObjects(
+    ((deletedRows ?? []) as Array<{ object_key: string }>).map(
+      (row) => row.object_key,
+    ),
+  );
 }
 
 export async function transferProjectImages(
@@ -316,7 +399,7 @@ export async function transferProjectImages(
 
   const { data: sourceImages, error: sourceError } = await supabase
     .from("images")
-    .select("id, object_key")
+    .select("id")
     .eq("project_id", sourceProjectId)
     .in("id", uniqueImageIds);
   if (sourceError || (sourceImages?.length ?? 0) !== uniqueImageIds.length) {
@@ -326,7 +409,8 @@ export async function transferProjectImages(
   const labelIds = keepAnnotations
     ? await copyLabels(supabase, sourceProjectId, targetProjectId)
     : new Map<string, string>();
-  const createdKeys = await copyImages(
+  // Step 1: copy objects and insert destination rows (rolled back on failure).
+  const { createdKeys, createdImageIds } = await copyImages(
     supabase,
     sourceProjectId,
     targetProjectId,
@@ -336,29 +420,14 @@ export async function transferProjectImages(
   );
 
   if (mode === "move") {
-    try {
-      await deleteImageObjects(
-        (sourceImages ?? []).map((image) => image.object_key),
-      );
-      const { error: deleteError } = await supabase
-        .from("images")
-        .delete()
-        .eq("project_id", sourceProjectId)
-        .in("id", uniqueImageIds);
-      if (deleteError) throw deleteError;
-    } catch (error) {
-      await supabase
-        .from("images")
-        .delete()
-        .eq("project_id", targetProjectId)
-        .in("object_key", createdKeys);
-      await deleteImageObjects(createdKeys).catch(() => undefined);
-      throw new Error(
-        error instanceof Error
-          ? `Images were copied but could not be removed from the source: ${error.message}`
-          : "Images could not be moved.",
-      );
-    }
+    await removeMovedSourceImages(
+      supabase,
+      sourceProjectId,
+      targetProjectId,
+      uniqueImageIds,
+      createdKeys,
+      createdImageIds,
+    );
   }
 
   await Promise.all([

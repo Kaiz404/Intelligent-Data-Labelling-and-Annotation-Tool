@@ -102,7 +102,11 @@ export function ImageTransferDialog({
    * transfer runs per group; a move skips images already in the destination.
    */
   sources?: ImageTransferSource[];
-  onComplete: () => void;
+  /**
+   * Called with the IDs that were transferred: once when everything finishes,
+   * and also after a partial failure for the groups that already succeeded.
+   */
+  onComplete: (transferredImageIds: string[]) => void;
 }) {
   const router = useRouter();
   const [targetId, setTargetId] = useState("");
@@ -110,6 +114,10 @@ export function ImageTransferDialog({
   const [keepAnnotations, setKeepAnnotations] = useState(true);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Source projects already transferred while this dialog is open. A retry
+  // skips them: a moved group has left its project, and a copied group would
+  // be duplicated again.
+  const [completedProjectIds, setCompletedProjectIds] = useState<string[]>([]);
   const normalizedSearch = search.trim().toLowerCase();
   const filteredProjects = projects.filter((project) =>
     project.name.toLowerCase().includes(normalizedSearch),
@@ -120,16 +128,18 @@ export function ImageTransferDialog({
     sources ??
     (sourceProject ? [{ projectId: sourceProject.id, imageIds }] : []);
   const sourceProjectIds = new Set(groups.map((group) => group.projectId));
-  const totalImages = groups.reduce((sum, group) => sum + group.imageIds.length, 0);
+  const remainingGroups = groups.filter(
+    (group) =>
+      group.imageIds.length > 0 && !completedProjectIds.includes(group.projectId),
+  );
+  const countImages = (list: ImageTransferSource[]) =>
+    list.reduce((sum, group) => sum + group.imageIds.length, 0);
+  const remainingImages = countImages(remainingGroups);
   const groupsFor = (destinationId: string) =>
-    groups.filter(
-      (group) =>
-        group.imageIds.length > 0 &&
-        !(mode === "move" && group.projectId === destinationId),
+    remainingGroups.filter(
+      (group) => !(mode === "move" && group.projectId === destinationId),
     );
-  const skippedImages = targetId
-    ? totalImages - groupsFor(targetId).reduce((sum, group) => sum + group.imageIds.length, 0)
-    : 0;
+  const skippedImages = targetId ? remainingImages - countImages(groupsFor(targetId)) : 0;
 
   useEffect(() => {
     if (!open) return;
@@ -137,6 +147,7 @@ export function ImageTransferDialog({
     setSearch("");
     setKeepAnnotations(true);
     setError(null);
+    setCompletedProjectIds([]);
   }, [open, mode]);
 
   async function submit(event: React.FormEvent) {
@@ -144,9 +155,10 @@ export function ImageTransferDialog({
     if (!targetId) return;
     setPending(true);
     setError(null);
-    let transferred = 0;
+    const pendingGroups = groupsFor(targetId);
+    const transferredIds: string[] = [];
     try {
-      for (const group of groupsFor(targetId)) {
+      for (const group of pendingGroups) {
         await transferProjectImages(
           group.projectId,
           targetId,
@@ -154,16 +166,20 @@ export function ImageTransferDialog({
           mode,
           keepAnnotations,
         );
-        transferred += group.imageIds.length;
+        transferredIds.push(...group.imageIds);
+        setCompletedProjectIds((current) => [...current, group.projectId]);
       }
       onOpenChange(false);
-      onComplete();
+      onComplete(transferredIds);
       router.refresh();
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : `Images could not be ${verb}.`;
-      if (transferred > 0) {
-        // Earlier groups already succeeded; show them while reporting the failure.
-        setError(`${transferred} of ${totalImages} images were ${verb} before an error: ${message}`);
+      if (transferredIds.length > 0) {
+        // Earlier groups already succeeded; report them and leave only the rest for a retry.
+        setError(
+          `${transferredIds.length} of ${countImages(pendingGroups)} images were ${verb}; the rest failed: ${message} Submit again to retry only the remaining images.`,
+        );
+        onComplete(transferredIds);
         router.refresh();
       } else {
         setError(message);
@@ -178,7 +194,7 @@ export function ImageTransferDialog({
       <DialogContent className="gap-5 sm:max-w-[430px]">
         <DialogHeader className="gap-1.5"><DialogTitle className="text-base">{title}</DialogTitle><DialogDescription className="text-xs">{mode === "move" ? "Move" : "Add"} selected image(s) to another project.</DialogDescription></DialogHeader>
         <form onSubmit={submit} className="space-y-4">
-          <div className="flex items-center gap-2 rounded-md bg-primary/10 px-3 py-2 text-xs font-medium text-primary"><Copy className="size-3.5" />{totalImages} {totalImages === 1 ? "image" : "images"} will be {verb} to the selected project.</div>
+          <div className="flex items-center gap-2 rounded-md bg-primary/10 px-3 py-2 text-xs font-medium text-primary"><Copy className="size-3.5" />{remainingImages} {remainingImages === 1 ? "image" : "images"} will be {verb} to the selected project.</div>
           {skippedImages > 0 ? <p className="text-xs text-muted-foreground">{skippedImages} {skippedImages === 1 ? "image is" : "images are"} already in this project and will be skipped.</p> : null}
           <div className="space-y-2">
             <Label htmlFor={`${mode}-destination-search`}>Destination Project</Label>
