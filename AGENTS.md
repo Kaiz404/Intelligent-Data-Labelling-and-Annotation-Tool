@@ -159,6 +159,7 @@ Request → proxy.ts → lib/supabase/proxy.ts (updateSession)
   ├── Refreshes session via supabase.auth.getClaims()
   └── Redirects unauthenticated users to /auth/login
       (except /, /auth/*, /login)
+  └── Redirects authenticated users from / and /auth/login to /dashboard
 ```
 
 | Flow | Entry point | Result |
