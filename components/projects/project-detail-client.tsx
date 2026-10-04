@@ -39,6 +39,7 @@ import {
   TooltipTrigger
 } from "@/components/ui/tooltip";
 import { useAnnotationJob } from "@/hooks/use-annotation-job";
+import { useQueryParams } from "@/hooks/use-query-params";
 import type {
   AnnotationJobProgress,
   AnnotationLabel,
@@ -46,25 +47,35 @@ import type {
 } from "@/lib/types/annotations";
 import type { Project, ProjectImage } from "@/lib/types/projects";
 
-const imageStatusFilters = [
-  "All",
-  "In Progress",
-  "Annotated",
-  "Unannotated"
-] as const;
+const imageStatusFilters = {
+  all: "All",
+  "in-progress": "In Progress",
+  annotated: "Annotated",
+  unannotated: "Unannotated",
+} as const;
 
-const imageSortOptions = ["Date Added", "Name", "Status"] as const;
-const imageFilterOptions = ["All", "Selected", "AI suggestions"] as const;
+const imageSortOptions = {
+  added: { label: "Date Added", defaultDirection: "ascending" },
+  name: { label: "Name", defaultDirection: "ascending" },
+  status: { label: "Status", defaultDirection: "ascending" },
+} as const satisfies Record<string, { label: string; defaultDirection: SortDirection }>;
 
-type ImageStatusFilter = (typeof imageStatusFilters)[number];
-type ImageSortOption = (typeof imageSortOptions)[number];
-type ImageFilterOption = (typeof imageFilterOptions)[number];
+const imageFilterOptions = {
+  all: "All",
+  selected: "Selected",
+  ai: "AI suggestions",
+} as const;
 
-const defaultImageSortDirections: Record<ImageSortOption, SortDirection> = {
-  "Date Added": "ascending",
-  Name: "ascending",
-  Status: "ascending"
-};
+type ImageStatusFilter = keyof typeof imageStatusFilters;
+type ImageSortOption = keyof typeof imageSortOptions;
+type ImageFilterOption = keyof typeof imageFilterOptions;
+
+/** `dir` is empty while the sort's default direction applies. */
+const QUERY_DEFAULTS = { q: "", filter: "all", status: "all", sort: "added", dir: "" };
+
+function optionOr<T extends string>(options: Record<T, unknown>, value: string, fallback: NoInfer<T>): T {
+  return Object.hasOwn(options, value) ? (value as T) : fallback;
+}
 
 type ProjectDetailClientProps = {
   project: Project;
@@ -77,7 +88,7 @@ type ProjectDetailClientProps = {
 
 export function ProjectDetailClient({
   project,
-  images,
+  images: serverImages,
   projects,
   labels,
   initialJob,
@@ -85,13 +96,16 @@ export function ProjectDetailClient({
 }: ProjectDetailClientProps) {
   const router = useRouter();
   const [selectedImageIds, setSelectedImageIds] = useState<string[]>([]);
-  const [search, setSearch] = useState("");
-  const [filterBy, setFilterBy] = useState<ImageFilterOption>("All");
-  const [statusFilter, setStatusFilter] = useState<ImageStatusFilter>("All");
-  const [sortBy, setSortBy] = useState<ImageSortOption>("Date Added");
-  const [sortDirection, setSortDirection] = useState<SortDirection>(
-    defaultImageSortDirections["Date Added"]
-  );
+  const [query, setQuery] = useQueryParams(QUERY_DEFAULTS);
+  // Typed text updates at once; the URL only keeps it for revisits.
+  const [search, setSearch] = useState(query.q);
+  const filterBy = optionOr(imageFilterOptions, query.filter, "all");
+  const statusFilter = optionOr(imageStatusFilters, query.status, "all");
+  const sortBy = optionOr(imageSortOptions, query.sort, "added");
+  const sortDirection: SortDirection =
+    query.dir === "ascending" || query.dir === "descending"
+      ? query.dir
+      : imageSortOptions[sortBy].defaultDirection;
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<ProjectImage | null>(null);
   const [transferMode, setTransferMode] = useState<"copy" | "move" | null>(null);
@@ -101,6 +115,24 @@ export function ProjectDetailClient({
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [isAiOpen, setIsAiOpen] = useState(false);
+  // Applied as soon as an action succeeds; the refresh then confirms them.
+  const [removedIds, setRemovedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [renames, setRenames] = useState<
+    ReadonlyMap<string, { from: string; to: string }>
+  >(() => new Map());
+
+  const images = useMemo(
+    () =>
+      serverImages.flatMap((image) => {
+        if (removedIds.has(image.id)) return [];
+        const rename = renames.get(image.id);
+        // Only until the server copy changes: then it is the source of truth.
+        return rename && rename.from === image.fileName
+          ? [{ ...image, fileName: rename.to }]
+          : [image];
+      }),
+    [removedIds, renames, serverImages],
+  );
 
   const refresh = useCallback(() => {
     // Let client state commit before merging the refreshed Server Component
@@ -132,30 +164,32 @@ export function ProjectDetailClient({
   const reviewHref = reviewImageIds[0]
     ? `/projects/${project.id}/annotate/${reviewImageIds[0]}`
     : null;
+  const selectedIdSet = useMemo(() => new Set(selectedImageIds), [selectedImageIds]);
 
   const visibleImages = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
+    const status = imageStatusFilters[statusFilter];
 
     return images
       .filter((image) =>
         image.fileName.toLowerCase().includes(normalizedSearch)
       )
       .filter((image) =>
-        statusFilter === "All" ? true : image.status === statusFilter
+        statusFilter === "all" ? true : image.status === status
       )
       .filter((image) =>
-        filterBy === "Selected"
-          ? selectedImageIds.includes(image.id)
-          : filterBy === "AI suggestions"
+        filterBy === "selected"
+          ? selectedIdSet.has(image.id)
+          : filterBy === "ai"
             ? (aiStates[image.id]?.pendingSuggestions ?? 0) > 0
             : true
       )
       .sort((first, second) => {
         let comparison = 0;
 
-        if (sortBy === "Name") {
+        if (sortBy === "name") {
           comparison = first.fileName.localeCompare(second.fileName);
-        } else if (sortBy === "Status") {
+        } else if (sortBy === "status") {
           comparison = first.status.localeCompare(second.status);
         } else {
           comparison = first.id.localeCompare(second.id);
@@ -168,24 +202,52 @@ export function ProjectDetailClient({
     filterBy,
     images,
     search,
-    selectedImageIds,
+    selectedIdSet,
     sortBy,
     sortDirection,
     statusFilter
   ]);
 
   function handleSortChange(nextSortBy: ImageSortOption) {
-    setSortBy(nextSortBy);
-    setSortDirection(defaultImageSortDirections[nextSortBy]);
+    // Radix Select reports "" when it unmounts during navigation.
+    if (!nextSortBy) return;
+    setQuery({ sort: nextSortBy, dir: "" });
   }
 
-  function handleSelectionChange(imageId: string, isSelected: boolean) {
+  function toggleSortDirection() {
+    const next = reverseSortDirection(sortDirection);
+    setQuery({
+      dir: next === imageSortOptions[sortBy].defaultDirection ? "" : next,
+    });
+  }
+
+  const hideImages = useCallback((ids: string[]) => {
+    setRemovedIds((current) => new Set([...current, ...ids]));
+    setSelectedImageIds((currentIds) =>
+      currentIds.filter((id) => !ids.includes(id)),
+    );
+  }, []);
+
+  // Stable callbacks, so a memoised card re-renders only when its own props change.
+  const handleSelectionChange = useCallback((imageId: string, isSelected: boolean) => {
     setSelectedImageIds((currentIds) =>
       isSelected
         ? [...currentIds, imageId]
         : currentIds.filter((id) => id !== imageId)
     );
-  }
+  }, []);
+
+  const openTransfer = useCallback((mode: "copy" | "move", targetImages: ProjectImage[]) => {
+    setTransferImageIds(targetImages.map((image) => image.id));
+    setTransferMode(mode);
+  }, []);
+  const openMove = useCallback((image: ProjectImage) => openTransfer("move", [image]), [openTransfer]);
+  const openAdd = useCallback((image: ProjectImage) => openTransfer("copy", [image]), [openTransfer]);
+  const openExport = useCallback((image: ProjectImage) => setExportImages([image]), []);
+  const openDelete = useCallback((image: ProjectImage) => {
+    setDeleteError(null);
+    setDeleteTargets([image]);
+  }, []);
 
   async function handleDeleteImage() {
     if (deleteTargets.length === 0 || isDeleting) return;
@@ -200,9 +262,7 @@ export function ProjectDetailClient({
         setDeleteError(result.error);
         return;
       }
-      setSelectedImageIds((currentIds) =>
-        currentIds.filter((id) => !ids.includes(id)),
-      );
+      hideImages(ids);
       setDeleteTargets([]);
       router.refresh();
     } catch (error) {
@@ -214,14 +274,7 @@ export function ProjectDetailClient({
     }
   }
 
-  const selectedImages = images.filter((image) =>
-    selectedImageIds.includes(image.id),
-  );
-
-  function openTransfer(mode: "copy" | "move", targetImages: ProjectImage[]) {
-    setTransferImageIds(targetImages.map((image) => image.id));
-    setTransferMode(mode);
-  }
+  const selectedImages = images.filter((image) => selectedIdSet.has(image.id));
 
   return (
     <div className="space-y-6">
@@ -290,7 +343,10 @@ export function ProjectDetailClient({
           <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => {
+              setSearch(event.target.value);
+              setQuery({ q: event.target.value });
+            }}
             placeholder="Search projects..."
             className="pl-9"
             type="search"
@@ -301,15 +357,17 @@ export function ProjectDetailClient({
             <span className="text-muted-foreground">Filter By:</span>
             <Select
               value={filterBy}
-              onValueChange={(v) => setFilterBy(v as ImageFilterOption)}
+              onValueChange={(value) => {
+                if (value) setQuery({ filter: value });
+              }}
             >
               <SelectTrigger className="w-[120px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {imageFilterOptions.map((option) => (
+                {(Object.keys(imageFilterOptions) as ImageFilterOption[]).map((option) => (
                   <SelectItem key={option} value={option}>
-                    {option}
+                    {imageFilterOptions[option]}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -319,15 +377,17 @@ export function ProjectDetailClient({
             <span className="text-muted-foreground">Status:</span>
             <Select
               value={statusFilter}
-              onValueChange={(v) => setStatusFilter(v as ImageStatusFilter)}
+              onValueChange={(value) => {
+                if (value) setQuery({ status: value });
+              }}
             >
               <SelectTrigger className="w-[140px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {imageStatusFilters.map((option) => (
+                {(Object.keys(imageStatusFilters) as ImageStatusFilter[]).map((option) => (
                   <SelectItem key={option} value={option}>
-                    {option}
+                    {imageStatusFilters[option]}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -337,15 +397,15 @@ export function ProjectDetailClient({
             <span className="text-muted-foreground">Sort By:</span>
             <Select
               value={sortBy}
-              onValueChange={(v) => handleSortChange(v as ImageSortOption)}
+              onValueChange={(value) => handleSortChange(value as ImageSortOption)}
             >
               <SelectTrigger className="w-[140px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {imageSortOptions.map((option) => (
+                {(Object.keys(imageSortOptions) as ImageSortOption[]).map((option) => (
                   <SelectItem key={option} value={option}>
-                    {option}
+                    {imageSortOptions[option].label}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -354,7 +414,7 @@ export function ProjectDetailClient({
           <SortOrderButton
             direction={sortDirection}
             label="image sort order"
-            onToggle={() => setSortDirection(reverseSortDirection)}
+            onToggle={toggleSortDirection}
           />
         </div>
       </div>
@@ -383,18 +443,15 @@ export function ProjectDetailClient({
               key={image.id}
               image={image}
               projectId={project.id}
-              isSelected={selectedImageIds.includes(image.id)}
+              isSelected={selectedIdSet.has(image.id)}
               selectionMode={selectedImageIds.length > 0}
               aiState={aiStates[image.id]}
               onSelectionChange={handleSelectionChange}
               onRename={setRenameTarget}
-              onMove={(target) => openTransfer("move", [target])}
-              onAdd={(target) => openTransfer("copy", [target])}
-              onExport={(target) => setExportImages([target])}
-              onDelete={(target) => {
-                setDeleteError(null);
-                setDeleteTargets([target]);
-              }}
+              onMove={openMove}
+              onAdd={openAdd}
+              onExport={openExport}
+              onDelete={openDelete}
             />
           ))}
         </div>
@@ -436,6 +493,11 @@ export function ProjectDetailClient({
         projectId={project.id}
         open={renameTarget !== null}
         onOpenChange={(open) => { if (!open) setRenameTarget(null); }}
+        onRenamed={(imageId, fileName) => {
+          const from = serverImages.find((image) => image.id === imageId)?.fileName;
+          if (from === undefined) return;
+          setRenames((current) => new Map(current).set(imageId, { from, to: fileName }));
+        }}
       />
 
       <ImageTransferDialog
@@ -445,7 +507,10 @@ export function ProjectDetailClient({
         sourceProject={project}
         projects={projects}
         imageIds={transferImageIds}
-        onComplete={() => setSelectedImageIds([])}
+        onComplete={(transferredIds) => {
+          if (transferMode === "move") hideImages(transferredIds);
+          setSelectedImageIds([]);
+        }}
       />
 
       {exportImages ? (

@@ -12,7 +12,7 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
-import { useState } from "react";
+import { memo, useState } from "react";
 import { formatBytes } from "@/lib/format";
 import { thumbhashColor } from "@/lib/image-placeholder";
 import type { ImageAiState } from "@/lib/types/annotations";
@@ -70,7 +70,8 @@ function AiStateBadge({ state }: { state: ImageAiState }) {
   return null;
 }
 
-export function ImageCard({
+/** Memoised: the grid re-renders on every keystroke and selection change. */
+export const ImageCard = memo(function ImageCard({
   image,
   projectId,
   isSelected,
@@ -125,4 +126,4 @@ export function ImageCard({
       </CardContent>
     </Card>
   );
-}
+});

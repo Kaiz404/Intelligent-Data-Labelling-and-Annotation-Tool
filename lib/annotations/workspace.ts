@@ -29,7 +29,7 @@ export type AnnotationWorkspaceData = {
  * Everything the annotation workspace needs for one project. The workspace
  * layout loads it once per project visit (image switches stay client-side),
  * and the image page reuses the same request-scoped result to validate its
- * image ID. Null when the project is missing or not the user's (RLS returns
+ * image ID. The project page renders from it too. Null when the project is missing or not the user's (RLS returns
  * nothing, so every query can run in parallel with the project lookup).
  */
 export const loadAnnotationWorkspace = cache(

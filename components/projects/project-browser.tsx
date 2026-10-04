@@ -107,6 +107,8 @@ export function ProjectBrowser({ projects: allProjects }: ProjectBrowserProps) {
   }, [projects, search, sortBy, sortDirection]);
 
   function handleSortChange(nextSortBy: SortOption) {
+    // Radix Select reports "" when it unmounts during navigation.
+    if (!nextSortBy) return;
     setQuery({ sort: nextSortBy, dir: "" });
   }
 
