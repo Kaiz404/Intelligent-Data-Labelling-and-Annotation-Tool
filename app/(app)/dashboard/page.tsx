@@ -56,7 +56,7 @@ async function DashboardContent() {
 export default function DashboardPage() {
   return (
     <>
-      <AppHeader />
+      <AppHeader segments={[{ label: "Dashboard" }]} />
       <div className="flex-1 space-y-6 p-4 md:p-6">
         <Suspense
           fallback={

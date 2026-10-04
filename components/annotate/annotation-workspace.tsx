@@ -822,9 +822,11 @@ export function AnnotationWorkspace({
   return (
     <>
       <AppHeader
-        projectName={project.name}
-        projectId={project.id}
-        fileName={activeImage.fileName}
+        segments={[
+          { label: "Projects", href: "/projects" },
+          { label: project.name, href: `/projects/${project.id}` },
+          { label: activeImage.fileName },
+        ]}
       />
       <div className="flex-1 p-4 md:p-6">
         <div

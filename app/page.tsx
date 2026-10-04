@@ -1,8 +1,7 @@
-import { AuthButton } from "@/components/auth-button";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
-import { Suspense } from "react";
 
+/** Fully static: the proxy sends signed-in visitors to /dashboard. */
 export default function Home() {
   return (
     <main className="min-h-screen flex flex-col">
@@ -11,9 +10,14 @@ export default function Home() {
           <Link href="/" className="font-semibold">
             Annotate
           </Link>
-          <Suspense>
-            <AuthButton />
-          </Suspense>
+          <div className="flex gap-2">
+            <Button asChild size="sm" variant="outline">
+              <Link href="/auth/login">Sign in</Link>
+            </Button>
+            <Button asChild size="sm">
+              <Link href="/auth/sign-up">Sign up</Link>
+            </Button>
+          </div>
         </div>
       </nav>
 

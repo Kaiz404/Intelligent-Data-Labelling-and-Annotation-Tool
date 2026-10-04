@@ -2,18 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Laptop, Moon, MousePointer2, MoreVertical, Sun } from "lucide-react";
-import { useTheme } from "next-themes";
-import { LogoutButton } from "@/components/logout-button";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { Suspense } from "react";
+import { MousePointer2 } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -28,19 +18,14 @@ import {
   SidebarRail,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { navSections } from "@/lib/nav";
+import { navSections, type NavItem } from "@/lib/nav";
 import { cn } from "@/lib/utils";
 
 type AppSidebarProps = {
-  userEmail?: string | null;
-  /** Server-rendered storage usage card (streamed in its own Suspense boundary). */
+  /** Streamed in their own Suspense boundaries, so the rest renders at once. */
   storageSlot?: React.ReactNode;
+  accountSlot?: React.ReactNode;
 };
-
-function getInitials(email: string) {
-  const local = email.split("@")[0] ?? "";
-  return local.slice(0, 2).toUpperCase() || "U";
-}
 
 function SidebarBrand() {
   const { state } = useSidebar();
@@ -79,12 +64,65 @@ function SidebarBrand() {
   );
 }
 
-export function AppSidebar({ userEmail, storageSlot }: AppSidebarProps) {
-  const pathname = usePathname();
-  const { setTheme } = useTheme();
-  const displayEmail = userEmail ?? "user@example.com";
-  const displayName = displayEmail.split("@")[0] ?? "User";
+function isActiveItem(item: NavItem, pathname: string | null) {
+  if (item.disabled || pathname === null) return false;
+  if (item.label === "Annotate") {
+    // Recent Annotations hub or an image workspace.
+    return pathname === item.href || pathname.includes("/annotate/");
+  }
+  if (item.href === "/dashboard") return pathname === "/dashboard";
+  if (item.href === "/projects") {
+    return (
+      (pathname === "/projects" || /^\/projects\/[^/]+$/.test(pathname)) &&
+      !pathname.includes("/annotate/")
+    );
+  }
+  return pathname.startsWith(item.href);
+}
 
+/** `pathname` is null in the prerendered shell, before the URL is known. */
+function NavSections({ pathname }: { pathname: string | null }) {
+  return navSections.map((section) => (
+    <SidebarGroup key={section.title}>
+      <SidebarGroupLabel>{section.title}</SidebarGroupLabel>
+      <SidebarGroupContent>
+        <SidebarMenu>
+          {section.items.map((item) => (
+            <SidebarMenuItem key={item.label}>
+              {item.disabled ? (
+                <SidebarMenuButton
+                  disabled
+                  className="cursor-not-allowed opacity-50"
+                  tooltip={item.label}
+                >
+                  <item.icon />
+                  <span>{item.label}</span>
+                </SidebarMenuButton>
+              ) : (
+                <SidebarMenuButton
+                  asChild
+                  isActive={isActiveItem(item, pathname)}
+                  tooltip={item.label}
+                >
+                  <Link href={item.href}>
+                    <item.icon />
+                    <span>{item.label}</span>
+                  </Link>
+                </SidebarMenuButton>
+              )}
+            </SidebarMenuItem>
+          ))}
+        </SidebarMenu>
+      </SidebarGroupContent>
+    </SidebarGroup>
+  ));
+}
+
+function ActiveNavSections() {
+  return <NavSections pathname={usePathname()} />;
+}
+
+export function AppSidebar({ storageSlot, accountSlot }: AppSidebarProps) {
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader className="border-b border-sidebar-border">
@@ -92,108 +130,15 @@ export function AppSidebar({ userEmail, storageSlot }: AppSidebarProps) {
       </SidebarHeader>
 
       <SidebarContent>
-        {navSections.map((section) => (
-          <SidebarGroup key={section.title}>
-            <SidebarGroupLabel>{section.title}</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {section.items.map((item) => {
-                  const isActive =
-                    !item.disabled &&
-                    (item.label === "Annotate"
-                      ? // Recent Annotations hub or an image workspace.
-                        pathname === item.href ||
-                        pathname.includes("/annotate/")
-                      : item.href === "/dashboard"
-                        ? pathname === "/dashboard"
-                        : item.href === "/projects"
-                          ? (pathname === "/projects" ||
-                              /^\/projects\/[^/]+$/.test(pathname)) &&
-                            !pathname.includes("/annotate/")
-                          : pathname.startsWith(item.href));
-
-                  return (
-                    <SidebarMenuItem key={item.label}>
-                      {item.disabled ? (
-                        <SidebarMenuButton
-                          disabled
-                          className="cursor-not-allowed opacity-50"
-                          tooltip={item.label}
-                        >
-                          <item.icon />
-                          <span>{item.label}</span>
-                        </SidebarMenuButton>
-                      ) : (
-                        <SidebarMenuButton
-                          asChild
-                          isActive={isActive}
-                          tooltip={item.label}
-                        >
-                          <Link href={item.href}>
-                            <item.icon />
-                            <span>{item.label}</span>
-                          </Link>
-                        </SidebarMenuButton>
-                      )}
-                    </SidebarMenuItem>
-                  );
-                })}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        ))}
+        <Suspense fallback={<NavSections pathname={null} />}>
+          <ActiveNavSections />
+        </Suspense>
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border">
         {storageSlot}
 
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <div className="flex w-full items-center gap-2 rounded-md p-2 group-data-[collapsible=icon]:justify-center">
-              <Avatar className="size-8">
-                <AvatarFallback className="bg-primary/10 text-xs text-primary">
-                  {getInitials(displayEmail)}
-                </AvatarFallback>
-              </Avatar>
-              <div className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
-                <p className="truncate text-sm font-medium">{displayName}</p>
-                <p className="truncate text-xs text-muted-foreground">
-                  {displayEmail}
-                </p>
-              </div>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    className="rounded-md p-1 hover:bg-sidebar-accent group-data-[collapsible=icon]:hidden"
-                    aria-label="Account menu"
-                  >
-                    <MoreVertical className="size-4" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-48">
-                  <DropdownMenuLabel>Theme</DropdownMenuLabel>
-                  <DropdownMenuItem onClick={() => setTheme("light")}>
-                    <Sun className="size-4" />
-                    Light
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setTheme("dark")}>
-                    <Moon className="size-4" />
-                    Dark
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setTheme("system")}>
-                    <Laptop className="size-4" />
-                    System
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem asChild className="p-0">
-                    <LogoutButton className="w-full px-2" />
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-          </SidebarMenuItem>
-        </SidebarMenu>
+        {accountSlot}
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>

@@ -44,7 +44,12 @@ async function ProjectDetailContent({ id }: { id: string }) {
 
   return (
     <>
-      <AppHeader projectName={project.name} />
+      <AppHeader
+        segments={[
+          { label: "Projects", href: "/projects" },
+          { label: project.name },
+        ]}
+      />
       <div className="flex-1 p-4 md:p-6">
         <ProjectDetailClient
           project={project}

@@ -2,42 +2,25 @@ import { Suspense } from "react";
 import { connection } from "next/server";
 import { AppSidebar } from "@/components/app-shell/app-sidebar";
 import {
+  SidebarAccount,
+  SidebarAccountSkeleton,
+} from "@/components/app-shell/sidebar-account";
+import {
   StorageUsageSkeleton,
   StorageUsageWidget,
 } from "@/components/app-shell/storage-usage-widget";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
-import { Skeleton } from "@/components/ui/skeleton";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { createClient } from "@/lib/supabase/server";
 
-async function AppSidebarWithUser() {
+async function SignedInAccount() {
   await connection();
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  return (
-    <AppSidebar
-      userEmail={user?.email}
-      storageSlot={
-        <Suspense fallback={<StorageUsageSkeleton />}>
-          <StorageUsageWidget />
-        </Suspense>
-      }
-    />
-  );
+  const { data } = await supabase.auth.getClaims();
+  return <SidebarAccount email={data?.claims.email} />;
 }
 
-function SidebarFallback() {
-  return (
-    <div className="hidden w-64 border-r bg-sidebar p-4 md:block">
-      <Skeleton className="h-10 w-full" />
-      <Skeleton className="mt-6 h-40 w-full" />
-    </div>
-  );
-}
-
+/** The sidebar renders at once; only the account row and storage card wait. */
 export default function AppLayout({
   children,
 }: {
@@ -46,9 +29,18 @@ export default function AppLayout({
   return (
     <TooltipProvider>
       <SidebarProvider>
-        <Suspense fallback={<SidebarFallback />}>
-          <AppSidebarWithUser />
-        </Suspense>
+        <AppSidebar
+          storageSlot={
+            <Suspense fallback={<StorageUsageSkeleton />}>
+              <StorageUsageWidget />
+            </Suspense>
+          }
+          accountSlot={
+            <Suspense fallback={<SidebarAccountSkeleton />}>
+              <SignedInAccount />
+            </Suspense>
+          }
+        />
         <SidebarInset className="flex flex-col">{children}</SidebarInset>
       </SidebarProvider>
     </TooltipProvider>

@@ -40,7 +40,7 @@ async function ProjectsContent() {
 export default function ProjectsPage() {
   return (
     <>
-      <AppHeader />
+      <AppHeader segments={[{ label: "Projects" }]} />
       <div className="flex-1 p-4 md:p-6">
         <Suspense
           fallback={<p className="text-muted-foreground">Loading projects...</p>}

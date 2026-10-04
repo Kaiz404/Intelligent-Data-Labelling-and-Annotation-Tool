@@ -1,7 +1,10 @@
 import "server-only";
 
 import { cache } from "react";
-import { isRecycleBinSchemaMissing } from "@/lib/recycle-bin";
+import {
+  fetchRecycleBinProjectIds,
+  isRecycleBinSchemaMissing,
+} from "@/lib/recycle-bin";
 import { createClient } from "@/lib/supabase/server";
 import { measureProjectStorage } from "@/lib/uploads/s3-server";
 
@@ -157,57 +160,53 @@ function warnS3FallbackOnce(error: unknown) {
   );
 }
 
-const getStorageUsageForKey = cache(
-  async (extraProjectIdsKey: string): Promise<StorageUsage> => {
-    const supabase = await createClient();
-    const quotaBytes = getStorageQuotaBytes();
-    const projectIds = await fetchOwnedProjectIds(supabase);
-    const extraProjectIds = extraProjectIdsKey
-      ? extraProjectIdsKey.split(",")
-      : [];
-
-    try {
-      const { bytes, objectCount } = await measureProjectStorage([
-        ...projectIds,
-        ...extraProjectIds,
-      ]);
-      return { usedBytes: bytes, quotaBytes, source: "s3", objectCount };
-    } catch (error) {
-      warnS3FallbackOnce(error);
-    }
-
-    const [live, binned] = await Promise.all([
-      sumImageSizes(supabase),
-      sumRecycleBinSizes(supabase),
-    ]);
-    return {
-      usedBytes: live.bytes + binned.bytes,
-      quotaBytes,
-      source: "database",
-      objectCount: live.count + binned.count,
-    };
-  },
-);
-
 /**
- * The signed-in user's storage usage, measured per request (deduplicated
- * within a render by React `cache()`).
+ * The signed-in user's storage usage, measured once per request (React
+ * `cache()`).
  *
- * Lists S3 under `projects/{id}/` for every RLS-visible project plus
- * `extraProjectIds` (for example Recycle Bin projects whose objects are still
- * in S3; pass only IDs the user owns). If S3 listing fails for any reason,
- * falls back to summing the user's `images.size_bytes` plus Recycle Bin item
- * sizes (source "database", which excludes thumbnails and anything without a
- * row). Throws only
- * when Supabase itself cannot be queried.
+ * Lists S3 under `projects/{id}/` for every RLS-visible project plus the
+ * projects of Recycle Bin items, whose objects stay in S3 until permanent
+ * deletion. If S3 listing fails for any reason, falls back to summing the
+ * user's `images.size_bytes` plus Recycle Bin item sizes (source "database",
+ * which excludes thumbnails and anything without a row). Throws only when
+ * Supabase itself cannot be queried.
  */
-export function getStorageUsage(
-  extraProjectIds: string[] = [],
-): Promise<StorageUsage> {
-  const key = [
-    ...new Set(extraProjectIds.map((id) => id.trim()).filter(Boolean)),
-  ]
-    .sort()
-    .join(",");
-  return getStorageUsageForKey(key);
+export const getStorageUsage = cache(async (): Promise<StorageUsage> => {
+  const supabase = await createClient();
+  const quotaBytes = getStorageQuotaBytes();
+  const [projectIds, binnedProjectIds] = await Promise.all([
+    fetchOwnedProjectIds(supabase),
+    fetchBinnedProjectIds(),
+  ]);
+
+  try {
+    const { bytes, objectCount } = await measureProjectStorage([
+      ...projectIds,
+      ...binnedProjectIds,
+    ]);
+    return { usedBytes: bytes, quotaBytes, source: "s3", objectCount };
+  } catch (error) {
+    warnS3FallbackOnce(error);
+  }
+
+  const [live, binned] = await Promise.all([
+    sumImageSizes(supabase),
+    sumRecycleBinSizes(supabase),
+  ]);
+  return {
+    usedBytes: live.bytes + binned.bytes,
+    quotaBytes,
+    source: "database",
+    objectCount: live.count + binned.count,
+  };
+});
+
+/** Recycle Bin projects still in S3; none if they cannot be loaded. */
+async function fetchBinnedProjectIds() {
+  try {
+    return await fetchRecycleBinProjectIds();
+  } catch (error) {
+    console.error("[storage-usage] Could not load Recycle Bin projects", error);
+    return [];
+  }
 }

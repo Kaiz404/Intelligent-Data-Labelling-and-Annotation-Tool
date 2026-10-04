@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, useTransition } from "react";
 
 export function SignUpForm({
   className,
@@ -23,24 +23,27 @@ export function SignUpForm({
   const [password, setPassword] = useState("");
   const [repeatPassword, setRepeatPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  // Pending until the next page renders, so the button never looks idle.
+  const [isNavigating, startNavigation] = useTransition();
+  const isLoading = isSubmitting || isNavigating;
   const router = useRouter();
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     const supabase = createClient();
-    setIsLoading(true);
+    setIsSubmitting(true);
     setError(null);
 
     if (password !== repeatPassword) {
       setError("Passwords do not match");
-      setIsLoading(false);
+      setIsSubmitting(false);
       return;
     }
 
     if (password.length < 8) {
       setError("Password must be at least 8 characters long");
-      setIsLoading(false);
+      setIsSubmitting(false);
       return;
     }
 
@@ -55,14 +58,14 @@ export function SignUpForm({
       });
       if (error) throw error;
       if (data.session) {
-        router.push("/dashboard");
+        startNavigation(() => router.push("/dashboard"));
         return;
       }
-      router.push("/auth/sign-up-success");
+      startNavigation(() => router.push("/auth/sign-up-success"));
     } catch (error: unknown) {
       setError(error instanceof Error ? error.message : "An error occurred");
     } finally {
-      setIsLoading(false);
+      setIsSubmitting(false);
     }
   };
 
