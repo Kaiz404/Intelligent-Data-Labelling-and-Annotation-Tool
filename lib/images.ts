@@ -1,6 +1,6 @@
 import "server-only";
 
-import { forEachRowPage } from "@/lib/supabase/rows";
+import { fetchAllRows, forEachRowPage } from "@/lib/supabase/rows";
 import { createClient } from "@/lib/supabase/server";
 import {
   createImageReadUrl,
@@ -16,12 +16,13 @@ type ImageRow = {
   object_key: string;
   size_bytes: number;
   created_at: string;
+  modified_at: string | null;
   annotation: unknown;
   thumbhash: string | null;
 };
 
 const IMAGE_COLUMNS =
-  "id, name, object_key, size_bytes, created_at, annotation, thumbhash";
+  "id, name, object_key, size_bytes, created_at, modified_at, annotation, thumbhash";
 
 const dateFormatter = new Intl.DateTimeFormat("en-US", {
   year: "numeric",
@@ -61,6 +62,7 @@ async function toProjectImage(
     fileName: row.name,
     sizeBytes: row.size_bytes,
     capturedAt: dateFormatter.format(new Date(row.created_at)),
+    modifiedAt: row.modified_at,
     status,
     progress,
     url,
@@ -69,28 +71,26 @@ async function toProjectImage(
   };
 }
 
+/** Every image of a project, oldest upload first, paged past the PostgREST row cap. */
 export async function fetchProjectImages(
   projectId: string,
 ): Promise<ProjectImage[]> {
   const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("images")
-    .select(IMAGE_COLUMNS)
-    .eq("project_id", projectId)
-    .order("created_at", { ascending: true });
-
-  if (error) {
-    throw new Error(`Could not load project images: ${error.message}`);
-  }
-
-  return Promise.all(
-    ((data ?? []) as ImageRow[]).map((row) => toProjectImage(row, projectId)),
+  const rows = await fetchAllRows<ImageRow>("project images", (count) =>
+    supabase
+      .from("images")
+      .select(IMAGE_COLUMNS, count)
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: true })
+      // Breaks upload-time ties, so pages never overlap.
+      .order("id", { ascending: true }),
   );
+
+  return Promise.all(rows.map((row) => toProjectImage(row, projectId)));
 }
 
 type RecentImageRow = ImageRow & {
   project_id: string;
-  modified_at: string | null;
   projects: { name: string } | { name: string }[] | null;
 };
 
@@ -109,7 +109,7 @@ export async function fetchRecentlyAnnotatedImages(
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("images")
-    .select(`${IMAGE_COLUMNS}, project_id, modified_at, projects(name)`)
+    .select(`${IMAGE_COLUMNS}, project_id, projects(name)`)
     .not("annotation", "is", null)
     .order("modified_at", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false })
@@ -137,22 +137,33 @@ export async function fetchRecentlyAnnotatedImages(
 
   return { images, limit, isCapped: rows.length > limit };
 }
+
 type ImageStatsRow = {
   project_id: string;
   /** First saved box only: enough to tell annotated from not, at a fraction of the bytes. */
   first_box: unknown;
+  created_at: string;
+  modified_at: string | null;
 };
 
 export type ImageStats = {
   total: number;
   annotated: number;
   unannotated: number;
-  byProject: Record<string, { total: number; annotated: number }>;
+  byProject: Record<
+    string,
+    {
+      total: number;
+      annotated: number;
+      /** Latest upload or annotation save among the project's images (epoch ms). */
+      lastActivityMs: number;
+    }
+  >;
 };
 
 /**
- * Image counts for every project the user owns (RLS-filtered), paged past
- * the PostgREST row cap.
+ * Image counts and latest image activity for every project the user owns
+ * (RLS-filtered), paged past the PostgREST row cap.
  */
 export async function fetchImageStats(): Promise<ImageStats> {
   const supabase = await createClient();
@@ -163,18 +174,26 @@ export async function fetchImageStats(): Promise<ImageStats> {
   await forEachRowPage<ImageStatsRow>(
     supabase,
     "images",
-    "project_id, first_box:annotation->0",
+    "project_id, first_box:annotation->0, created_at, modified_at",
     (rows) => {
       for (const row of rows) {
         const projectStats = byProject[row.project_id] ?? {
           total: 0,
           annotated: 0,
+          lastActivityMs: 0,
         };
         projectStats.total += 1;
         total += 1;
         if (annotationStatus(row.first_box).status === "Annotated") {
           projectStats.annotated += 1;
           annotated += 1;
+        }
+        const activityMs = Math.max(
+          Date.parse(row.created_at),
+          row.modified_at ? Date.parse(row.modified_at) : 0,
+        );
+        if (activityMs > projectStats.lastActivityMs) {
+          projectStats.lastActivityMs = activityMs;
         }
         byProject[row.project_id] = projectStats;
       }

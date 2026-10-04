@@ -6,6 +6,7 @@ import {
 } from "@/lib/annotations/auto-label";
 import { MAX_JOB_IMAGES } from "@/lib/annotations/job-config";
 import { RoboflowError } from "@/lib/roboflow/config";
+import { fetchAllRows, forEachQueryPage } from "@/lib/supabase/rows";
 import { createClient } from "@/lib/supabase/server";
 import { UploadApiError } from "@/lib/uploads/s3-server";
 import type {
@@ -25,6 +26,8 @@ const WORKER_CONCURRENCY = 4;
 const DRAIN_BUDGET_MS = 240_000;
 const LEASE_SECONDS = 90;
 const MAX_ATTEMPTS = 3;
+/** Image ids per lookup when queuing a run (keeps URLs short, results under the row cap). */
+const IMAGE_LOOKUP_CHUNK = 200;
 
 export class AnnotationJobError extends Error {
   constructor(
@@ -97,31 +100,47 @@ export async function createAnnotationJob(
     );
   }
 
-  const [{ data: labels, error: labelsError }, { data: images, error: imagesError }] =
+  // Images are looked up in chunks: one `.in()` of up to MAX_JOB_IMAGES ids
+  // would make a very long URL, and the PostgREST row cap would silently
+  // drop everything past the first 1000.
+  const imageIdChunks: string[][] = [];
+  for (let index = 0; index < imageIds.length; index += IMAGE_LOOKUP_CHUNK) {
+    imageIdChunks.push(imageIds.slice(index, index + IMAGE_LOOKUP_CHUNK));
+  }
+  const [{ data: labels, error: labelsError }, ...imageResults] =
     await Promise.all([
       supabase
         .from("project_labels")
         .select("id, name")
         .eq("project_id", input.projectId)
         .in("id", input.labelIds),
-      supabase
-        .from("images")
-        .select("id, created_at")
-        .eq("project_id", input.projectId)
-        .in("id", imageIds)
-        .order("created_at", { ascending: true }),
+      ...imageIdChunks.map((ids) =>
+        supabase
+          .from("images")
+          .select("id, created_at")
+          .eq("project_id", input.projectId)
+          .in("id", ids),
+      ),
     ]);
 
-  if (labelsError || imagesError) {
+  if (labelsError || imageResults.some((result) => result.error)) {
     throw new AnnotationJobError("Could not load the project data.", 500);
   }
+  // Upload order (ties by id), as the queue processes items by position.
+  const images = imageResults
+    .flatMap((result) => (result.data ?? []) as Array<{ id: string; created_at: string }>)
+    .sort(
+      (a, b) =>
+        Date.parse(a.created_at) - Date.parse(b.created_at) ||
+        a.id.localeCompare(b.id),
+    );
   if (!labels || labels.length === 0) {
     throw new AnnotationJobError(
       "None of the selected labels belong to this project.",
       400,
     );
   }
-  if (!images || images.length === 0) {
+  if (images.length === 0) {
     throw new AnnotationJobError("None of the images belong to this project.", 400);
   }
 
@@ -213,17 +232,29 @@ export async function getAnnotationJobProgress(
     throw new AnnotationJobError("AI run not found.", 404);
   }
 
-  let updatesQuery = supabase
-    .from("annotation_job_items")
-    .select("image_id, status, suggestion_count")
-    .eq("job_id", jobId);
-  if (since) {
-    updatesQuery = updatesQuery.gt("updated_at", since);
-  }
+  // The first poll (no `since`) reads every item of the run, which can be
+  // more than the PostgREST row cap, so it is paged.
+  const updatesLoad = fetchAllRows<{
+    image_id: string;
+    status: AnnotationJobItemStatus;
+    suggestion_count: number;
+  }>("AI run progress", (count) => {
+    let query = supabase
+      .from("annotation_job_items")
+      .select("image_id, status, suggestion_count", count)
+      .eq("job_id", jobId);
+    if (since) {
+      query = query.gt("updated_at", since);
+    }
+    return query.order("id", { ascending: true });
+  }).then(
+    (data) => ({ data, error: null }),
+    (error: unknown) => ({ data: null, error }),
+  );
 
   const [counts, updates, live] = await Promise.all([
     supabase.rpc("annotation_job_counts", { p_job_id: jobId }),
-    updatesQuery,
+    updatesLoad,
     supabase
       .from("annotation_job_items")
       .select("id", { count: "exact", head: true })
@@ -239,9 +270,9 @@ export async function getAnnotationJobProgress(
   return {
     job: toProgress(job as JobRow, counts.data ?? []),
     updates: (updates.data ?? []).map((row) => ({
-      imageId: row.image_id as string,
-      status: row.status as AnnotationJobItemStatus,
-      pendingSuggestions: row.suggestion_count as number,
+      imageId: row.image_id,
+      status: row.status,
+      pendingSuggestions: row.suggestion_count,
     })),
     hasLiveWorker: (live.count ?? 0) > 0,
     projectId: job.project_id as string,
@@ -434,29 +465,31 @@ export async function fetchLatestAnnotationJob(
   return toProgress(job as JobRow, counts ?? []);
 }
 
+/** Latest AI state per image of a project (one RPC row each), paged past the PostgREST row cap. */
 export async function fetchImageAiStates(
   projectId: string,
 ): Promise<Record<string, ImageAiState>> {
   const supabase = await createClient();
-  const { data, error } = await supabase.rpc("annotation_image_states", {
-    p_project_id: projectId,
-  });
-
-  if (error) {
-    throw new Error(`Could not load AI annotation states: ${error.message}`);
-  }
-
   const states: Record<string, ImageAiState> = {};
-  for (const row of (data ?? []) as Array<{
+  await forEachQueryPage<{
     image_id: string;
     status: AnnotationJobItemStatus;
     pending_suggestions: number;
-  }>) {
-    states[row.image_id] = {
-      status: row.status,
-      pendingSuggestions: row.pending_suggestions,
-    };
-  }
+  }>(
+    "AI annotation states",
+    (count) =>
+      supabase
+        .rpc("annotation_image_states", { p_project_id: projectId }, count)
+        .order("image_id", { ascending: true }),
+    (rows) => {
+      for (const row of rows) {
+        states[row.image_id] = {
+          status: row.status,
+          pendingSuggestions: row.pending_suggestions,
+        };
+      }
+    },
+  );
   return states;
 }
 

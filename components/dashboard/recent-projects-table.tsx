@@ -80,7 +80,7 @@ export function RecentProjectsTable({
                       </TableCell>
                       <TableCell className="text-center">{project.image_count ?? 0}</TableCell>
                       <TableCell><div className="flex items-center gap-2"><Progress value={progress} className="h-2" /><span className="w-9 text-xs tabular-nums text-muted-foreground">{progress}%</span></div></TableCell>
-                      <TableCell className="text-center text-sm text-muted-foreground">{relativeTimeFromDate(project.updated_at)}</TableCell>
+                      <TableCell className="text-center text-sm text-muted-foreground">{relativeTimeFromDate(project.last_activity_at ?? project.updated_at)}</TableCell>
                       <TableCell>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="size-8" aria-label={`Actions for ${project.name}`}><MoreVertical className="size-4" /></Button></DropdownMenuTrigger>

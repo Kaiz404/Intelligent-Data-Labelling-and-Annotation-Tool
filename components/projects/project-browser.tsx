@@ -1,7 +1,7 @@
 "use client";
 
-import { Plus, Search } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Plus, Search, Star } from "lucide-react";
+import { startTransition, useMemo, useOptimistic, useState } from "react";
 import {
   AnnotationExportSheet,
   fetchExportData,
@@ -32,6 +32,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useQueryParams } from "@/hooks/use-query-params";
+import { toggleProjectStar } from "@/lib/actions/projects";
 import type { Project, ProjectExportData } from "@/lib/types/projects";
 
 const sortOptions = {
@@ -45,6 +46,11 @@ type SortOption = keyof typeof sortOptions;
 
 /** `dir` is empty while the sort's default direction applies. */
 const QUERY_DEFAULTS = { q: "", sort: "edited", dir: "" };
+
+/** Latest upload, annotation save, or project edit (see `loadProjectSummaries`). */
+function editedTime(project: Project) {
+  return new Date(project.last_activity_at ?? project.updated_at).getTime();
+}
 
 type ProjectBrowserProps = {
   projects: Project[];
@@ -63,9 +69,18 @@ export function ProjectBrowser({ projects: allProjects }: ProjectBrowserProps) {
   const [search, setSearch] = useState(query.q);
   // Hidden as soon as they reach the Recycle Bin, before the refresh lands.
   const [removedIds, setRemovedIds] = useState<ReadonlySet<string>>(() => new Set());
-  const projects = useMemo(
+  const liveProjects = useMemo(
     () => allProjects.filter((project) => !removedIds.has(project.id)),
     [allProjects, removedIds],
+  );
+  // Stars flip at once; the action's revalidation then confirms them, and a
+  // failed action rolls them back when its transition ends.
+  const [projects, setOptimisticStar] = useOptimistic(
+    liveProjects,
+    (current, { id, starred }: { id: string; starred: boolean }) =>
+      current.map((project) =>
+        project.id === id ? { ...project, starred } : project,
+      ),
   );
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
@@ -97,9 +112,7 @@ export function ProjectBrowser({ projects: allProjects }: ProjectBrowserProps) {
       } else if (sortBy === "images") {
         comparison = (first.image_count ?? 0) - (second.image_count ?? 0);
       } else {
-        comparison =
-          new Date(first.updated_at ?? 0).getTime() -
-          new Date(second.updated_at ?? 0).getTime();
+        comparison = editedTime(first) - editedTime(second);
       }
 
       return sortDirection === "ascending" ? comparison : -comparison;
@@ -115,6 +128,20 @@ export function ProjectBrowser({ projects: allProjects }: ProjectBrowserProps) {
   function toggleSortDirection() {
     const next = reverseSortDirection(sortDirection);
     setQuery({ dir: next === sortOptions[sortBy].defaultDirection ? "" : next });
+  }
+
+  function toggleStar(project: Project) {
+    const starred = !project.starred;
+    setActionError(null);
+    startTransition(async () => {
+      setOptimisticStar({ id: project.id, starred });
+      try {
+        const result = await toggleProjectStar(project.id, starred);
+        if (!result.ok) setActionError(result.error);
+      } catch {
+        setActionError("Could not update the favourite. Try again.");
+      }
+    });
   }
 
   function openAction(project: Project, nextAction: ProjectCardAction) {
@@ -190,7 +217,24 @@ export function ProjectBrowser({ projects: allProjects }: ProjectBrowserProps) {
         </p>
       ) : null}
 
-      {visibleProjects.length === 0 ? (
+      {visibleProjects.length === 0 &&
+      sortBy === "favourite" &&
+      !projects.some((project) => project.starred) ? (
+        <div className="rounded-lg border border-dashed py-16 text-center">
+          <Star className="mx-auto size-6 text-muted-foreground" />
+          <p className="mt-3 text-muted-foreground">No starred projects yet.</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Star a project on its card to keep it here.
+          </p>
+          <Button
+            variant="link"
+            className="mt-2"
+            onClick={() => setQuery({ sort: "edited", dir: "" })}
+          >
+            Show all projects
+          </Button>
+        </div>
+      ) : visibleProjects.length === 0 ? (
         <div className="rounded-lg border border-dashed py-16 text-center">
           <p className="text-muted-foreground">No projects found.</p>
           <Button
@@ -210,6 +254,7 @@ export function ProjectBrowser({ projects: allProjects }: ProjectBrowserProps) {
               exporting={exportingProjectId === project.id}
               onAction={openAction}
               onExport={(selected) => void openExport(selected)}
+              onToggleStar={toggleStar}
             />
           ))}
         </div>

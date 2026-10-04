@@ -5,10 +5,12 @@ import { useRouter } from "next/navigation";
 import { startTransition, useCallback, useMemo, useState } from "react";
 import { moveImagesToRecycleBin } from "@/lib/actions/recycle-bin";
 import { AnnotationExportSheet } from "@/components/annotate/annotation-export-sheet";
+import { EditProjectDialog } from "@/components/dashboard/project-action-dialogs";
 import { AiJobBanner } from "@/components/projects/ai-job-banner";
 import { BatchAiAnnotateDialog } from "@/components/projects/batch-ai-annotate-dialog";
 import { ImageCard } from "@/components/projects/image-card";
 import { ImageTransferDialog, RenameImageDialog } from "@/components/projects/image-action-dialogs";
+import { LabelFilterMenu } from "@/components/projects/label-filter-menu";
 import {
   reverseSortDirection,
   SortOrderButton,
@@ -40,6 +42,13 @@ import {
 } from "@/components/ui/tooltip";
 import { useAnnotationJob } from "@/hooks/use-annotation-job";
 import { useQueryParams } from "@/hooks/use-query-params";
+import { numberFormatter } from "@/lib/format";
+import {
+  countImagesByLabel,
+  matchesLabelFilter,
+  parseLabelFilter,
+  toggleLabelFilter,
+} from "@/lib/image-label-filter";
 import type {
   AnnotationJobProgress,
   AnnotationLabel,
@@ -49,7 +58,6 @@ import type { Project, ProjectImage } from "@/lib/types/projects";
 
 const imageStatusFilters = {
   all: "All",
-  "in-progress": "In Progress",
   annotated: "Annotated",
   unannotated: "Unannotated",
 } as const;
@@ -70,8 +78,19 @@ type ImageStatusFilter = keyof typeof imageStatusFilters;
 type ImageSortOption = keyof typeof imageSortOptions;
 type ImageFilterOption = keyof typeof imageFilterOptions;
 
-/** `dir` is empty while the sort's default direction applies. */
-const QUERY_DEFAULTS = { q: "", filter: "all", status: "all", sort: "added", dir: "" };
+/**
+ * `dir` is empty while the sort's default direction applies. `labels` holds
+ * comma-separated label ids (see `lib/image-label-filter.ts`). Unknown values,
+ * such as the retired `status=in-progress`, fall back to their default.
+ */
+const QUERY_DEFAULTS = {
+  q: "",
+  filter: "all",
+  status: "all",
+  labels: "",
+  sort: "added",
+  dir: "",
+};
 
 function optionOr<T extends string>(options: Record<T, unknown>, value: string, fallback: NoInfer<T>): T {
   return Object.hasOwn(options, value) ? (value as T) : fallback;
@@ -87,7 +106,7 @@ type ProjectDetailClientProps = {
 };
 
 export function ProjectDetailClient({
-  project,
+  project: serverProject,
   images: serverImages,
   projects,
   labels,
@@ -115,6 +134,23 @@ export function ProjectDetailClient({
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [isAiOpen, setIsAiOpen] = useState(false);
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  // Saved project details show at once; the next server render replaces them.
+  const [savedProject, setSavedProject] = useState<{
+    base: Project;
+    saved: Project;
+  } | null>(null);
+  const project = useMemo(
+    () =>
+      savedProject?.base === serverProject
+        ? {
+            ...serverProject,
+            name: savedProject.saved.name,
+            description: savedProject.saved.description,
+          }
+        : serverProject,
+    [savedProject, serverProject],
+  );
   // Applied as soon as an action succeeds; the refresh then confirms them.
   const [removedIds, setRemovedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [renames, setRenames] = useState<
@@ -165,10 +201,18 @@ export function ProjectDetailClient({
     ? `/projects/${project.id}/annotate/${reviewImageIds[0]}`
     : null;
   const selectedIdSet = useMemo(() => new Set(selectedImageIds), [selectedImageIds]);
+  const labelIds = useMemo(() => labels.map((label) => label.id), [labels]);
+  // Ids of labels that no longer exist are ignored, not stripped from the URL.
+  const labelSelection = useMemo(
+    () => parseLabelFilter(query.labels, labelIds),
+    [labelIds, query.labels],
+  );
+  const labelCounts = useMemo(() => countImagesByLabel(images), [images]);
 
   const visibleImages = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
     const status = imageStatusFilters[statusFilter];
+    const selectedLabels = new Set(labelSelection);
     // Images arrive oldest first (`created_at`), so their index is the upload order.
     const uploadOrder = new Map(images.map((image, index) => [image.id, index]));
 
@@ -179,6 +223,7 @@ export function ProjectDetailClient({
       .filter((image) =>
         statusFilter === "all" ? true : image.status === status
       )
+      .filter((image) => matchesLabelFilter(image, selectedLabels))
       .filter((image) =>
         filterBy === "selected"
           ? selectedIdSet.has(image.id)
@@ -203,6 +248,7 @@ export function ProjectDetailClient({
     aiStates,
     filterBy,
     images,
+    labelSelection,
     search,
     selectedIdSet,
     sortBy,
@@ -223,10 +269,32 @@ export function ProjectDetailClient({
     });
   }
 
+  const visibleSelectedCount = visibleImages.reduce(
+    (count, image) => count + (selectedIdSet.has(image.id) ? 1 : 0),
+    0,
+  );
+  const allVisibleSelected =
+    visibleImages.length > 0 && visibleSelectedCount === visibleImages.length;
+
+  /** Adds every image the search and filters show; other selections stay. */
+  function selectVisible() {
+    setSelectedImageIds((currentIds) => [
+      ...new Set([...currentIds, ...visibleImages.map((image) => image.id)]),
+    ]);
+  }
+
+  function deselectVisible() {
+    const visibleIds = new Set(visibleImages.map((image) => image.id));
+    setSelectedImageIds((currentIds) =>
+      currentIds.filter((id) => !visibleIds.has(id)),
+    );
+  }
+
   const hideImages = useCallback((ids: string[]) => {
+    const hiddenIds = new Set(ids);
     setRemovedIds((current) => new Set([...current, ...ids]));
     setSelectedImageIds((currentIds) =>
-      currentIds.filter((id) => !ids.includes(id)),
+      currentIds.filter((id) => !hiddenIds.has(id)),
     );
   }, []);
 
@@ -293,13 +361,13 @@ export function ProjectDetailClient({
                   variant="ghost"
                   size="icon"
                   className="size-8"
-                  disabled
-                  aria-label="Edit project name (coming soon)"
+                  onClick={() => setIsEditOpen(true)}
+                  aria-label="Edit project"
                 >
                   <Pencil className="size-4 text-muted-foreground" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Coming soon</TooltipContent>
+              <TooltipContent>Edit project</TooltipContent>
             </Tooltip>
           </div>
           {project.description ? (
@@ -349,7 +417,7 @@ export function ProjectDetailClient({
               setSearch(event.target.value);
               setQuery({ q: event.target.value });
             }}
-            placeholder="Search projects..."
+            placeholder="Search images..."
             className="pl-9"
             type="search"
           />
@@ -396,6 +464,18 @@ export function ProjectDetailClient({
             </Select>
           </div>
           <div className="flex items-center gap-2 text-sm">
+            <span className="text-muted-foreground">Label:</span>
+            <LabelFilterMenu
+              labels={labels}
+              counts={labelCounts}
+              selection={labelSelection}
+              onToggle={(key) =>
+                setQuery({ labels: toggleLabelFilter(labelSelection, key) })
+              }
+              onClear={() => setQuery({ labels: "" })}
+            />
+          </div>
+          <div className="flex items-center gap-2 text-sm">
             <span className="text-muted-foreground">Sort By:</span>
             <Select
               value={sortBy}
@@ -436,32 +516,54 @@ export function ProjectDetailClient({
           No images match your filters.
         </div>
       ) : (
-        <div
-          key="image-grid"
-          className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
-        >
-          {visibleImages.map((image) => (
-            <ImageCard
-              key={image.id}
-              image={image}
-              projectId={project.id}
-              isSelected={selectedIdSet.has(image.id)}
-              selectionMode={selectedImageIds.length > 0}
-              aiState={aiStates[image.id]}
-              onSelectionChange={handleSelectionChange}
-              onRename={setRenameTarget}
-              onMove={openMove}
-              onAdd={openAdd}
-              onExport={openExport}
-              onDelete={openDelete}
-            />
-          ))}
+        <div key="image-grid" className="space-y-3">
+          <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
+            <label className="flex cursor-pointer items-center gap-2">
+              <Checkbox
+                checked={allVisibleSelected}
+                onCheckedChange={(checked) => {
+                  if (checked === true) selectVisible();
+                  else deselectVisible();
+                }}
+                aria-label="Select all shown images"
+              />
+              Select all
+            </label>
+            <span>
+              {visibleImages.length === images.length
+                ? `${numberFormatter.format(images.length)} images`
+                : `${numberFormatter.format(visibleImages.length)} of ${numberFormatter.format(images.length)} images`}
+            </span>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {visibleImages.map((image) => (
+              <ImageCard
+                key={image.id}
+                image={image}
+                projectId={project.id}
+                isSelected={selectedIdSet.has(image.id)}
+                selectionMode={selectedImageIds.length > 0}
+                aiState={aiStates[image.id]}
+                onSelectionChange={handleSelectionChange}
+                onRename={setRenameTarget}
+                onMove={openMove}
+                onAdd={openAdd}
+                onExport={openExport}
+                onDelete={openDelete}
+              />
+            ))}
+          </div>
         </div>
       )}
 
       {selectedImages.length > 0 ? (
         <div className="fixed bottom-5 left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-2 rounded-xl border bg-background/95 p-2 shadow-xl backdrop-blur">
-          <label className="flex items-center gap-2 px-2 text-sm text-muted-foreground"><Checkbox checked onCheckedChange={(checked) => { if (!checked) setSelectedImageIds([]); }} />{selectedImages.length} Selected</label>
+          <label className="flex items-center gap-2 px-2 text-sm text-muted-foreground"><Checkbox checked onCheckedChange={(checked) => { if (!checked) setSelectedImageIds([]); }} />{numberFormatter.format(selectedImages.length)} Selected</label>
+          {allVisibleSelected || visibleImages.length === 0 ? (
+            <Button type="button" variant="ghost" size="sm" onClick={() => setSelectedImageIds([])}>Clear</Button>
+          ) : (
+            <Button type="button" variant="ghost" size="sm" onClick={selectVisible}>Select all {numberFormatter.format(visibleImages.length)}</Button>
+          )}
           <Button type="button" size="sm" className="bg-violet-600 text-white hover:bg-violet-700" disabled={isAiJobActive} onClick={() => setIsAiOpen(true)}><WandSparkles className="size-4" />AI Annotate</Button>
           <Button type="button" variant="outline" size="sm" onClick={() => openTransfer("move", selectedImages)}><FolderInput className="size-4" />Move to...</Button>
           <Button type="button" variant="outline" size="sm" onClick={() => openTransfer("copy", selectedImages)}><CopyPlus className="size-4" />Add to...</Button>
@@ -469,6 +571,13 @@ export function ProjectDetailClient({
           <Button type="button" variant="outline" size="sm" className="border-destructive text-destructive hover:text-destructive" onClick={() => { setDeleteError(null); setDeleteTargets(selectedImages); }}><Trash2 className="size-4" />Delete</Button>
         </div>
       ) : null}
+
+      <EditProjectDialog
+        project={project}
+        open={isEditOpen}
+        onOpenChange={setIsEditOpen}
+        onSaved={(saved) => setSavedProject({ base: serverProject, saved })}
+      />
 
       <UploadImagesDialog
         open={isUploadOpen}

@@ -25,7 +25,10 @@ export function ProjectBrowserSkeleton() {
             <CardContent className="flex min-h-[262px] flex-col p-4">
               <div className="flex items-start justify-between gap-3">
                 <Skeleton className="size-16 rounded-lg" />
-                <Skeleton className="size-8 rounded-md" />
+                <div className="flex items-center gap-1">
+                  <Skeleton className="size-8 rounded-md" />
+                  <Skeleton className="size-8 rounded-md" />
+                </div>
               </div>
               <div className="mt-3 space-y-2">
                 <Skeleton className="h-5 w-32" />

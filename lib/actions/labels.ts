@@ -1,6 +1,6 @@
 "use server";
 
-import { pickLabelColor } from "@/lib/annotations/label-colors";
+import { pickLabelColor, pickLeastUsedLabelColor } from "@/lib/annotations/label-colors";
 import { createClient } from "@/lib/supabase/server";
 import type { AnnotationLabel } from "@/lib/types/annotations";
 import type { DatasetCategory } from "@/lib/types/dataset-import";
@@ -109,9 +109,9 @@ export async function createLabel(
     throw new Error("You must be signed in to add a label.");
   }
 
-  const { count } = await supabase
+  const { data: existing } = await supabase
     .from("project_labels")
-    .select("id", { count: "exact", head: true })
+    .select("color")
     .eq("project_id", projectId);
 
   const { data, error } = await supabase
@@ -119,7 +119,7 @@ export async function createLabel(
     .insert({
       project_id: projectId,
       name: trimmed,
-      color: pickLabelColor(count ?? 0),
+      color: pickLeastUsedLabelColor((existing ?? []).map((label) => label.color)),
     })
     .select("id, name, color")
     .single();

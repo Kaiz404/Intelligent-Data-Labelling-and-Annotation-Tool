@@ -36,10 +36,16 @@ type AnnotationCanvasProps = {
   labels: AnnotationLabel[];
   selectedBoxId: string | null;
   selectedLabelId: string;
-  onSelectBox: (id: string | null) => void;
+  /** `keepTool`: a box just drawn is selected without leaving the box tool. */
+  onSelectBox: (id: string | null, options?: { keepTool?: boolean }) => void;
   onBoxesChange: (boxes: BoundingBox[]) => void;
+  /** Give a box the label with this name, creating the label if needed. */
   onAssignBoxLabel: (boxId: string, name: string) => Promise<void>;
-  onRenameLabel: (labelId: string, name: string) => Promise<void>;
+  /**
+   * Add a box drawn while the project had no labels, with the label named
+   * (created if needed). Such a box only joins the image once it has one.
+   */
+  onCreateBox: (box: BoxRect, labelName: string) => Promise<void>;
   onZoomChange: (zoom: number) => void;
   /** Confidence (0..1) keyed by box ID for AI suggestions not yet accepted. */
   suggestionConfidence?: Record<string, number>;
@@ -53,6 +59,12 @@ type AnnotationCanvasProps = {
   onImageError?: () => void;
   className?: string;
 };
+
+/** A box without its label. */
+export type BoxRect = Omit<BoundingBox, "labelId">;
+
+/** Smallest box side, in image pixels, that drawing or resizing produces. */
+const MIN_BOX_SIZE = 4;
 
 /** Box outline width in screen pixels, independent of zoom. */
 const BOX_STROKE_WIDTH = 2;
@@ -104,6 +116,7 @@ function normalizeRect(x: number, y: number, width: number, height: number) {
   };
 }
 
+/** Moves a box inside the image, keeping its size (shrunk only if larger). */
 function clampBoxToImage(
   box: Pick<BoundingBox, "x" | "y" | "width" | "height">,
   imageWidth: number,
@@ -114,6 +127,22 @@ function clampBoxToImage(
   const x = Math.min(Math.max(box.x, 0), Math.max(imageWidth - width, 0));
   const y = Math.min(Math.max(box.y, 0), Math.max(imageHeight - height, 0));
   return { x, y, width, height };
+}
+
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.min(Math.max(value, minimum), maximum);
+}
+
+/** Crops a rectangle (any coordinate space) to the given bounds. */
+function cropRect(
+  rect: { x: number; y: number; width: number; height: number },
+  bounds: { left: number; top: number; right: number; bottom: number },
+) {
+  const left = clamp(rect.x, bounds.left, bounds.right);
+  const top = clamp(rect.y, bounds.top, bounds.bottom);
+  const right = clamp(rect.x + rect.width, bounds.left, bounds.right);
+  const bottom = clamp(rect.y + rect.height, bounds.top, bounds.bottom);
+  return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
 function hexToRgba(hex: string, alpha: number) {
@@ -144,7 +173,7 @@ export function AnnotationCanvas({
   onSelectBox,
   onBoxesChange,
   onAssignBoxLabel,
-  onRenameLabel,
+  onCreateBox,
   onZoomChange,
   suggestionConfidence,
   suggestionNumbers,
@@ -165,9 +194,9 @@ export function AnnotationCanvas({
     width: number;
     height: number;
   } | null>(null);
+  /** Label picker for a box: one just drawn, or one being relabelled. */
   const [labelEditor, setLabelEditor] = useState<{
     boxId: string;
-    mode: "assign" | "rename";
     value: string;
     isSaving: boolean;
     error: string | null;
@@ -175,6 +204,8 @@ export function AnnotationCanvas({
   const [highlightedLabelId, setHighlightedLabelId] = useState<string | null>(
     null,
   );
+  /** A box drawn while no labels exist: shown here until a label is chosen. */
+  const [pendingBox, setPendingBox] = useState<BoxRect | null>(null);
   const labelInputRef = useRef<HTMLInputElement>(null);
   const drawStartRef = useRef<{ x: number; y: number } | null>(null);
 
@@ -182,6 +213,19 @@ export function AnnotationCanvas({
   const imageWidth = image?.width ?? 0;
   const imageHeight = image?.height ?? 0;
   const scale = zoom / 100;
+
+  // Zoom changed from outside (the toolbar's +/- buttons): keep the point at
+  // the centre of the viewport fixed. Wheel zoom and fitting position the
+  // image themselves and record the zoom they set.
+  const [positionedZoom, setPositionedZoom] = useState(zoom);
+  if (zoom !== positionedZoom) {
+    const previousScale = positionedZoom / 100;
+    setPositionedZoom(zoom);
+    setStagePos((position) => ({
+      x: size.width / 2 - ((size.width / 2 - position.x) / previousScale) * scale,
+      y: size.height / 2 - ((size.height / 2 - position.y) / previousScale) * scale,
+    }));
+  }
 
   useEffect(() => {
     if (imageWidth && imageHeight) {
@@ -205,14 +249,15 @@ export function AnnotationCanvas({
   const selectedBoxColor = selectedBox
     ? labelById.get(selectedBox.labelId)?.color ?? "#2563eb"
     : "#2563eb";
-  const editorBox = labelEditor
-    ? boxes.find((box) => box.id === labelEditor.boxId)
+  const editorBox: BoxRect | null = labelEditor
+    ? (boxes.find((box) => box.id === labelEditor.boxId) ??
+      (pendingBox?.id === labelEditor.boxId ? pendingBox : null))
     : null;
-  const labelEditorIdentity = labelEditor
-    ? `${labelEditor.mode}:${labelEditor.boxId}`
-    : null;
+  const labelEditorIdentity = labelEditor?.boxId ?? null;
   const hasEditorBox = Boolean(editorBox);
-  const editorMode = labelEditor?.mode ?? null;
+  const editorIsPending = Boolean(
+    labelEditor && pendingBox?.id === labelEditor.boxId,
+  );
   const editorValue = labelEditor?.value ?? "";
   const normalizedEditorValue = editorValue.trim().toLowerCase();
   const exactExistingLabel = normalizedEditorValue
@@ -221,7 +266,7 @@ export function AnnotationCanvas({
       )
     : undefined;
   const matchingLabels = useMemo(() => {
-    if (editorMode !== "assign") {
+    if (!labelEditorIdentity) {
       return [];
     }
 
@@ -236,16 +281,10 @@ export function AnnotationCanvas({
           !normalizedEditorValue ||
           label.name.toLowerCase().includes(normalizedEditorValue),
       );
-  }, [editorMode, labels, normalizedEditorValue, selectedLabelId]);
+  }, [labelEditorIdentity, labels, normalizedEditorValue, selectedLabelId]);
   const highlightedLabel = highlightedLabelId
     ? labels.find((label) => label.id === highlightedLabelId)
     : undefined;
-  const hasRenameConflict = Boolean(
-    editorMode === "rename" &&
-      exactExistingLabel &&
-      editorBox &&
-      exactExistingLabel.id !== editorBox.labelId,
-  );
 
   useEffect(() => {
     if (!labelEditorIdentity || !hasEditorBox) {
@@ -294,6 +333,7 @@ export function AnnotationCanvas({
     );
     const nextZoom = Math.max(10, Math.round(nextScale * 100));
     onZoomChange(nextZoom);
+    setPositionedZoom(nextZoom);
     setStagePos({
       x: (size.width - imageWidth * (nextZoom / 100)) / 2,
       y: (size.height - imageHeight * (nextZoom / 100)) / 2,
@@ -355,6 +395,17 @@ export function AnnotationCanvas({
     };
   };
 
+  /** Pointer position for drawing: held to the image, so boxes stop at its edges. */
+  const getDrawingPosition = () => {
+    const point = getPointerImagePosition();
+    return point
+      ? {
+          x: clamp(point.x, 0, imageWidth),
+          y: clamp(point.y, 0, imageHeight),
+        }
+      : null;
+  };
+
   const handleWheel = (event: Konva.KonvaEventObject<WheelEvent>) => {
     event.evt.preventDefault();
     const stage = stageRef.current;
@@ -377,6 +428,7 @@ export function AnnotationCanvas({
     };
 
     onZoomChange(nextZoom);
+    setPositionedZoom(nextZoom);
     setStagePos({
       x: pointer.x - mousePointTo.x * nextScale,
       y: pointer.y - mousePointTo.y * nextScale,
@@ -403,21 +455,21 @@ export function AnnotationCanvas({
       return;
     }
 
-    const point = getPointerImagePosition();
+    const point = getDrawingPosition();
     if (!point) {
       return;
     }
 
     drawStartRef.current = point;
     setDraft({ x: point.x, y: point.y, width: 0, height: 0 });
-    onSelectBox(null);
+    onSelectBox(null, { keepTool: true });
   };
 
   const handleMouseMove = () => {
     if (tool !== "bbox" || !drawStartRef.current) {
       return;
     }
-    const point = getPointerImagePosition();
+    const point = getDrawingPosition();
     if (!point) {
       return;
     }
@@ -446,21 +498,28 @@ export function AnnotationCanvas({
     drawStartRef.current = null;
     setDraft(null);
 
-    if (normalized.width < 4 || normalized.height < 4 || !imageWidth) {
+    if (
+      normalized.width < MIN_BOX_SIZE ||
+      normalized.height < MIN_BOX_SIZE ||
+      !imageWidth
+    ) {
       return;
     }
 
-    const clamped = clampBoxToImage(normalized, imageWidth, imageHeight);
-    const nextBox: BoundingBox = {
+    const rect: BoxRect = {
       id: `box-${crypto.randomUUID()}`,
-      labelId: selectedLabel?.id ?? selectedLabelId,
-      ...clamped,
+      ...clampBoxToImage(normalized, imageWidth, imageHeight),
     };
-    onBoxesChange([...boxes, nextBox]);
-    onSelectBox(nextBox.id);
+    // Every saved box needs a label: with none to give it yet, the box waits
+    // here until the picker below names one.
+    if (!selectedLabel) {
+      setPendingBox(rect);
+    } else {
+      onBoxesChange([...boxes, { ...rect, labelId: selectedLabel.id }]);
+      onSelectBox(rect.id, { keepTool: true });
+    }
     setLabelEditor({
-      boxId: nextBox.id,
-      mode: "assign",
+      boxId: rect.id,
       value: selectedLabel?.name ?? "",
       isSaving: false,
       error: null,
@@ -468,20 +527,24 @@ export function AnnotationCanvas({
     setHighlightedLabelId(selectedLabel?.id ?? null);
   };
 
-  const openRenameEditor = (box: BoundingBox) => {
+  /** Relabel an existing box (double-click it or its tag). */
+  const openRelabelEditor = (box: BoundingBox) => {
     const label = labelById.get(box.labelId);
-    if (!label) {
-      return;
-    }
-
-    onSelectBox(box.id);
+    onSelectBox(box.id, { keepTool: true });
     setLabelEditor({
       boxId: box.id,
-      mode: "rename",
-      value: label.name,
+      value: label?.name ?? "",
       isSaving: false,
       error: null,
     });
+    setHighlightedLabelId(label?.id ?? null);
+  };
+
+  /** Closes the picker for `boxId` (all pickers when omitted), dropping its unlabelled box. */
+  const closeLabelEditor = (boxId?: string) => {
+    const matches = (id: string | undefined) => boxId === undefined || id === boxId;
+    setLabelEditor((current) => (current && matches(current.boxId) ? null : current));
+    setPendingBox((current) => (current && matches(current.id) ? null : current));
     setHighlightedLabelId(null);
   };
 
@@ -498,26 +561,10 @@ export function AnnotationCanvas({
       return;
     }
 
-    const box = boxes.find((candidate) => candidate.id === labelEditor.boxId);
-    if (!box) {
-      setLabelEditor(null);
-      return;
-    }
-
-    const conflictingLabel = labels.find(
-      (label) =>
-        label.name.toLowerCase() === name.toLowerCase() &&
-        label.id !== box.labelId,
-    );
-    if (labelEditor.mode === "rename" && conflictingLabel) {
-      setLabelEditor((current) =>
-        current
-          ? {
-              ...current,
-              error: `“${conflictingLabel.name}” already exists. Choose another name.`,
-            }
-          : current,
-      );
+    const { boxId } = labelEditor;
+    const pending = pendingBox?.id === boxId ? pendingBox : null;
+    if (!pending && !boxes.some((candidate) => candidate.id === boxId)) {
+      closeLabelEditor(boxId);
       return;
     }
 
@@ -526,16 +573,16 @@ export function AnnotationCanvas({
     );
 
     try {
-      if (labelEditor.mode === "assign") {
-        await onAssignBoxLabel(box.id, name);
+      if (pending) {
+        await onCreateBox(pending, name);
       } else {
-        await onRenameLabel(box.labelId, name);
+        await onAssignBoxLabel(boxId, name);
       }
-      setLabelEditor(null);
-      setHighlightedLabelId(null);
+      // A new box may have been drawn meanwhile: only close this picker.
+      closeLabelEditor(boxId);
     } catch (error) {
       setLabelEditor((current) =>
-        current
+        current?.boxId === boxId
           ? {
               ...current,
               isSaving: false,
@@ -685,6 +732,11 @@ export function AnnotationCanvas({
                   shadowForStrokeEnabled={isSelected}
                   hitStrokeWidth={10}
                   draggable={tool === "select"}
+                  // Keep a dragged box inside the image (absolute coordinates).
+                  dragBoundFunc={(position) => ({
+                    x: clamp(position.x, stagePos.x, stagePos.x + (imageWidth - box.width) * scale),
+                    y: clamp(position.y, stagePos.y, stagePos.y + (imageHeight - box.height) * scale),
+                  })}
                   onClick={() => {
                     if (tool === "select") {
                       onSelectBox(box.id);
@@ -694,6 +746,19 @@ export function AnnotationCanvas({
                     if (tool === "select") {
                       onSelectBox(box.id);
                     }
+                  }}
+                  onDblClick={() => {
+                    if (tool === "select") {
+                      openRelabelEditor(box);
+                    }
+                  }}
+                  onMouseEnter={(event) => {
+                    const container = event.target.getStage()?.container();
+                    if (container && tool === "select") container.style.cursor = "move";
+                  }}
+                  onMouseLeave={(event) => {
+                    const container = event.target.getStage()?.container();
+                    if (container) container.style.cursor = "";
                   }}
                   onDragEnd={(event) => {
                     updateBoxFromNode(box.id, event.target as Konva.Rect);
@@ -727,7 +792,7 @@ export function AnnotationCanvas({
                   }}
                   onDblClick={(event) => {
                     event.cancelBubble = true;
-                    openRenameEditor(box);
+                    openRelabelEditor(box);
                   }}
                 >
                   <Tag fill={label.color} cornerRadius={4} />
@@ -747,6 +812,21 @@ export function AnnotationCanvas({
                 </Label>
               );
             })}
+
+            {pendingBox ? (
+              <Rect
+                x={pendingBox.x}
+                y={pendingBox.y}
+                width={pendingBox.width}
+                height={pendingBox.height}
+                stroke="#71717a"
+                dash={[6, 4]}
+                strokeScaleEnabled={false}
+                strokeWidth={BOX_STROKE_WIDTH}
+                fill={hexToRgba("#71717a", 0.12)}
+                listening={false}
+              />
+            ) : null}
 
             {draft ? (
               <Rect
@@ -778,17 +858,34 @@ export function AnnotationCanvas({
                 anchorSize={7}
                 anchorCornerRadius={2}
                 padding={1}
+                // Resizing past the image edge crops at the edge (absolute
+                // coordinates), instead of shifting the opposite side.
                 boundBoxFunc={(oldBox, newBox) => {
-                  if (newBox.width < 4 || newBox.height < 4) {
+                  const cropped = cropRect(newBox, {
+                    left: stagePos.x,
+                    top: stagePos.y,
+                    right: stagePos.x + imageWidth * scale,
+                    bottom: stagePos.y + imageHeight * scale,
+                  });
+                  const minimum = MIN_BOX_SIZE * scale;
+                  if (cropped.width < minimum || cropped.height < minimum) {
                     return oldBox;
                   }
-                  return newBox;
+                  return { ...newBox, ...cropped };
                 }}
               />
             ) : null}
           </Layer>
         </Stage>
       )}
+
+      {image && boxes.length === 0 && !pendingBox && !draft ? (
+        <p className="pointer-events-none absolute bottom-3 left-1/2 z-[5] -translate-x-1/2 whitespace-nowrap rounded-full bg-background/90 px-3 py-1.5 text-xs text-muted-foreground shadow">
+          {tool === "bbox"
+            ? "Drag on the image to draw a box"
+            : "Choose the Bounding box tool (B), then drag to draw a box"}
+        </p>
+      ) : null}
 
       {labelEditor && editorBox ? (
         <form
@@ -807,9 +904,7 @@ export function AnnotationCanvas({
           }}
           onSubmit={(event) => {
             event.preventDefault();
-            void submitLabelEditor(
-              editorMode === "assign" ? highlightedLabel?.name : undefined,
-            );
+            void submitLabelEditor(highlightedLabel?.name);
           }}
           onPointerDown={(event) => event.stopPropagation()}
         >
@@ -819,21 +914,15 @@ export function AnnotationCanvas({
               value={labelEditor.value}
               readOnly={labelEditor.isSaving}
               aria-busy={labelEditor.isSaving}
-              role={editorMode === "assign" ? "combobox" : undefined}
-              aria-expanded={editorMode === "assign" ? true : undefined}
-              aria-controls={
-                editorMode === "assign"
-                  ? `label-options-${labelEditor.boxId}`
-                  : undefined
-              }
+              role="combobox"
+              aria-expanded
+              aria-controls={`label-options-${labelEditor.boxId}`}
               aria-activedescendant={
-                editorMode === "assign" && highlightedLabelId
+                highlightedLabelId
                   ? `label-option-${highlightedLabelId}`
                   : undefined
               }
-              aria-label={
-                editorMode === "assign" ? "Choose a label" : "Rename label"
-              }
+              aria-label="Choose a label"
               placeholder="Search or create a label..."
               className="h-9 w-full rounded-md border-2 border-primary bg-background px-2 pr-20 text-sm text-foreground shadow-lg outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-ring/40"
               onChange={(event) => {
@@ -850,13 +939,15 @@ export function AnnotationCanvas({
                 );
               }}
               onBlur={() => {
-                if (editorMode === "rename") {
-                  void submitLabelEditor();
-                } else if (exactExistingLabel) {
+                // Clicking away confirms an existing label, or the name typed
+                // for an unlabelled box; otherwise it cancels (and drops an
+                // unlabelled box).
+                if (exactExistingLabel) {
                   void submitLabelEditor(exactExistingLabel.name);
+                } else if (editorIsPending && normalizedEditorValue) {
+                  void submitLabelEditor(editorValue);
                 } else {
-                  setLabelEditor(null);
-                  setHighlightedLabelId(null);
+                  closeLabelEditor(labelEditor.boxId);
                 }
               }}
               onKeyDown={(event) => {
@@ -868,20 +959,14 @@ export function AnnotationCanvas({
                   moveLabelHighlight(-1);
                 } else if (event.key === "Escape") {
                   event.preventDefault();
-                  setLabelEditor(null);
-                  setHighlightedLabelId(null);
+                  closeLabelEditor(labelEditor.boxId);
                 }
               }}
             />
             {exactExistingLabel ? (
-              <span
-                className={cn(
-                  "pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-1 text-[10px] font-medium",
-                  hasRenameConflict ? "text-destructive" : "text-emerald-600",
-                )}
-              >
-                {!hasRenameConflict ? <Check className="size-3" /> : null}
-                {hasRenameConflict ? "Exists" : "Existing"}
+              <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-1 text-[10px] font-medium text-emerald-600">
+                <Check className="size-3" />
+                Existing
               </span>
             ) : null}
           </div>
@@ -890,93 +975,80 @@ export function AnnotationCanvas({
               {labelEditor.error}
             </p>
           ) : null}
-          {editorMode === "assign" ? (
-            <div
-              id={`label-options-${labelEditor.boxId}`}
-              role="listbox"
-              className="mt-1 overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-xl"
-            >
-              <p className="border-b px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                Choose a label
-              </p>
-              <div className="max-h-[92px] overflow-y-auto overscroll-contain p-1">
-                {matchingLabels.map((label) => {
-                  const isHighlighted = label.id === highlightedLabelId;
-                  const isExact = label.id === exactExistingLabel?.id;
-                  return (
-                    <button
-                      key={label.id}
-                      id={`label-option-${label.id}`}
-                      type="button"
-                      role="option"
-                      aria-selected={isHighlighted}
-                      className={cn(
-                        "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs",
-                        isHighlighted ? "bg-accent" : "hover:bg-accent/60",
-                      )}
-                      onMouseEnter={() => setHighlightedLabelId(label.id)}
-                      onMouseDown={(event) => {
-                        event.preventDefault();
-                        void submitLabelEditor(label.name);
-                      }}
-                    >
-                      <span
-                        className="size-3 shrink-0 rounded-full"
-                        style={{ backgroundColor: label.color }}
-                        aria-hidden
-                      />
-                      <span className="min-w-0 flex-1 truncate font-medium">
-                        {label.name}
-                      </span>
-                      {isExact ? (
-                        <span className="flex items-center gap-1 text-[10px] text-emerald-600">
-                          <Check className="size-3" /> Existing
-                        </span>
-                      ) : null}
-                    </button>
-                  );
-                })}
-
-                {normalizedEditorValue && !exactExistingLabel ? (
+          <div
+            id={`label-options-${labelEditor.boxId}`}
+            role="listbox"
+            className="mt-1 overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-xl"
+          >
+            <p className="border-b px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              Choose a label
+            </p>
+            <div className="max-h-[92px] overflow-y-auto overscroll-contain p-1">
+              {matchingLabels.map((label) => {
+                const isHighlighted = label.id === highlightedLabelId;
+                const isExact = label.id === exactExistingLabel?.id;
+                return (
                   <button
+                    key={label.id}
+                    id={`label-option-${label.id}`}
                     type="button"
-                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent/60"
+                    role="option"
+                    aria-selected={isHighlighted}
+                    className={cn(
+                      "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs",
+                      isHighlighted ? "bg-accent" : "hover:bg-accent/60",
+                    )}
+                    onMouseEnter={() => setHighlightedLabelId(label.id)}
                     onMouseDown={(event) => {
                       event.preventDefault();
-                      void submitLabelEditor(editorValue);
+                      void submitLabelEditor(label.name);
                     }}
                   >
-                    <Plus className="size-3.5 shrink-0 text-primary" />
-                    <span className="min-w-0 truncate">
-                      Create <span className="font-semibold">“{editorValue.trim()}”</span>
+                    <span
+                      className="size-3 shrink-0 rounded-full"
+                      style={{ backgroundColor: label.color }}
+                      aria-hidden
+                    />
+                    <span className="min-w-0 flex-1 truncate font-medium">
+                      {label.name}
                     </span>
+                    {isExact ? (
+                      <span className="flex items-center gap-1 text-[10px] text-emerald-600">
+                        <Check className="size-3" /> Existing
+                      </span>
+                    ) : null}
                   </button>
-                ) : null}
+                );
+              })}
 
-                {matchingLabels.length === 0 && !normalizedEditorValue ? (
-                  <p className="px-2 py-2 text-xs text-muted-foreground">
-                    Type a name to create your first label.
-                  </p>
-                ) : null}
-              </div>
-              <p className="border-t px-2.5 py-1.5 text-[10px] text-muted-foreground">
-                ↑↓ choose · Enter apply · Esc cancel
-              </p>
+              {normalizedEditorValue && !exactExistingLabel ? (
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent/60"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    void submitLabelEditor(editorValue);
+                  }}
+                >
+                  <Plus className="size-3.5 shrink-0 text-primary" />
+                  <span className="min-w-0 truncate">
+                    Create <span className="font-semibold">“{editorValue.trim()}”</span>
+                  </span>
+                </button>
+              ) : null}
+
+              {matchingLabels.length === 0 && !normalizedEditorValue ? (
+                <p className="px-2 py-2 text-xs text-muted-foreground">
+                  Type a name to create your first label.
+                </p>
+              ) : null}
             </div>
-          ) : (
-            <p
-              className={cn(
-                "mt-1 rounded-md border bg-background/95 px-2 py-1.5 text-[10px] shadow",
-                hasRenameConflict
-                  ? "border-destructive/50 text-destructive"
-                  : "text-muted-foreground",
-              )}
-            >
-              {hasRenameConflict
-                ? "That name is already used by another label."
-                : "Renaming updates every box using this label."}
+            <p className="border-t px-2.5 py-1.5 text-[10px] text-muted-foreground">
+              {editorIsPending
+                ? "Enter apply · Esc discard box"
+                : "↑↓ choose · Enter apply · Esc cancel"}
             </p>
-          )}
+          </div>
         </form>
       ) : null}
     </div>

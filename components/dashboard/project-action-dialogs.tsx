@@ -49,7 +49,12 @@ function ErrorMessage({ message }: { message: string | null }) {
   ) : null;
 }
 
-export function EditProjectDialog({ project, open, onOpenChange }: CommonProps) {
+type EditProjectProps = {
+  /** Called with the saved row as soon as the details save, before any thumbnail upload or refresh. */
+  onSaved?: (project: Project) => void;
+};
+
+export function EditProjectDialog({ project, open, onOpenChange, onSaved }: CommonProps & EditProjectProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="gap-5 sm:max-w-[480px]">
@@ -57,13 +62,13 @@ export function EditProjectDialog({ project, open, onOpenChange }: CommonProps) 
           <DialogTitle className="text-base">Edit Project</DialogTitle>
           <DialogDescription className="text-xs">Update the project details.</DialogDescription>
         </DialogHeader>
-        {project ? <EditProjectForm key={project.id} project={project} onOpenChange={onOpenChange} /> : null}
+        {project ? <EditProjectForm key={project.id} project={project} onOpenChange={onOpenChange} onSaved={onSaved} /> : null}
       </DialogContent>
     </Dialog>
   );
 }
 
-function EditProjectForm({ project, onOpenChange }: FormProps) {
+function EditProjectForm({ project, onOpenChange, onSaved }: FormProps & EditProjectProps) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [name, setName] = useState(project.name);
@@ -99,7 +104,7 @@ function EditProjectForm({ project, onOpenChange }: FormProps) {
     setPending(true);
     setError(null);
     try {
-      await updateProject(project.id, name, description);
+      onSaved?.(await updateProject(project.id, name, description));
       if (thumbnail) {
         const formData = new FormData();
         formData.set("thumbnail", thumbnail);

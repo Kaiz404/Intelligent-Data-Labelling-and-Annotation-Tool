@@ -78,14 +78,43 @@ export async function detectImage(input: {
 
   if (!response.ok) {
     throw new RoboflowError(
-      `AI annotation service returned an error (${response.status}).`,
+      describeHttpError(response.status),
       502,
       response.status === 429 || response.status >= 500,
     );
   }
 
-  const body: unknown = await response.json();
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw new RoboflowError("AI annotation timed out.", 504, true);
+    }
+    throw new RoboflowError(
+      "AI annotation service returned an unexpected response.",
+      502,
+      true,
+    );
+  }
   return parseWorkflowResponse(body);
+}
+
+/** A user-facing reason for a failed workflow request. */
+function describeHttpError(status: number) {
+  if (status === 401 || status === 403) {
+    return "The AI annotation service rejected the app's credentials. Check the Roboflow API key and workspace settings.";
+  }
+  if (status === 404) {
+    return "The AI annotation workflow was not found. Check the Roboflow workspace and workflow settings.";
+  }
+  if (status === 429) {
+    return "The AI annotation service is busy (rate limited). Try again in a minute.";
+  }
+  if (status >= 500) {
+    return `The AI annotation service is having problems (${status}). Try again shortly.`;
+  }
+  return `AI annotation service returned an error (${status}).`;
 }
 
 function parseWorkflowResponse(body: unknown): RoboflowDetectionResult {

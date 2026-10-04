@@ -34,8 +34,10 @@ type AnnotationToolbarProps = {
   onAiAnnotate: (scope: AiAnnotateScope) => void;
 };
 
-function ToolButton({ label, active, disabled, onClick, children }: {
+function ToolButton({ label, shortcut, active, disabled, onClick, children }: {
   label: string;
+  /** Keyboard shortcut shown in the tooltip (see the Shortcuts dialog). */
+  shortcut?: string;
   active?: boolean;
   disabled?: boolean;
   onClick: () => void;
@@ -44,9 +46,12 @@ function ToolButton({ label, active, disabled, onClick, children }: {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button type="button" variant="ghost" size="icon" aria-label={label} aria-pressed={active} disabled={disabled} onClick={onClick} className={cn("size-8 rounded-md", active && "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary")}>{children}</Button>
+        <Button type="button" variant="ghost" size="icon" aria-label={label} aria-keyshortcuts={shortcut} aria-pressed={active} disabled={disabled} onClick={onClick} className={cn("size-8 rounded-md", active && "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary")}>{children}</Button>
       </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
+      <TooltipContent>
+        {label}
+        {shortcut ? <span className="ml-1.5 opacity-70">{shortcut}</span> : null}
+      </TooltipContent>
     </Tooltip>
   );
 }
@@ -62,13 +67,13 @@ export function AnnotationToolbar({ imageIndex, imageCount, tool, zoom, canUndo,
       </div>
 
       <div className="flex items-center gap-1 rounded-lg border bg-card p-1 shadow-sm">
-        <ToolButton label="Select" active={tool === "select"} onClick={() => onToolChange("select")}><MousePointer2 className="size-4" /></ToolButton>
-        <ToolButton label="Bounding box" active={tool === "bbox"} onClick={() => onToolChange("bbox")}><Square className="size-4" /></ToolButton>
-        <ToolButton label="Pan" active={tool === "pan"} onClick={() => onToolChange("pan")}><Hand className="size-4" /></ToolButton>
+        <ToolButton label="Select" shortcut="V" active={tool === "select"} onClick={() => onToolChange("select")}><MousePointer2 className="size-4" /></ToolButton>
+        <ToolButton label="Bounding box" shortcut="B" active={tool === "bbox"} onClick={() => onToolChange("bbox")}><Square className="size-4" /></ToolButton>
+        <ToolButton label="Pan" shortcut="H" active={tool === "pan"} onClick={() => onToolChange("pan")}><Hand className="size-4" /></ToolButton>
         <div className="mx-1 h-6 w-px bg-border" />
-        <ToolButton label="Undo" disabled={!canUndo} onClick={onUndo}><Undo2 className="size-4" /></ToolButton>
-        <ToolButton label="Redo" disabled={!canRedo} onClick={onRedo}><Redo2 className="size-4" /></ToolButton>
-        <ToolButton label="Delete selected" disabled={!canDelete} onClick={onDelete}><Trash2 className="size-4" /></ToolButton>
+        <ToolButton label="Undo" shortcut="Ctrl+Z" disabled={!canUndo} onClick={onUndo}><Undo2 className="size-4" /></ToolButton>
+        <ToolButton label="Redo" shortcut="Ctrl+Shift+Z" disabled={!canRedo} onClick={onRedo}><Redo2 className="size-4" /></ToolButton>
+        <ToolButton label="Delete selected" shortcut="Delete" disabled={!canDelete} onClick={onDelete}><Trash2 className="size-4" /></ToolButton>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">

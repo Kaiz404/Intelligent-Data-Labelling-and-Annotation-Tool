@@ -5,6 +5,7 @@ import {
   fetchImageAiStates,
   fetchLatestAnnotationJob,
 } from "@/lib/annotations/jobs";
+import { isUuid } from "@/lib/ids";
 import { fetchProjectImages } from "@/lib/images";
 import { fetchProjectLabels } from "@/lib/labels";
 import { createClient } from "@/lib/supabase/server";
@@ -29,11 +30,13 @@ export type AnnotationWorkspaceData = {
  * Everything the annotation workspace needs for one project. The workspace
  * layout loads it once per project visit (image switches stay client-side),
  * and the image page reuses the same request-scoped result to validate its
- * image ID. The project page renders from it too. Null when the project is missing or not the user's (RLS returns
- * nothing, so every query can run in parallel with the project lookup).
+ * image ID. The project page renders from it too. Null when the ID is not a
+ * UUID (no query runs), or the project is missing or not the user's (RLS
+ * returns nothing, so every query can run in parallel with the project lookup).
  */
 export const loadAnnotationWorkspace = cache(
   async (projectId: string): Promise<AnnotationWorkspaceData | null> => {
+    if (!isUuid(projectId)) return null;
     const supabase = await createClient();
     const [projectResult, images, labels, latestJob, aiStates] =
       await Promise.all([

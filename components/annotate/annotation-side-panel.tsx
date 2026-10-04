@@ -23,6 +23,8 @@ type AnnotationSidePanelProps = {
   boxes: BoundingBox[];
   selectedLabelId: string;
   selectedBoxId: string | null;
+  /** Natural size of the open image once loaded; bounds the coordinate fields. */
+  imageSize: { width: number; height: number } | null;
   onSelectLabel: (labelId: string) => void;
   onSelectBox: (boxId: string | null) => void;
   /** Resolves once created; the result (the new label) is not used here. */
@@ -43,7 +45,7 @@ type AnnotationSidePanelProps = {
   onRejectSuggestion?: (boxId: string) => void;
 };
 
-function CoordinateField({ label, value, minimum, onCommit }: { label: string; value: number | null; minimum: number; onCommit: (value: number) => void }) {
+function CoordinateField({ label, value, minimum, maximum, onCommit }: { label: string; value: number | null; minimum: number; maximum?: number; onCommit: (value: number) => void }) {
   const rounded = value === null ? "" : String(Math.round(value));
   const [draft, setDraft] = useState(rounded);
   // Follow the box (drags, undo) during render, not one frame late.
@@ -68,7 +70,8 @@ function CoordinateField({ label, value, minimum, onCommit }: { label: string; v
       setDraft(rounded);
       return;
     }
-    const next = Math.max(minimum, Math.round(parsed));
+    // Kept inside the image: X and Y stop where the box meets the edge, W and H at the edge.
+    const next = Math.max(minimum, Math.min(Math.round(parsed), maximum ?? Infinity));
     setDraft(String(next));
     if (next !== Math.round(value)) onCommit(next);
   };
@@ -76,7 +79,7 @@ function CoordinateField({ label, value, minimum, onCommit }: { label: string; v
   return (
     <label className="flex h-9 items-center rounded-md border bg-background px-2 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/15">
       <span className="mr-2 text-[11px] font-medium text-muted-foreground">{label}</span>
-      <input type="number" min={minimum} step={1} value={draft} onChange={(event) => setDraft(event.target.value)} onBlur={commit} onKeyDown={(event) => {
+      <input type="number" min={minimum} max={maximum} step={1} value={draft} onChange={(event) => setDraft(event.target.value)} onBlur={commit} onKeyDown={(event) => {
         if (event.key === "Enter") event.currentTarget.blur();
         if (event.key === "Escape") {
           setDraft(rounded);
@@ -132,7 +135,7 @@ function InlineNameInput({ initialValue, ariaLabel, onSubmit, onCancel }: { init
   );
 }
 
-export function AnnotationSidePanel({ labels, boxes, selectedLabelId, selectedBoxId, onSelectLabel, onSelectBox, onCreateLabel, onRenameLabel, onDeleteLabel, onUpdateBox, onMoveBox, onReorderBox, onDuplicateBox, onRenameBox, onDeleteBox, suggestionConfidence, onAcceptSuggestion, onRejectSuggestion }: AnnotationSidePanelProps) {
+export function AnnotationSidePanel({ labels, boxes, selectedLabelId, selectedBoxId, imageSize, onSelectLabel, onSelectBox, onCreateLabel, onRenameLabel, onDeleteLabel, onUpdateBox, onMoveBox, onReorderBox, onDuplicateBox, onRenameBox, onDeleteBox, suggestionConfidence, onAcceptSuggestion, onRejectSuggestion }: AnnotationSidePanelProps) {
   const [labelQuery, setLabelQuery] = useState("");
   const [labelFilter, setLabelFilter] = useState<"all" | "used">("all");
   const [isAddingLabel, setIsAddingLabel] = useState(false);
@@ -437,10 +440,10 @@ export function AnnotationSidePanel({ labels, boxes, selectedLabelId, selectedBo
         <div>
           <p className="mb-1.5 text-[11px] text-muted-foreground">Bounding Box</p>
           <div className="grid grid-cols-2 gap-2">
-            <CoordinateField label="X" value={selectedBox?.x ?? null} minimum={0} onCommit={(x) => selectedBox && onUpdateBox(selectedBox.id, { x })} />
-            <CoordinateField label="Y" value={selectedBox?.y ?? null} minimum={0} onCommit={(y) => selectedBox && onUpdateBox(selectedBox.id, { y })} />
-            <CoordinateField label="W" value={selectedBox?.width ?? null} minimum={1} onCommit={(width) => selectedBox && onUpdateBox(selectedBox.id, { width })} />
-            <CoordinateField label="H" value={selectedBox?.height ?? null} minimum={1} onCommit={(height) => selectedBox && onUpdateBox(selectedBox.id, { height })} />
+            <CoordinateField label="X" value={selectedBox?.x ?? null} minimum={0} maximum={imageSize && selectedBox ? Math.max(Math.floor(imageSize.width - selectedBox.width), 0) : undefined} onCommit={(x) => selectedBox && onUpdateBox(selectedBox.id, { x })} />
+            <CoordinateField label="Y" value={selectedBox?.y ?? null} minimum={0} maximum={imageSize && selectedBox ? Math.max(Math.floor(imageSize.height - selectedBox.height), 0) : undefined} onCommit={(y) => selectedBox && onUpdateBox(selectedBox.id, { y })} />
+            <CoordinateField label="W" value={selectedBox?.width ?? null} minimum={1} maximum={imageSize && selectedBox ? Math.max(Math.floor(imageSize.width - selectedBox.x), 1) : undefined} onCommit={(width) => selectedBox && onUpdateBox(selectedBox.id, { width })} />
+            <CoordinateField label="H" value={selectedBox?.height ?? null} minimum={1} maximum={imageSize && selectedBox ? Math.max(Math.floor(imageSize.height - selectedBox.y), 1) : undefined} onCommit={(height) => selectedBox && onUpdateBox(selectedBox.id, { height })} />
           </div>
         </div>
       </section>

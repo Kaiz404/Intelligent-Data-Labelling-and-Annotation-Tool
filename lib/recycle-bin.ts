@@ -1,5 +1,6 @@
 import "server-only";
 
+import { isUuid } from "@/lib/ids";
 import { createClient } from "@/lib/supabase/server";
 import {
   createImageReadUrl,
@@ -78,12 +79,7 @@ function queryError(context: string, error: DbError) {
     : new Error(`${context}: ${error.message}`);
 }
 
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export function isUuid(value: unknown): value is string {
-  return typeof value === "string" && UUID_PATTERN.test(value);
-}
+export { isUuid };
 
 /** Dedupes string ids (keeping order); non-string entries are dropped. */
 export function uniqueIds(values: unknown): string[] {

@@ -46,7 +46,6 @@ type ImageCardProps = {
 
 function statusClass(status: ImageStatus) {
   return {
-    "In Progress": "border-primary/20 bg-primary/10 text-primary",
     Annotated: "border-emerald-500/20 bg-emerald-500/10 text-emerald-700",
     Unannotated: "border-destructive/20 bg-destructive/10 text-destructive",
   }[status];

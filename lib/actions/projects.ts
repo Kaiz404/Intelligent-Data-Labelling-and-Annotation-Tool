@@ -1,9 +1,10 @@
 "use server";
 
+import { fetchAllRows } from "@/lib/supabase/rows";
 import { createClient } from "@/lib/supabase/server";
 import { copyImageObject, deleteImageObject } from "@/lib/uploads/s3-server";
 import type { BoundingBox } from "@/lib/types/annotations";
-import type { Project } from "@/lib/types/projects";
+import type { Project, ToggleProjectStarResult } from "@/lib/types/projects";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -44,20 +45,39 @@ export async function createProject(formData: FormData) {
   redirect(`/projects/${data.id}`);
 }
 
-export async function toggleProjectStar(projectId: string, starred: boolean) {
+/**
+ * Stars or unstars an owned project. Starring is not an edit, so
+ * `updated_at` stays put. Failures are returned as `{ ok: false, error }`
+ * because production builds mask thrown server-action messages.
+ */
+export async function toggleProjectStar(
+  projectId: string,
+  starred: boolean,
+): Promise<ToggleProjectStarResult> {
   const supabase = await createClient();
-  const { error } = await supabase
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "You must be signed in." };
+
+  const { data, error } = await supabase
     .from("projects")
     .update({ starred })
-    .eq("id", projectId);
+    .eq("id", projectId)
+    .eq("user_id", user.id)
+    .select("id")
+    .maybeSingle();
 
   if (error) {
-    throw new Error(error.message);
+    return { ok: false, error: `Could not update the favourite: ${error.message}` };
+  }
+  if (!data) {
+    return { ok: false, error: "Project not found or you do not have access." };
   }
 
   revalidatePath("/projects");
   revalidatePath("/dashboard");
-  revalidatePath(`/projects/${projectId}`);
+  return { ok: true };
 }
 
 async function requireOwnedProject(projectId: string) {
@@ -110,7 +130,64 @@ export async function updateProject(
   return data as Project;
 }
 
+/**
+ * Image ids per `.in()` filter: the ids travel in the request URL, so a long
+ * selection (e.g. "Select all") is split to keep URLs short and every
+ * response under the PostgREST row cap.
+ */
+const ID_CHUNK_SIZE = 200;
+
+function chunk<T>(items: T[], size = ID_CHUNK_SIZE): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
+/** Deletes rows by id, chunk by chunk; true only when every chunk succeeded. */
+async function deleteImageRows(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  projectId: string,
+  imageIds: string[],
+) {
+  let ok = true;
+  for (const ids of chunk(imageIds)) {
+    const { error } = await supabase
+      .from("images")
+      .delete()
+      .eq("project_id", projectId)
+      .in("id", ids);
+    if (error) ok = false;
+  }
+  return ok;
+}
+
+/** How many of `imageIds` exist in the project, or null if that could not be checked. */
+async function countImageRows(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  projectId: string,
+  imageIds: string[],
+) {
+  let total = 0;
+  for (const ids of chunk(imageIds)) {
+    const { data, error } = await supabase
+      .from("images")
+      .select("id")
+      .eq("project_id", projectId)
+      .in("id", ids);
+    if (error) return null;
+    total += data?.length ?? 0;
+  }
+  return total;
+}
+
+const IMAGE_COPY_COLUMNS =
+  "id, created_at, name, object_key, content_type, size_bytes, annotation, thumbhash";
+
 type ImageCopyRow = {
+  id: string;
+  created_at: string;
   name: string;
   object_key: string;
   content_type: string | null;
@@ -156,21 +233,46 @@ async function copyImages(
   keepAnnotations = true,
   imageIds?: string[],
 ) {
-  let query = supabase
-    .from("images")
-    .select("name, object_key, content_type, size_bytes, annotation, thumbhash")
-    .eq("project_id", sourceProjectId);
-  if (imageIds) query = query.in("id", imageIds);
-  const { data, error } = await query;
-  if (error) throw new Error(`Could not load project images: ${error.message}`);
-  if (imageIds && (data?.length ?? 0) !== new Set(imageIds).size) {
-    throw new Error("One or more selected images could not be found.");
+  // Every image (paged past the row cap), or the selected ones (chunked),
+  // copied in upload order.
+  let data: ImageCopyRow[];
+  if (imageIds) {
+    const results = await Promise.all(
+      chunk([...new Set(imageIds)]).map((ids) =>
+        supabase
+          .from("images")
+          .select(IMAGE_COPY_COLUMNS)
+          .eq("project_id", sourceProjectId)
+          .in("id", ids),
+      ),
+    );
+    const failed = results.find((result) => result.error);
+    if (failed?.error) throw new Error(`Could not load project images: ${failed.error.message}`);
+    data = results
+      .flatMap((result) => (result.data ?? []) as ImageCopyRow[])
+      .sort(
+        (a, b) =>
+          Date.parse(a.created_at) - Date.parse(b.created_at) ||
+          a.id.localeCompare(b.id),
+      );
+    if (data.length !== new Set(imageIds).size) {
+      throw new Error("One or more selected images could not be found.");
+    }
+  } else {
+    data = await fetchAllRows<ImageCopyRow>("project images", (count) =>
+      supabase
+        .from("images")
+        .select(IMAGE_COPY_COLUMNS, count)
+        .eq("project_id", sourceProjectId)
+        .order("created_at", { ascending: true })
+        .order("id", { ascending: true }),
+    );
   }
 
   const createdKeys: string[] = [];
   const createdImageIds: string[] = [];
   try {
-    for (const image of (data ?? []) as ImageCopyRow[]) {
+    for (const image of data) {
       const objectKey = await copyImageObject(
         image.object_key,
         targetProjectId,
@@ -201,11 +303,7 @@ async function copyImages(
     let rowsRemoved = createdImageIds.length === 0;
     if (!rowsRemoved) {
       try {
-        const { error: cleanupError } = await supabase
-          .from("images")
-          .delete()
-          .in("id", createdImageIds);
-        rowsRemoved = !cleanupError;
+        rowsRemoved = await deleteImageRows(supabase, targetProjectId, createdImageIds);
       } catch {
         // Preserve the original copy error.
       }
@@ -336,44 +434,40 @@ async function removeMovedSourceImages(
   createdKeys: string[],
   createdImageIds: string[],
 ) {
-  const { data: deletedRows, error: deleteError } = await supabase
-    .from("images")
-    .delete()
-    .eq("project_id", sourceProjectId)
-    .in("id", imageIds)
-    .select("id, object_key");
-
-  if (deleteError) {
-    // A failed response can still mean the delete committed, so look before undoing.
-    const { data: remaining, error: checkError } = await supabase
+  // In chunks (see ID_CHUNK_SIZE). Only a failure on the first chunk can
+  // leave the source untouched, so only then can the copies be undone.
+  const deletedRows: Array<{ object_key: string }> = [];
+  for (const [index, ids] of chunk(imageIds).entries()) {
+    const { data, error: deleteError } = await supabase
       .from("images")
-      .select("id")
+      .delete()
       .eq("project_id", sourceProjectId)
-      .in("id", imageIds);
-    if (!checkError && (remaining?.length ?? 0) === imageIds.length) {
-      const { error: rollbackError } = await supabase
-        .from("images")
-        .delete()
-        .eq("project_id", targetProjectId)
-        .in("id", createdImageIds);
-      if (!rollbackError) {
+      .in("id", ids)
+      .select("id, object_key");
+
+    if (deleteError) {
+      // A failed response can still mean the delete committed, so look before undoing.
+      if (
+        index === 0 &&
+        (await countImageRows(supabase, sourceProjectId, imageIds)) === imageIds.length &&
+        (await deleteImageRows(supabase, targetProjectId, createdImageIds))
+      ) {
         await deleteUnreferencedObjects(createdKeys);
         throw new Error(
           `Images could not be moved, so nothing was changed: ${deleteError.message}`,
         );
       }
+      // Rows deleted by earlier chunks are gone: their objects are unreferenced.
+      await deleteUnreferencedObjects(deletedRows.map((row) => row.object_key));
+      throw new Error(
+        `Images were copied, but removing them from the source project may not have finished (${deleteError.message}). No images were lost; check both projects before retrying.`,
+      );
     }
-    throw new Error(
-      `Images were copied, but removing them from the source project may not have finished (${deleteError.message}). No images were lost; check both projects before retrying.`,
-    );
+    deletedRows.push(...((data ?? []) as Array<{ object_key: string }>));
   }
 
   // Rows are gone, so source objects are unreferenced: delete best-effort.
-  await deleteUnreferencedObjects(
-    ((deletedRows ?? []) as Array<{ object_key: string }>).map(
-      (row) => row.object_key,
-    ),
-  );
+  await deleteUnreferencedObjects(deletedRows.map((row) => row.object_key));
 }
 
 export async function transferProjectImages(
@@ -392,12 +486,7 @@ export async function transferProjectImages(
   const { supabase } = await requireOwnedProject(sourceProjectId);
   await requireOwnedProject(targetProjectId);
 
-  const { data: sourceImages, error: sourceError } = await supabase
-    .from("images")
-    .select("id")
-    .eq("project_id", sourceProjectId)
-    .in("id", uniqueImageIds);
-  if (sourceError || (sourceImages?.length ?? 0) !== uniqueImageIds.length) {
+  if ((await countImageRows(supabase, sourceProjectId, uniqueImageIds)) !== uniqueImageIds.length) {
     throw new Error("One or more selected images could not be loaded.");
   }
 

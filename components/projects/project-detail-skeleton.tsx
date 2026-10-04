@@ -6,6 +6,7 @@ const CARDS = [0, 1, 2, 3, 4, 5, 6, 7];
 const FILTERS = [
   { label: "Filter By:", width: "w-[120px]" },
   { label: "Status:", width: "w-[140px]" },
+  { label: "Label:", width: "w-[140px]" },
   { label: "Sort By:", width: "w-[140px]" },
 ];
 
@@ -45,17 +46,23 @@ export function ProjectDetailSkeleton() {
             </div>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {CARDS.map((card) => (
-              <Card key={card} className="overflow-hidden shadow-sm">
-                <Skeleton className="aspect-[4/3] rounded-none" />
-                <CardContent className="space-y-2 p-3">
-                  <Skeleton className="h-5 w-3/4" />
-                  <Skeleton className="h-5 w-20 rounded-md" />
-                  <Skeleton className="h-4 w-40" />
-                </CardContent>
-              </Card>
-            ))}
+          <div className="space-y-3">
+            <div className="flex h-5 items-center justify-between gap-3">
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="h-4 w-20" />
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {CARDS.map((card) => (
+                <Card key={card} className="overflow-hidden shadow-sm">
+                  <Skeleton className="aspect-[4/3] rounded-none" />
+                  <CardContent className="space-y-2 p-3">
+                    <Skeleton className="h-5 w-3/4" />
+                    <Skeleton className="h-5 w-20 rounded-md" />
+                    <Skeleton className="h-4 w-40" />
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
           </div>
         </div>
       </div>

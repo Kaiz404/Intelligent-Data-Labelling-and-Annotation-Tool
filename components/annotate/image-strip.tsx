@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useEffect, useRef } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { thumbhashColor } from "@/lib/image-placeholder";
 import type { ProjectImage } from "@/lib/types/projects";
@@ -12,6 +12,8 @@ type ImageStripProps = {
   activeImageId: string;
   /** Images with AI suggestions to review (marked with a dot). */
   reviewImageIds: ReadonlySet<string>;
+  /** Images with at least one accepted box (marked with a tick). */
+  annotatedImageIds: ReadonlySet<string>;
   onSelect: (imageId: string) => void;
   /** Pointer or focus is on a thumbnail: get that image ready to open. */
   onPrefetch: (imageId: string) => void;
@@ -26,6 +28,7 @@ export const ImageStrip = memo(function ImageStrip({
   images,
   activeImageId,
   reviewImageIds,
+  annotatedImageIds,
   onSelect,
   onPrefetch,
 }: ImageStripProps) {
@@ -54,12 +57,13 @@ export const ImageStrip = memo(function ImageStrip({
 
   return (
     <div className="flex items-center gap-2 rounded-xl border bg-card p-3 shadow-sm">
-      <Button type="button" variant="ghost" size="icon" onClick={() => selectAt(activeIndex - 1)} disabled={activeIndex <= 0} aria-label="Previous thumbnails">
+      <Button type="button" variant="ghost" size="icon" onClick={() => selectAt(activeIndex - 1)} disabled={activeIndex <= 0} aria-label="Previous image">
         <ChevronLeft className="size-4" />
       </Button>
       <div ref={scrollerRef} className="grid min-w-0 flex-1 auto-cols-[110px] grid-flow-col gap-3 overflow-x-auto py-1">
         {images.map((image) => {
           const isActive = image.id === activeImageId;
+          const isAnnotated = annotatedImageIds.has(image.id);
           return (
             <button
               type="button"
@@ -69,6 +73,7 @@ export const ImageStrip = memo(function ImageStrip({
               onFocus={() => onPrefetch(image.id)}
               className="min-w-0 text-left"
               aria-current={isActive ? "true" : undefined}
+              aria-label={`${image.fileName}${isAnnotated ? ", annotated" : ""}`}
             >
               <span
                 className={cn(
@@ -82,6 +87,14 @@ export const ImageStrip = memo(function ImageStrip({
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={image.url} alt="" loading="lazy" decoding="async" className="size-full object-cover" />
                 ) : null}
+                {isAnnotated ? (
+                  <span
+                    className="absolute bottom-1 left-1 flex size-4 items-center justify-center rounded-full bg-emerald-600 text-white ring-2 ring-background"
+                    title="Annotated"
+                  >
+                    <Check className="size-2.5" strokeWidth={3} />
+                  </span>
+                ) : null}
                 {reviewImageIds.has(image.id) ? (
                   <span
                     className="absolute right-1 top-1 size-2.5 rounded-full bg-violet-600 ring-2 ring-background"
@@ -94,7 +107,7 @@ export const ImageStrip = memo(function ImageStrip({
           );
         })}
       </div>
-      <Button type="button" variant="ghost" size="icon" onClick={() => selectAt(activeIndex + 1)} disabled={activeIndex >= images.length - 1} aria-label="Next thumbnails">
+      <Button type="button" variant="ghost" size="icon" onClick={() => selectAt(activeIndex + 1)} disabled={activeIndex >= images.length - 1} aria-label="Next image">
         <ChevronRight className="size-4" />
       </Button>
     </div>

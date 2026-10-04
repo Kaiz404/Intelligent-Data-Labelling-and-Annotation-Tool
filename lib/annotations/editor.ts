@@ -120,6 +120,11 @@ export function hasServerSuggestions(sets: ImageSuggestionSet[] | null) {
   return Boolean(sets?.some((set) => set.suggestions.length > 0));
 }
 
+/** Accepted boxes differ from the server copy (pending review decisions aside). */
+export function hasUnsavedBoxes(editor: ImageEditor) {
+  return !sameBoxes(acceptedBoxes(editor.present), editor.savedBoxes);
+}
+
 /** What saving this editor would write, or null when the server is current. `force` rewrites the boxes anyway (the Save button). */
 export function planSave(
   editor: ImageEditor,
@@ -394,9 +399,13 @@ function sameGeometry(first: BoundingBox, second: BoundingBox) {
 
 type Edit = (present: EditorSnapshot) => EditorSnapshot;
 
-/** The canvas's new box list. Moving or resizing a suggestion accepts it. */
+/**
+ * The canvas's new box list. Moving or resizing a suggestion accepts it; a
+ * drag that ends where it started changes nothing (no undo step).
+ */
 export function replaceBoxes(next: BoundingBox[]): Edit {
   return (present) => {
+    if (sameBoxes(next, present.boxes)) return present;
     const previousById = new Map(present.boxes.map((box) => [box.id, box]));
     let meta = present.meta;
     for (const box of next) {
@@ -409,20 +418,33 @@ export function replaceBoxes(next: BoundingBox[]): Edit {
   };
 }
 
-/** Editing a box's label or coordinates; on a suggestion this accepts it. */
+/**
+ * Editing a box's label or coordinates; on a suggestion this accepts it. A
+ * patch that changes nothing on an accepted box (e.g. confirming the label a
+ * new box was drawn with) is a no-op, so it adds no undo step.
+ */
 export function updateBox(
   boxId: string,
   patch: Partial<Pick<BoundingBox, "labelId" | "x" | "y" | "width" | "height">>,
 ): Edit {
+  return (present) => {
+    const target = present.boxes.find((box) => box.id === boxId);
+    if (!target) return present;
+    const updated = { ...target, ...patch };
+    if (!present.meta[boxId] && sameBox(updated, target)) return present;
+    return {
+      boxes: present.boxes.map((box) => (box.id === boxId ? updated : box)),
+      meta: withoutSuggestion(present.meta, boxId),
+    };
+  };
+}
+
+/** A newly drawn box, on top of the others. */
+export function addBox(box: BoundingBox): Edit {
   return (present) =>
-    present.boxes.some((box) => box.id === boxId)
-      ? {
-          boxes: present.boxes.map((box) =>
-            box.id === boxId ? { ...box, ...patch } : box,
-          ),
-          meta: withoutSuggestion(present.meta, boxId),
-        }
-      : present;
+    present.boxes.some((existing) => existing.id === box.id)
+      ? present
+      : { boxes: [...present.boxes, box], meta: present.meta };
 }
 
 /** Review card relabel: unlike `updateBox`, the box stays a pending suggestion. */

@@ -11,12 +11,16 @@ import {
 
 /** Keys handled by the workspace keydown effect — keep the two in sync. */
 const KEYBOARD_SHORTCUTS: Array<{ combos: string[][]; description: string }> = [
+  { combos: [["V"]], description: "Select tool" },
+  { combos: [["B"]], description: "Bounding box tool" },
+  { combos: [["H"]], description: "Pan tool" },
+  { combos: [["←"], ["→"]], description: "Previous / next image" },
   {
     combos: [["Delete"], ["Backspace"]],
     description: "Delete the selected box (rejects an AI suggestion)",
   },
   { combos: [["Ctrl / ⌘", "Z"]], description: "Undo" },
-  { combos: [["Ctrl / ⌘", "Shift", "Z"]], description: "Redo" },
+  { combos: [["Ctrl / ⌘", "Shift", "Z"], ["Ctrl / ⌘", "Y"]], description: "Redo" },
   { combos: [["A"]], description: "Accept the selected AI suggestion" },
   { combos: [["Shift", "A"]], description: "Accept all AI suggestions on this image" },
 ];
@@ -35,7 +39,8 @@ export function KeyboardShortcutsDialog({
           <DialogTitle>Keyboard shortcuts</DialogTitle>
           <DialogDescription>
             Shortcuts are paused while you type in a text field or have a
-            dialog or menu open.
+            dialog or menu open. Double-click a box or its tag to change its
+            label.
           </DialogDescription>
         </DialogHeader>
         <dl className="divide-y rounded-lg border">

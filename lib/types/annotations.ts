@@ -20,6 +20,8 @@ export type BoundingBox = {
 export type AnnotationDocument = {
   boxes: BoundingBox[];
   updatedAt: string;
+  /** The boxes differ from the server copy. Missing (older drafts) means saved. */
+  unsaved?: boolean;
 };
 
 /** An AI-proposed box awaiting review. Same geometry as `BoundingBox`. */
