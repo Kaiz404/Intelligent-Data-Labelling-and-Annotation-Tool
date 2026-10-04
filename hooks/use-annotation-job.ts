@@ -34,7 +34,6 @@ export function useAnnotationJob({
 }) {
   const [job, setJob] = useState(initialJob);
   const [states, setStates] = useState(initialStates);
-  const sinceRef = useRef<string | null>(null);
   const onFinishedRef = useRef(onFinished);
   useEffect(() => {
     onFinishedRef.current = onFinished;
@@ -44,6 +43,14 @@ export function useAnnotationJob({
   useEffect(() => {
     setStates(initialStates);
   }, [initialStates]);
+
+  // A refreshed server render can report a run this page has not seen (e.g.
+  // one started elsewhere while this page stayed mounted): track that one.
+  const [syncedInitialJob, setSyncedInitialJob] = useState(initialJob);
+  if (initialJob !== syncedInitialJob) {
+    setSyncedInitialJob(initialJob);
+    if (initialJob && initialJob.id !== job?.id) setJob(initialJob);
+  }
 
   const jobId = job?.id;
   const active = isActive(job);
@@ -55,12 +62,12 @@ export function useAnnotationJob({
 
     let cancelled = false;
     let timer: number | undefined;
+    // Per-image updates since this server time (null: all of them).
+    let since: string | null = null;
 
     const poll = async () => {
       try {
-        const query = sinceRef.current
-          ? `?since=${encodeURIComponent(sinceRef.current)}`
-          : "";
+        const query = since ? `?since=${encodeURIComponent(since)}` : "";
         const response = await fetch(`/api/annotations/jobs/${jobId}${query}`, {
           cache: "no-store",
         });
@@ -72,7 +79,7 @@ export function useAnnotationJob({
           return;
         }
 
-        sinceRef.current = body.serverTime;
+        since = body.serverTime;
         setJob(body.job);
         if (body.updates.length > 0) {
           setStates((current) => {
@@ -122,7 +129,6 @@ export function useAnnotationJob({
         throw new Error(body?.error ?? "Could not start the AI run.");
       }
 
-      sinceRef.current = null;
       setJob({
         id: body.jobId,
         status: "queued",
