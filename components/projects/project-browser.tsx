@@ -98,8 +98,8 @@ export function ProjectBrowser({ projects: allProjects }: ProjectBrowserProps) {
         comparison = (first.image_count ?? 0) - (second.image_count ?? 0);
       } else {
         comparison =
-          new Date(second.updated_at ?? 0).getTime() -
-          new Date(first.updated_at ?? 0).getTime();
+          new Date(first.updated_at ?? 0).getTime() -
+          new Date(second.updated_at ?? 0).getTime();
       }
 
       return sortDirection === "ascending" ? comparison : -comparison;
