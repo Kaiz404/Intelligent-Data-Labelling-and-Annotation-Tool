@@ -118,6 +118,7 @@ type ImageCopyRow = {
   content_type: string | null;
   size_bytes: number;
   annotation: unknown;
+  thumbhash: string | null;
 };
 
 function remapAnnotation(
@@ -159,7 +160,7 @@ async function copyImages(
 ) {
   let query = supabase
     .from("images")
-    .select("name, object_key, content_type, size_bytes, annotation")
+    .select("name, object_key, content_type, size_bytes, annotation, thumbhash")
     .eq("project_id", sourceProjectId);
   if (imageIds) query = query.in("id", imageIds);
   const { data, error } = await query;
@@ -186,6 +187,7 @@ async function copyImages(
           object_key: objectKey,
           content_type: image.content_type,
           size_bytes: image.size_bytes,
+          thumbhash: image.thumbhash,
           // A raw copy is unannotated (null), not "annotated with zero boxes".
           annotation: keepAnnotations
             ? remapAnnotation(image.annotation, labelIds)

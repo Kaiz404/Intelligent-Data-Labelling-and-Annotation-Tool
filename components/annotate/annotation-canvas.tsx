@@ -595,6 +595,9 @@ export function AnnotationCanvas({
     );
   };
 
+  // Transparent while the image loads, so the workspace's placeholder (the
+  // image's ThumbHash preview) shows through until the image is drawn.
+  const isLoading = Boolean(imageUrl) && !loadFailed && !image;
   const cursorClass =
     tool === "pan"
       ? "cursor-grab active:cursor-grabbing"
@@ -606,7 +609,8 @@ export function AnnotationCanvas({
     <div
       ref={containerRef}
       className={cn(
-        "relative h-full min-h-[320px] w-full overflow-hidden rounded-[10px] bg-accent",
+        "relative h-full min-h-[320px] w-full overflow-hidden rounded-[10px]",
+        !isLoading && "bg-accent",
         cursorClass,
         className,
       )}
@@ -622,12 +626,9 @@ export function AnnotationCanvas({
             The S3 link may have expired or the object may no longer be available.
           </p>
         </div>
-      ) : !image ? (
-        <div className="flex size-full items-center justify-center text-sm text-muted-foreground">
-          Loading image...
-        </div>
-      ) : (
+      ) : !image ? null : (
         <Stage
+          className="animate-in fade-in-0 duration-200"
           ref={stageRef}
           width={size.width}
           height={size.height}

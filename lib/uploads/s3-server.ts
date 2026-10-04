@@ -12,6 +12,7 @@ import {
   UploadPartCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { isThumbhash } from "@/lib/image-placeholder";
 import { createClient } from "@/lib/supabase/server";
 
 const MAX_PART_NUMBER = 10_000;
@@ -230,6 +231,8 @@ export async function completeMultipartUpload(input: Record<string, unknown>) {
   const fileName = requireString(input.fileName, "fileName");
   const contentType = requireString(input.contentType, "contentType");
   const sizeBytes = input.sizeBytes;
+  // Cosmetic and computed by the browser: an invalid hash is dropped, not fatal.
+  const thumbhash = isThumbhash(input.thumbhash) ? input.thumbhash : null;
 
   if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
     throw new UploadApiError("Only JPEG and PNG files are supported.", 400);
@@ -284,6 +287,7 @@ export async function completeMultipartUpload(input: Record<string, unknown>) {
       object_key: key,
       content_type: contentType,
       size_bytes: sizeBytes,
+      thumbhash,
     })
     .select("id")
     .single();
@@ -303,9 +307,20 @@ export async function completeMultipartUpload(input: Record<string, unknown>) {
   return { key, imageId: image.id, projectId };
 }
 
+/** Image read URLs are signed per hour-long window (see createImageReadUrl). */
+const READ_URL_WINDOW_SECONDS = 60 * 60;
+
+/**
+ * Signed GET URL for an image object. Every render within the same hour gets
+ * the same URL (signed from the window start), so browsers reuse cached image
+ * bytes across navigations and refreshes instead of downloading again. Each
+ * URL stays valid for at least an hour; image keys are immutable, so the
+ * response may be cached for that long.
+ */
 export async function createImageReadUrl(key: string) {
   projectIdFromObjectKey(key);
   const { bucket } = getS3Config();
+  const windowMs = READ_URL_WINDOW_SECONDS * 1000;
 
   return getSignedUrl(
     getS3Client(),
@@ -313,8 +328,12 @@ export async function createImageReadUrl(key: string) {
       Bucket: bucket,
       Key: key,
       ResponseContentDisposition: "inline",
+      ResponseCacheControl: `private, max-age=${READ_URL_WINDOW_SECONDS}, immutable`,
     }),
-    { expiresIn: 60 * 60 },
+    {
+      expiresIn: 2 * READ_URL_WINDOW_SECONDS,
+      signingDate: new Date(Math.floor(Date.now() / windowMs) * windowMs),
+    },
   );
 }
 

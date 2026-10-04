@@ -23,6 +23,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { formatRelativeTime } from "@/lib/format";
+import { thumbhashColor } from "@/lib/image-placeholder";
 import type { RecentAnnotatedImage } from "@/lib/types/recent-annotations";
 import { cn } from "@/lib/utils";
 
@@ -61,12 +62,15 @@ export function RecentAnnotationCard({
         isSelected && "border-primary/50 bg-primary/5 ring-1 ring-primary/20",
       )}
     >
-      <div className="aspect-[16/10] overflow-hidden rounded-lg bg-muted">
-        {image.thumbnailUrl ? (
+      <div
+        className="aspect-[16/10] overflow-hidden rounded-lg bg-muted"
+        style={{ backgroundColor: thumbhashColor(image.thumbhash) }}
+      >
+        {image.url ? (
           // Signed S3 URLs are not configured for next/image optimisation.
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={image.thumbnailUrl}
+            src={image.url}
             alt=""
             loading="lazy"
             decoding="async"

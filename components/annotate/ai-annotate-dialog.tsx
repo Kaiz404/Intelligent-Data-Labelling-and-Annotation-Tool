@@ -30,8 +30,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { MAX_JOB_IMAGES } from "@/lib/annotations/job-config";
+import { thumbhashColor } from "@/lib/image-placeholder";
 import type {
-  AnnotationJobProgress,
   AnnotationLabel,
   AnnotationSuggestion,
 } from "@/lib/types/annotations";
@@ -54,8 +54,12 @@ type AiAnnotateDialogProps = {
   onCreateLabel: (name: string) => Promise<AnnotationLabel>;
   /** Results for the current image, shown on the canvas as suggestions. */
   onDetected: (suggestions: AnnotationSuggestion[]) => void;
-  /** A background run over a range of images was queued. */
-  onJobQueued: (job: AnnotationJobProgress) => void;
+  /** Queues a background run over a range of images (the workspace tracks it). */
+  onStartJob: (input: {
+    imageIds: string[];
+    labelIds: string[];
+    confidence: number;
+  }) => Promise<void>;
 };
 
 const MODEL_ID = "roboflow-zero-shot";
@@ -107,7 +111,7 @@ export function AiAnnotateDialog({
   initialScope = "current",
   onCreateLabel,
   onDetected,
-  onJobQueued,
+  onStartJob,
 }: AiAnnotateDialogProps) {
   const [scope, setScope] = useState<Scope>(initialScope);
   const [selectedImageIds, setSelectedImageIds] = useState<Set<string>>(
@@ -318,46 +322,7 @@ export function AiAnnotateDialog({
   }
 
   async function runRange() {
-    const response = await fetch("/api/annotations/jobs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        projectId,
-        imageIds: rangeImageIds,
-        labelIds,
-        confidence,
-      }),
-    });
-
-    const body = (await response.json().catch(() => null)) as
-      | { jobId?: string; error?: string }
-      | null;
-
-    if (!response.ok || !body?.jobId) {
-      const message = body?.error ?? "Could not start the AI run.";
-      throw new Error(
-        response.status === 409
-          ? `${message} Wait for it to finish, or cancel it from the project page.`
-          : message,
-      );
-    }
-
-    // Same optimistic shape useAnnotationJob uses until the first poll.
-    onJobQueued({
-      id: body.jobId,
-      status: "queued",
-      total: rangeCount,
-      counts: {
-        queued: rangeCount,
-        running: 0,
-        succeeded: 0,
-        failed: 0,
-        cancelled: 0,
-      },
-      pendingSuggestions: 0,
-      createdAt: new Date().toISOString(),
-      finishedAt: null,
-    });
+    await onStartJob({ imageIds: rangeImageIds, labelIds, confidence });
     onOpenChange(false);
   }
 
@@ -535,11 +500,12 @@ export function AiAnnotateDialog({
                               ? "border-primary ring-2 ring-primary/25"
                               : "group-hover:border-primary/50",
                           )}
+                          style={{ backgroundColor: thumbhashColor(image.thumbhash) }}
                         >
-                          {image.thumbnailUrl ? (
+                          {image.url ? (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img
-                              src={image.thumbnailUrl}
+                              src={image.url}
                               alt=""
                               loading="lazy"
                               className="size-full object-cover"

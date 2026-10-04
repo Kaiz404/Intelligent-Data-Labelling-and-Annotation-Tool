@@ -482,19 +482,3 @@ export async function fetchPendingSuggestions(
     suggestions: row.suggestions as AnnotationSuggestion[],
   }));
 }
-
-/** IDs of images in a project that still have AI suggestions to review. */
-export async function fetchImagesAwaitingReview(projectId: string): Promise<string[]> {
-  const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("annotation_job_items")
-    .select("image_id")
-    .eq("project_id", projectId)
-    .gt("suggestion_count", 0);
-
-  if (error) {
-    throw new Error(`Could not load AI review queue: ${error.message}`);
-  }
-
-  return Array.from(new Set((data ?? []).map((row) => row.image_id as string)));
-}

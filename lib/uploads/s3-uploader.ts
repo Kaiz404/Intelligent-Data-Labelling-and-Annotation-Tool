@@ -1,3 +1,4 @@
+import { createThumbhash } from "@/lib/image-placeholder";
 import {
   resolveChunkSizeForFile,
   sliceChunk,
@@ -219,6 +220,8 @@ export function createS3Uploader(options?: {
       }
 
       throwIfAborted(context.signal);
+      // Hashed while the bytes upload; a failure only means no placeholder.
+      const thumbhash = createThumbhash(file).catch(() => null);
       let uploadId = item.uploadId;
       let key = item.key;
 
@@ -297,6 +300,7 @@ export function createS3Uploader(options?: {
           fileName: file.name,
           contentType: file.type,
           sizeBytes: file.size,
+          thumbhash: await thumbhash,
         },
         context.signal,
       );

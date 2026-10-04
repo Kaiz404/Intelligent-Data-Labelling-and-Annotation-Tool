@@ -146,7 +146,7 @@ export function AnnotationExportSheet({
       const exportImages: ExportImage[] = await Promise.all(images.map(async (image) => ({
         ...image,
         boxes: loadAnnotations(projectId, image.id, image.annotations),
-        ...await getDimensions(image.imageUrl ?? image.thumbnailUrl),
+        ...await getDimensions(image.url),
       })));
       const baseName = safeName(fileName);
       const zip = new JSZip();
@@ -162,9 +162,10 @@ export function AnnotationExportSheet({
 
       if (content === "images") {
         await Promise.all(exportImages.map(async (image) => {
-          const url = image.imageUrl ?? image.thumbnailUrl;
-          if (!url) return;
-          const response = await fetch(url);
+          if (!image.url) return;
+          // Not from the HTTP cache: copies cached by no-CORS <img> loads lack
+          // the CORS headers a fetch needs.
+          const response = await fetch(image.url, { cache: "no-store" });
           if (!response.ok) throw new Error(`Could not download ${image.fileName}.`);
           zip.file(`images/${image.fileName}`, await response.blob());
         }));

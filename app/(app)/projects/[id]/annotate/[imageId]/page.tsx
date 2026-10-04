@@ -1,93 +1,38 @@
-import { AppHeader } from "@/components/app-shell/app-header";
-import { AnnotationWorkspace } from "@/components/annotate/annotation-workspace";
-import {
-  fetchImagesAwaitingReview,
-  fetchPendingSuggestions,
-} from "@/lib/annotations/jobs";
-import { fetchProjectImages } from "@/lib/images";
-import { fetchProjectLabels } from "@/lib/labels";
-import { createClient } from "@/lib/supabase/server";
+import { loadAnnotationWorkspace } from "@/lib/annotations/workspace";
 import { connection } from "next/server";
-import { notFound, redirect } from "next/navigation";
+import { redirect } from "next/navigation";
 import { Suspense } from "react";
 
-async function AnnotateContent({
-  projectId,
-  imageId,
-}: {
-  projectId: string;
-  imageId: string;
-}) {
-  await connection();
-  const supabase = await createClient();
-  const { data: project, error } = await supabase
-    .from("projects")
-    .select("*")
-    .eq("id", projectId)
-    .single();
-
-  if (error || !project) {
-    notFound();
-  }
-
-  const [images, labels, suggestionSets, reviewImageIds] = await Promise.all([
-    fetchProjectImages(project.id),
-    fetchProjectLabels(project.id),
-    fetchPendingSuggestions(project.id, imageId),
-    fetchImagesAwaitingReview(project.id),
-  ]);
-
-  if (images.length === 0) {
-    redirect(`/projects/${projectId}`);
-  }
-
-  const activeImage =
-    images.find((image) => image.id === imageId) ?? images[0];
-
-  if (activeImage.id !== imageId) {
-    redirect(`/projects/${projectId}/annotate/${activeImage.id}`);
-  }
-
-  return (
-    <>
-      <AppHeader
-        projectName={project.name}
-        projectId={project.id}
-        fileName={activeImage.fileName}
-      />
-      <div className="flex-1 p-4 md:p-6">
-        <AnnotationWorkspace
-          project={project}
-          images={images}
-          imageId={activeImage.id}
-          labels={labels}
-          suggestionSets={suggestionSets}
-          reviewImageIds={reviewImageIds}
-        />
-      </div>
-    </>
-  );
-}
-
-async function AnnotatePageInner({
+/**
+ * Only checks the URL on the server: the workspace in the annotate layout
+ * renders the image named here, and switches images client-side. An ID that
+ * is not one of the project's images redirects to its first image. Shares the
+ * layout's request-scoped workspace load.
+ */
+async function ImageGuard({
   params,
 }: {
   params: Promise<{ id: string; imageId: string }>;
 }) {
   const { id, imageId } = await params;
-  return <AnnotateContent projectId={id} imageId={imageId} />;
+  await connection();
+  const workspace = await loadAnnotationWorkspace(id);
+  const images = workspace?.images ?? [];
+
+  if (images.length > 0 && !images.some((image) => image.id === imageId)) {
+    redirect(`/projects/${id}/annotate/${images[0].id}`);
+  }
+  return null;
 }
 
-export default function AnnotatePage({
+export default function AnnotateImagePage({
   params,
 }: {
   params: Promise<{ id: string; imageId: string }>;
 }) {
   return (
-    <Suspense
-      fallback={<p className="p-6 text-muted-foreground">Loading workspace...</p>}
-    >
-      <AnnotatePageInner params={params} />
+    <Suspense fallback={null}>
+      <ImageGuard params={params} />
     </Suspense>
   );
 }

@@ -16,7 +16,11 @@ type ImageRow = {
   size_bytes: number;
   created_at: string;
   annotation: unknown;
+  thumbhash: string | null;
 };
+
+const IMAGE_COLUMNS =
+  "id, name, object_key, size_bytes, created_at, annotation, thumbhash";
 
 const dateFormatter = new Intl.DateTimeFormat("en-US", {
   year: "numeric",
@@ -46,7 +50,7 @@ async function toProjectImage(
 ): Promise<ProjectImage> {
   // `images.object_key` is not constrained by RLS, so only sign keys under the
   // row's own project; anything else gets no URL rather than another object.
-  const signedUrl = objectKeyBelongsToProject(row.object_key, projectId)
+  const url = objectKeyBelongsToProject(row.object_key, projectId)
     ? await createImageReadUrl(row.object_key)
     : null;
   const { status, progress } = annotationStatus(row.annotation);
@@ -58,8 +62,8 @@ async function toProjectImage(
     capturedAt: dateFormatter.format(new Date(row.created_at)),
     status,
     progress,
-    thumbnailUrl: signedUrl,
-    imageUrl: signedUrl,
+    url,
+    thumbhash: row.thumbhash,
     annotations: parseAnnotations(row.annotation),
   };
 }
@@ -70,7 +74,7 @@ export async function fetchProjectImages(
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("images")
-    .select("id, name, object_key, size_bytes, created_at, annotation")
+    .select(IMAGE_COLUMNS)
     .eq("project_id", projectId)
     .order("created_at", { ascending: true });
 
@@ -104,9 +108,7 @@ export async function fetchRecentlyAnnotatedImages(
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("images")
-    .select(
-      "id, project_id, name, object_key, size_bytes, created_at, modified_at, annotation, projects(name)",
-    )
+    .select(`${IMAGE_COLUMNS}, project_id, modified_at, projects(name)`)
     .not("annotation", "is", null)
     .order("modified_at", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false })

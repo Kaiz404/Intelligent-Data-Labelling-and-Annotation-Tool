@@ -23,9 +23,10 @@ export type ProjectImage = {
   capturedAt: string;
   status: ImageStatus;
   progress: number;
-  thumbnailUrl: string | null;
-  /** Higher-res URL for the annotation canvas when available. */
-  imageUrl: string | null;
+  /** Signed S3 URL of the original image (stable within the hour, so cacheable). */
+  url: string | null;
+  /** ThumbHash placeholder (base64), shown while `url` loads; null for older images until backfilled. */
+  thumbhash: string | null;
   /** Last annotation version saved permanently in Supabase. */
   annotations: BoundingBox[];
 };

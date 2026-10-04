@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { isThumbhash } from "@/lib/image-placeholder";
 import { createClient } from "@/lib/supabase/server";
 
 async function requireOwnedImages(projectId: string, imageIds: string[]) {
@@ -47,4 +48,31 @@ export async function renameProjectImage(
   if (error) throw new Error(`Could not rename the image: ${error.message}`);
   revalidatePath(`/projects/${projectId}`);
   revalidatePath("/dashboard");
+}
+
+/**
+ * Backfills the ThumbHash placeholder of an image uploaded before uploads
+ * computed one. Never overwrites an existing hash. Cosmetic, so there is no
+ * revalidation: the next render picks it up.
+ */
+export async function saveImageThumbhash(
+  projectId: string,
+  imageId: string,
+  thumbhash: string,
+) {
+  if (!isThumbhash(thumbhash)) throw new Error("Invalid image placeholder.");
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("You must be signed in.");
+
+  // RLS limits the update to images in the user's own projects.
+  const { error } = await supabase
+    .from("images")
+    .update({ thumbhash })
+    .eq("id", imageId)
+    .eq("project_id", projectId)
+    .is("thumbhash", null);
+  if (error) throw new Error(`Could not save the image placeholder: ${error.message}`);
 }
