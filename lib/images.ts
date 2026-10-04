@@ -1,5 +1,6 @@
 import "server-only";
 
+import { forEachRowPage } from "@/lib/supabase/rows";
 import { createClient } from "@/lib/supabase/server";
 import {
   createImageReadUrl,
@@ -149,33 +150,37 @@ export type ImageStats = {
   byProject: Record<string, { total: number; annotated: number }>;
 };
 
-/** Image counts for every project the user owns (RLS-filtered). */
+/**
+ * Image counts for every project the user owns (RLS-filtered), paged past
+ * the PostgREST row cap.
+ */
 export async function fetchImageStats(): Promise<ImageStats> {
   const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("images")
-    .select("project_id, first_box:annotation->0");
-  if (error) {
-    throw new Error(`Could not load image statistics: ${error.message}`);
-  }
-
   const byProject: ImageStats["byProject"] = {};
+  let total = 0;
   let annotated = 0;
 
-  for (const row of (data ?? []) as ImageStatsRow[]) {
-    const projectStats = byProject[row.project_id] ?? {
-      total: 0,
-      annotated: 0,
-    };
-    projectStats.total += 1;
-    if (annotationStatus(row.first_box).status === "Annotated") {
-      projectStats.annotated += 1;
-      annotated += 1;
-    }
-    byProject[row.project_id] = projectStats;
-  }
+  await forEachRowPage<ImageStatsRow>(
+    supabase,
+    "images",
+    "project_id, first_box:annotation->0",
+    (rows) => {
+      for (const row of rows) {
+        const projectStats = byProject[row.project_id] ?? {
+          total: 0,
+          annotated: 0,
+        };
+        projectStats.total += 1;
+        total += 1;
+        if (annotationStatus(row.first_box).status === "Annotated") {
+          projectStats.annotated += 1;
+          annotated += 1;
+        }
+        byProject[row.project_id] = projectStats;
+      }
+    },
+  );
 
-  const total = data?.length ?? 0;
   return { total, annotated, unannotated: total - annotated, byProject };
 }
 

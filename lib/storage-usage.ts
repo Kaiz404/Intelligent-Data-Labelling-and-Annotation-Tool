@@ -5,6 +5,7 @@ import {
   fetchRecycleBinProjectIds,
   isRecycleBinSchemaMissing,
 } from "@/lib/recycle-bin";
+import { forEachRowPage } from "@/lib/supabase/rows";
 import { createClient } from "@/lib/supabase/server";
 import { measureProjectStorage } from "@/lib/uploads/s3-server";
 
@@ -26,8 +27,6 @@ type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
 
 const DEFAULT_STORAGE_QUOTA_GB = 100;
 const BYTES_PER_GB = 1024 ** 3;
-// Matches Supabase's default PostgREST max-rows; paging copes with lower caps.
-const ROW_PAGE_SIZE = 1000;
 
 /**
  * `STORAGE_QUOTA_GB` in binary gigabytes (so 100 formats as "100 GB" via
@@ -38,45 +37,6 @@ function getStorageQuotaBytes() {
   const gb = raw ? Number(raw) : Number.NaN;
   const quotaGb = Number.isFinite(gb) && gb > 0 ? gb : DEFAULT_STORAGE_QUOTA_GB;
   return Math.round(quotaGb * BYTES_PER_GB);
-}
-
-/**
- * Pages through every RLS-visible row of `table`, handing each page to
- * `onPage`. The first request asks for an exact count so a PostgREST max-rows
- * cap below ROW_PAGE_SIZE cannot end the scan early.
- */
-async function forEachRowPage<Row>(
-  supabase: SupabaseServerClient,
-  table: "projects" | "images" | "recycle_bin_items",
-  columns: string,
-  onPage: (rows: Row[]) => void,
-) {
-  let fetched = 0;
-  let total: number | null = null;
-
-  for (;;) {
-    const { data, error, count } = await supabase
-      .from(table)
-      .select(columns, fetched === 0 ? { count: "exact" } : undefined)
-      .order("id", { ascending: true })
-      .range(fetched, fetched + ROW_PAGE_SIZE - 1);
-
-    if (error) {
-      throw new Error(`Could not load ${table}: ${error.message}`, {
-        cause: error,
-      });
-    }
-
-    const rows = (data ?? []) as unknown as Row[];
-    if (fetched === 0) total = count ?? null;
-    fetched += rows.length;
-    onPage(rows);
-
-    const done =
-      rows.length === 0 ||
-      (total !== null ? fetched >= total : rows.length < ROW_PAGE_SIZE);
-    if (done) return;
-  }
 }
 
 async function fetchOwnedProjectIds(supabase: SupabaseServerClient) {
