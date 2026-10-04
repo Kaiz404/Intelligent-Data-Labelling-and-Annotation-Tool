@@ -24,9 +24,20 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
+/*
+ * Each dialog keeps its form state in a component inside DialogContent, which
+ * mounts on open: every open starts from the current project, with no reset
+ * effects.
+ */
+
 type CommonProps = {
   project: Project | null;
   open: boolean;
+  onOpenChange: (open: boolean) => void;
+};
+
+type FormProps = {
+  project: Project;
   onOpenChange: (open: boolean) => void;
 };
 
@@ -39,23 +50,28 @@ function ErrorMessage({ message }: { message: string | null }) {
 }
 
 export function EditProjectDialog({ project, open, onOpenChange }: CommonProps) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="gap-5 sm:max-w-[480px]">
+        <DialogHeader className="gap-1.5">
+          <DialogTitle className="text-base">Edit Project</DialogTitle>
+          <DialogDescription className="text-xs">Update the project details.</DialogDescription>
+        </DialogHeader>
+        {project ? <EditProjectForm key={project.id} project={project} onOpenChange={onOpenChange} /> : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditProjectForm({ project, onOpenChange }: FormProps) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
+  const [name, setName] = useState(project.name);
+  const [description, setDescription] = useState(project.description ?? "");
   const [thumbnail, setThumbnail] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(project.thumbnailUrl ?? null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!open || !project) return;
-    setName(project.name);
-    setDescription(project.description ?? "");
-    setThumbnail(null);
-    setPreviewUrl(project.thumbnailUrl ?? null);
-    setError(null);
-  }, [open, project]);
 
   useEffect(() => {
     return () => {
@@ -80,7 +96,6 @@ export function EditProjectDialog({ project, open, onOpenChange }: CommonProps) 
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!project) return;
     setPending(true);
     setError(null);
     try {
@@ -105,62 +120,57 @@ export function EditProjectDialog({ project, open, onOpenChange }: CommonProps) 
   };
 
   return (
+    <form onSubmit={submit} className="space-y-5">
+      <div className="space-y-2">
+        <Label htmlFor="edit-project-name">Project Name <span className="text-destructive">*</span></Label>
+        <Input id="edit-project-name" value={name} onChange={(event) => setName(event.target.value)} required />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="edit-project-description">Project Description <span className="font-normal text-muted-foreground">(optional)</span></Label>
+        <Textarea id="edit-project-description" value={description} onChange={(event) => setDescription(event.target.value)} rows={4} />
+      </div>
+      <div className="space-y-2">
+        <Label>Project Thumbnail <span className="font-normal text-muted-foreground">(optional)</span></Label>
+        <div className="flex items-center gap-3">
+          <div className="flex h-24 w-32 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted">
+            {previewUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={previewUrl} alt="Project thumbnail preview" className="h-full w-full object-cover" />
+            ) : <ImageIcon className="size-7 text-muted-foreground/60" />}
+          </div>
+          <div className="space-y-2">
+            <input ref={fileInputRef} type="file" accept="image/jpeg,image/png" className="hidden" onChange={(event) => chooseThumbnail(event.target.files?.[0])} />
+            <Button type="button" variant="outline" className="border-primary text-primary hover:text-primary" onClick={() => fileInputRef.current?.click()} disabled={pending}><Upload className="size-4" /> Change Thumbnail</Button>
+            <p className="text-[11px] text-muted-foreground">JPG or PNG&nbsp;&nbsp;·&nbsp;&nbsp;Max 5 MB</p>
+          </div>
+        </div>
+      </div>
+      <ErrorMessage message={error} />
+      <DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>Cancel</Button><Button type="submit" disabled={pending || !name.trim()}>{pending ? "Saving..." : "Save Changes"}</Button></DialogFooter>
+    </form>
+  );
+}
+
+export function DuplicateProjectDialog({ project, open, onOpenChange }: CommonProps) {
+  return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="gap-5 sm:max-w-[480px]">
-        <DialogHeader className="gap-1.5">
-          <DialogTitle className="text-base">Edit Project</DialogTitle>
-          <DialogDescription className="text-xs">Update the project details.</DialogDescription>
-        </DialogHeader>
-        <form onSubmit={submit} className="space-y-5">
-          <div className="space-y-2">
-            <Label htmlFor="edit-project-name">Project Name <span className="text-destructive">*</span></Label>
-            <Input id="edit-project-name" value={name} onChange={(event) => setName(event.target.value)} required />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="edit-project-description">Project Description <span className="font-normal text-muted-foreground">(optional)</span></Label>
-            <Textarea id="edit-project-description" value={description} onChange={(event) => setDescription(event.target.value)} rows={4} />
-          </div>
-          <div className="space-y-2">
-            <Label>Project Thumbnail <span className="font-normal text-muted-foreground">(optional)</span></Label>
-            <div className="flex items-center gap-3">
-              <div className="flex h-24 w-32 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted">
-                {previewUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={previewUrl} alt="Project thumbnail preview" className="h-full w-full object-cover" />
-                ) : <ImageIcon className="size-7 text-muted-foreground/60" />}
-              </div>
-              <div className="space-y-2">
-                <input ref={fileInputRef} type="file" accept="image/jpeg,image/png" className="hidden" onChange={(event) => chooseThumbnail(event.target.files?.[0])} />
-                <Button type="button" variant="outline" className="border-primary text-primary hover:text-primary" onClick={() => fileInputRef.current?.click()} disabled={pending}><Upload className="size-4" /> Change Thumbnail</Button>
-                <p className="text-[11px] text-muted-foreground">JPG or PNG&nbsp;&nbsp;·&nbsp;&nbsp;Max 5 MB</p>
-              </div>
-            </div>
-          </div>
-          <ErrorMessage message={error} />
-          <DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>Cancel</Button><Button type="submit" disabled={pending || !name.trim()}>{pending ? "Saving..." : "Save Changes"}</Button></DialogFooter>
-        </form>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader><DialogTitle>Duplicate Project</DialogTitle><DialogDescription>Set up the details for your duplicated project.</DialogDescription></DialogHeader>
+        {project ? <DuplicateProjectForm key={project.id} project={project} onOpenChange={onOpenChange} /> : null}
       </DialogContent>
     </Dialog>
   );
 }
 
-export function DuplicateProjectDialog({ project, open, onOpenChange }: CommonProps) {
+function DuplicateProjectForm({ project, onOpenChange }: FormProps) {
   const router = useRouter();
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
+  const [name, setName] = useState(`${project.name} Copy`);
+  const [description, setDescription] = useState(project.description ?? "");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!open || !project) return;
-    setName(`${project.name} Copy`);
-    setDescription(project.description ?? "");
-    setError(null);
-  }, [open, project]);
-
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!project) return;
     setPending(true);
     setError(null);
     try {
@@ -175,23 +185,29 @@ export function DuplicateProjectDialog({ project, open, onOpenChange }: CommonPr
   };
 
   return (
+    <form onSubmit={submit} className="space-y-4">
+      <div className="space-y-2"><Label htmlFor="duplicate-project-name">New Project Name <span className="text-destructive">*</span></Label><Input id="duplicate-project-name" value={name} onChange={(event) => setName(event.target.value)} required /></div>
+      <div className="space-y-2"><Label htmlFor="duplicate-project-description">New Project Description <span className="font-normal text-muted-foreground">(optional)</span></Label><Textarea id="duplicate-project-description" value={description} onChange={(event) => setDescription(event.target.value)} rows={4} /></div>
+      <ErrorMessage message={error} />
+      <DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>Cancel</Button><Button type="submit" disabled={pending || !name.trim()}>{pending ? "Duplicating..." : "Duplicate Project"}</Button></DialogFooter>
+    </form>
+  );
+}
+
+export function CopyImagesDialog({ project, projects, open, onOpenChange }: CommonProps & { projects: Project[] }) {
+  return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader><DialogTitle>Duplicate Project</DialogTitle><DialogDescription>Set up the details for your duplicated project.</DialogDescription></DialogHeader>
-        <form onSubmit={submit} className="space-y-4">
-          <div className="space-y-2"><Label htmlFor="duplicate-project-name">New Project Name <span className="text-destructive">*</span></Label><Input id="duplicate-project-name" value={name} onChange={(event) => setName(event.target.value)} required /></div>
-          <div className="space-y-2"><Label htmlFor="duplicate-project-description">New Project Description <span className="font-normal text-muted-foreground">(optional)</span></Label><Textarea id="duplicate-project-description" value={description} onChange={(event) => setDescription(event.target.value)} rows={4} /></div>
-          <ErrorMessage message={error} />
-          <DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>Cancel</Button><Button type="submit" disabled={pending || !name.trim()}>{pending ? "Duplicating..." : "Duplicate Project"}</Button></DialogFooter>
-        </form>
+      <DialogContent className="gap-5 sm:max-w-[430px]">
+        <DialogHeader className="gap-1.5"><DialogTitle className="text-base">Copy Images to Project</DialogTitle><DialogDescription className="text-xs">Copy image(s) from the selected project to another project.</DialogDescription></DialogHeader>
+        {project ? <CopyImagesForm key={project.id} project={project} projects={projects} onOpenChange={onOpenChange} /> : null}
       </DialogContent>
     </Dialog>
   );
 }
 
-export function CopyImagesDialog({ project, projects, open, onOpenChange }: CommonProps & { projects: Project[] }) {
+function CopyImagesForm({ project, projects, onOpenChange }: FormProps & { projects: Project[] }) {
   const router = useRouter();
-  const destinations = useMemo(() => projects.filter((candidate) => candidate.id !== project?.id), [project?.id, projects]);
+  const destinations = useMemo(() => projects.filter((candidate) => candidate.id !== project.id), [project.id, projects]);
   const [targetId, setTargetId] = useState("");
   const [search, setSearch] = useState("");
   const [keepAnnotations, setKeepAnnotations] = useState(true);
@@ -199,17 +215,9 @@ export function CopyImagesDialog({ project, projects, open, onOpenChange }: Comm
   const [error, setError] = useState<string | null>(null);
   const filteredDestinations = destinations.filter((destination) => destination.name.toLowerCase().includes(search.trim().toLowerCase()));
 
-  useEffect(() => {
-    if (!open) return;
-    setTargetId("");
-    setSearch("");
-    setKeepAnnotations(true);
-    setError(null);
-  }, [open, project]);
-
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!project || !targetId) return;
+    if (!targetId) return;
     setPending(true);
     setError(null);
     try {
@@ -224,44 +232,55 @@ export function CopyImagesDialog({ project, projects, open, onOpenChange }: Comm
   };
 
   return (
+    <form onSubmit={submit} className="space-y-4">
+      <div className="flex items-center gap-2 rounded-md bg-primary/10 px-3 py-2 text-xs font-medium text-primary"><Copy className="size-3.5" />Copy all {project.image_count ?? 0} images from {project.name} to another project.</div>
+      <div className="space-y-2">
+        <Label htmlFor="destination-search">Destination Project</Label>
+        <div className="overflow-hidden rounded-lg border">
+          <div className="relative border-b"><Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><Input id="destination-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search for a project..." className="border-0 pl-9 shadow-none focus-visible:ring-0" /></div>
+          <div className="max-h-36 overflow-y-auto p-1">
+            {filteredDestinations.map((destination) => (
+              <button key={destination.id} type="button" onClick={() => setTargetId(destination.id)} className={`flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-sm transition ${targetId === destination.id ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}><span className="truncate">{destination.name}</span><span className="ml-3 shrink-0 text-xs text-muted-foreground">{destination.image_count ?? 0} images</span></button>
+            ))}
+            {filteredDestinations.length === 0 ? <p className="px-3 py-5 text-center text-xs text-muted-foreground">No destination projects found.</p> : null}
+          </div>
+        </div>
+      </div>
+      <div className="flex items-start gap-3 rounded-lg border p-3">
+        <Checkbox id="keep-annotations" checked={keepAnnotations} onCheckedChange={(checked) => setKeepAnnotations(checked === true)} />
+        <div className="space-y-0.5"><Label htmlFor="keep-annotations" className="cursor-pointer">Keep annotations</Label><p className="text-xs leading-relaxed text-muted-foreground">Copy annotations when the source image is already annotated. Unannotated images still copy as raw images.</p></div>
+      </div>
+      <ErrorMessage message={error} />
+      <DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>Cancel</Button><Button type="submit" disabled={pending || !targetId}>{pending ? "Copying..." : "Copy"}</Button></DialogFooter>
+    </form>
+  );
+}
+
+export function DeleteProjectDialog({
+  project,
+  open,
+  onOpenChange,
+  onDeleted,
+}: CommonProps & {
+  /** Called once the project is in the Recycle Bin, before the refresh. */
+  onDeleted?: (projectId: string) => void;
+}) {
+  return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="gap-5 sm:max-w-[430px]">
-        <DialogHeader className="gap-1.5"><DialogTitle className="text-base">Copy Images to Project</DialogTitle><DialogDescription className="text-xs">Copy image(s) from the selected project to another project.</DialogDescription></DialogHeader>
-        <form onSubmit={submit} className="space-y-4">
-          <div className="flex items-center gap-2 rounded-md bg-primary/10 px-3 py-2 text-xs font-medium text-primary"><Copy className="size-3.5" />Copy all {project?.image_count ?? 0} images from {project?.name ?? "this project"} to another project.</div>
-          <div className="space-y-2">
-            <Label htmlFor="destination-search">Destination Project</Label>
-            <div className="overflow-hidden rounded-lg border">
-              <div className="relative border-b"><Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><Input id="destination-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search for a project..." className="border-0 pl-9 shadow-none focus-visible:ring-0" /></div>
-              <div className="max-h-36 overflow-y-auto p-1">
-                {filteredDestinations.map((destination) => (
-                  <button key={destination.id} type="button" onClick={() => setTargetId(destination.id)} className={`flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-sm transition ${targetId === destination.id ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}><span className="truncate">{destination.name}</span><span className="ml-3 shrink-0 text-xs text-muted-foreground">{destination.image_count ?? 0} images</span></button>
-                ))}
-                {filteredDestinations.length === 0 ? <p className="px-3 py-5 text-center text-xs text-muted-foreground">No destination projects found.</p> : null}
-              </div>
-            </div>
-          </div>
-          <div className="flex items-start gap-3 rounded-lg border p-3">
-            <Checkbox id="keep-annotations" checked={keepAnnotations} onCheckedChange={(checked) => setKeepAnnotations(checked === true)} />
-            <div className="space-y-0.5"><Label htmlFor="keep-annotations" className="cursor-pointer">Keep annotations</Label><p className="text-xs leading-relaxed text-muted-foreground">Copy annotations when the source image is already annotated. Unannotated images still copy as raw images.</p></div>
-          </div>
-          <ErrorMessage message={error} />
-          <DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>Cancel</Button><Button type="submit" disabled={pending || !targetId}>{pending ? "Copying..." : "Copy"}</Button></DialogFooter>
-        </form>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader><DialogTitle>Move to Recycle Bin?</DialogTitle><DialogDescription>“{project?.name}” will be moved to the Recycle Bin with its images, labels, and annotations. You can restore it from the Recycle Bin for 30 days. Unreviewed AI suggestions aren&apos;t kept.</DialogDescription></DialogHeader>
+        {project ? <DeleteProjectActions key={project.id} project={project} onOpenChange={onOpenChange} onDeleted={onDeleted} /> : null}
       </DialogContent>
     </Dialog>
   );
 }
 
-export function DeleteProjectDialog({ project, open, onOpenChange }: CommonProps) {
+function DeleteProjectActions({ project, onOpenChange, onDeleted }: FormProps & { onDeleted?: (projectId: string) => void }) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => { if (open) setError(null); }, [open, project]);
-
   const confirmDelete = async () => {
-    if (!project) return;
     setPending(true);
     setError(null);
     try {
@@ -270,6 +289,7 @@ export function DeleteProjectDialog({ project, open, onOpenChange }: CommonProps
         setError(result.error);
         return;
       }
+      onDeleted?.(project.id);
       onOpenChange(false);
       router.refresh();
     } catch (cause) {
@@ -280,12 +300,9 @@ export function DeleteProjectDialog({ project, open, onOpenChange }: CommonProps
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader><DialogTitle>Move to Recycle Bin?</DialogTitle><DialogDescription>“{project?.name}” will be moved to the Recycle Bin with its images, labels, and annotations. You can restore it from the Recycle Bin for 30 days. Unreviewed AI suggestions aren&apos;t kept.</DialogDescription></DialogHeader>
-        <ErrorMessage message={error} />
-        <DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>Cancel</Button><Button type="button" variant="destructive" onClick={confirmDelete} disabled={pending}>{pending ? "Moving..." : "Move to Recycle Bin"}</Button></DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <>
+      <ErrorMessage message={error} />
+      <DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>Cancel</Button><Button type="button" variant="destructive" onClick={confirmDelete} disabled={pending}>{pending ? "Moving..." : "Move to Recycle Bin"}</Button></DialogFooter>
+    </>
   );
 }

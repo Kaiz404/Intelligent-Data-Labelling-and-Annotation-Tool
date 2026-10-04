@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import JSZip from "jszip";
 import { FileArchive } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -17,7 +16,7 @@ import {
 } from "@/components/ui/sheet";
 import { loadAnnotations } from "@/lib/annotations/storage";
 import type { AnnotationLabel, BoundingBox } from "@/lib/types/annotations";
-import type { ProjectImage } from "@/lib/types/projects";
+import type { ProjectExportData, ProjectImage } from "@/lib/types/projects";
 import { cn } from "@/lib/utils";
 
 type ExportFormat = "coco" | "yolo" | "voc";
@@ -113,6 +112,20 @@ function createVoc(image: ExportImage, labels: AnnotationLabel[]) {
   return `<annotation>\n  <filename>${xmlEscape(image.fileName)}</filename>\n  <size>\n    <width>${image.width}</width>\n    <height>${image.height}</height>\n    <depth>3</depth>\n  </size>\n${objects}\n</annotation>`;
 }
 
+/** Loads a project's export data (fresh signed URLs, saved annotations, labels). */
+export async function fetchExportData(projectId: string): Promise<ProjectExportData> {
+  const response = await fetch(`/api/projects/${projectId}/export`, {
+    cache: "no-store",
+  });
+  const body = (await response.json().catch(() => null)) as
+    | (ProjectExportData & { error?: string })
+    | null;
+  if (!response.ok || !body?.project) {
+    throw new Error(body?.error ?? "Could not prepare the export.");
+  }
+  return body;
+}
+
 export function AnnotationExportSheet({
   open,
   onOpenChange,
@@ -143,6 +156,8 @@ export function AnnotationExportSheet({
     setExporting(true);
     setError(null);
     try {
+      // Loaded on demand: only exports need it.
+      const { default: JSZip } = await import("jszip");
       const exportImages: ExportImage[] = await Promise.all(images.map(async (image) => ({
         ...image,
         boxes: loadAnnotations(projectId, image.id, image.annotations),

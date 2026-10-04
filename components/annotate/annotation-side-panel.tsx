@@ -46,7 +46,12 @@ type AnnotationSidePanelProps = {
 function CoordinateField({ label, value, minimum, onCommit }: { label: string; value: number | null; minimum: number; onCommit: (value: number) => void }) {
   const rounded = value === null ? "" : String(Math.round(value));
   const [draft, setDraft] = useState(rounded);
-  useEffect(() => setDraft(rounded), [rounded]);
+  // Follow the box (drags, undo) during render, not one frame late.
+  const [shown, setShown] = useState(rounded);
+  if (rounded !== shown) {
+    setShown(rounded);
+    setDraft(rounded);
+  }
 
   if (value === null) {
     return (

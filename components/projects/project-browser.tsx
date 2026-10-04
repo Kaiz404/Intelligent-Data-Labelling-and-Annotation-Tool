@@ -2,7 +2,10 @@
 
 import { Plus, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { AnnotationExportSheet } from "@/components/annotate/annotation-export-sheet";
+import {
+  AnnotationExportSheet,
+  fetchExportData,
+} from "@/components/annotate/annotation-export-sheet";
 import {
   CopyImagesDialog,
   DeleteProjectDialog,
@@ -28,10 +31,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { Project } from "@/lib/types/projects";
-import type { AnnotationLabel } from "@/lib/types/annotations";
-import type { ProjectImage } from "@/lib/types/projects";
-import { getProjectExportData } from "@/lib/actions/projects";
+import type { Project, ProjectExportData } from "@/lib/types/projects";
 
 const sortOptions = ["Date Edited", "Name", "Images", "Favourite"] as const;
 
@@ -48,12 +48,6 @@ type ProjectBrowserProps = {
   initialProjects: Project[];
 };
 
-type ExportData = {
-  project: Project;
-  images: ProjectImage[];
-  labels: AnnotationLabel[];
-};
-
 export function ProjectBrowser({ initialProjects }: ProjectBrowserProps) {
   const [projects, setProjects] = useState(initialProjects);
   const [search, setSearch] = useState("");
@@ -64,7 +58,7 @@ export function ProjectBrowser({ initialProjects }: ProjectBrowserProps) {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [action, setAction] = useState<ProjectCardAction | null>(null);
-  const [exportData, setExportData] = useState<ExportData | null>(null);
+  const [exportData, setExportData] = useState<ProjectExportData | null>(null);
   const [exportingProjectId, setExportingProjectId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -123,7 +117,7 @@ export function ProjectBrowser({ initialProjects }: ProjectBrowserProps) {
     setExportingProjectId(project.id);
     setActionError(null);
     try {
-      setExportData(await getProjectExportData(project.id));
+      setExportData(await fetchExportData(project.id));
     } catch (cause) {
       setActionError(
         cause instanceof Error ? cause.message : "Could not prepare the export.",

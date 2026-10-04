@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  useEffect,
   useMemo,
   useRef,
   useState,
@@ -129,8 +128,11 @@ function EditableFileName({
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(item.fileName);
-
-  useEffect(() => setDraft(item.fileName), [item.fileName]);
+  const [shownName, setShownName] = useState(item.fileName);
+  if (item.fileName !== shownName) {
+    setShownName(item.fileName);
+    setDraft(item.fileName);
+  }
 
   function save() {
     const nextName = draft.trim();
@@ -230,18 +232,18 @@ export function UploadImagesDialog({
   const allPageSelected =
     pageIds.length > 0 && pageIds.every((id) => selectedIds.includes(id));
 
-  useEffect(() => {
-    setPage(1);
-  }, [activeTab, search]);
-
-  useEffect(() => {
-    if (items.length !== 0) return;
-
-    setHasStarted(false);
-    setActiveTab("All");
-    setSearch("");
-    setPage(1);
-  }, [items.length]);
+  // An emptied queue starts over (adjusted during render, not one frame late).
+  const isEmpty = items.length === 0;
+  const [wasEmpty, setWasEmpty] = useState(isEmpty);
+  if (isEmpty !== wasEmpty) {
+    setWasEmpty(isEmpty);
+    if (isEmpty) {
+      setHasStarted(false);
+      setActiveTab("All");
+      setSearch("");
+      setPage(1);
+    }
+  }
 
   function handleOpenChange(nextOpen: boolean) {
     if (!nextOpen) {
@@ -471,7 +473,11 @@ export function UploadImagesDialog({
                   <button
                     key={tab}
                     type="button"
-                    onClick={() => setActiveTab(tab)}
+                    onClick={() => {
+                      if (tab === activeTab) return;
+                      setActiveTab(tab);
+                      setPage(1);
+                    }}
                     className={cn(
                       "rounded-full border border-border px-[15px] py-2 text-sm font-medium transition-colors",
                       active
@@ -488,7 +494,10 @@ export function UploadImagesDialog({
               <Search className="absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setPage(1);
+                }}
                 placeholder="Search files..."
                 className="h-[38px] pl-8"
                 type="search"

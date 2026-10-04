@@ -39,16 +39,16 @@ export function useAnnotationJob({
     onFinishedRef.current = onFinished;
   }, [onFinished]);
 
-  // Server refreshes (router.refresh) bring authoritative review counts.
-  useEffect(() => {
+  // Applied during render when a server refresh brings new props: refreshed
+  // review counts replace local states, and a run this page has not seen
+  // (e.g. one started elsewhere while it stayed mounted) is tracked.
+  const [synced, setSynced] = useState({ initialJob, initialStates });
+  if (initialStates !== synced.initialStates) {
+    setSynced((current) => ({ ...current, initialStates }));
     setStates(initialStates);
-  }, [initialStates]);
-
-  // A refreshed server render can report a run this page has not seen (e.g.
-  // one started elsewhere while this page stayed mounted): track that one.
-  const [syncedInitialJob, setSyncedInitialJob] = useState(initialJob);
-  if (initialJob !== syncedInitialJob) {
-    setSyncedInitialJob(initialJob);
+  }
+  if (initialJob !== synced.initialJob) {
+    setSynced((current) => ({ ...current, initialJob }));
     if (initialJob && initialJob.id !== job?.id) setJob(initialJob);
   }
 

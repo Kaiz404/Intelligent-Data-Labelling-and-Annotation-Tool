@@ -1,8 +1,6 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
-import { fetchProjectImages } from "@/lib/images";
-import { fetchProjectLabels } from "@/lib/labels";
 import { copyImageObject, deleteImageObject } from "@/lib/uploads/s3-server";
 import type { BoundingBox } from "@/lib/types/annotations";
 import type { Project } from "@/lib/types/projects";
@@ -442,13 +440,4 @@ export async function transferProjectImages(
   revalidatePath(`/projects/${sourceProjectId}`);
   revalidatePath(`/projects/${targetProjectId}`);
   return { transferred: createdKeys.length };
-}
-
-export async function getProjectExportData(projectId: string) {
-  const { project } = await requireOwnedProject(projectId);
-  const [images, labels] = await Promise.all([
-    fetchProjectImages(projectId),
-    fetchProjectLabels(projectId),
-  ]);
-  return { project, images, labels };
 }

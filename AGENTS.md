@@ -74,7 +74,7 @@ data_annotation_tool/
 │   ├── auth/               # Auth pages + route handlers
 │   ├── api/uploads/        # Authenticated S3 multipart orchestration routes
 │   ├── api/annotations/    # AI auto-label (single image) + bulk AI job routes
-│   ├── api/projects/       # Project thumbnail upload + per-image AI suggestions (read by the workspace)
+│   ├── api/projects/       # Project thumbnail upload, export data, per-image AI suggestions (read by the workspace)
 │   ├── globals.css         # Tailwind v4 + design tokens
 │   ├── layout.tsx          # Root layout (font, theme)
 │   └── page.tsx            # Public landing page
@@ -100,6 +100,7 @@ data_annotation_tool/
 │   ├── images.ts           # Supabase image queries + signed S3 read URLs
 │   ├── labels.ts           # Supabase project_labels queries
 │   ├── nav.ts              # Sidebar navigation config
+│   ├── projects.ts         # Project loaders (server-only)
 │   ├── recycle-bin.ts      # Recycle Bin listing, lazy purge, permanent deletion (server-only)
 │   └── utils.ts            # cn() — clsx + tailwind-merge
 ├── supabase/               # Local Supabase CLI config + migrations (GITIGNORED — see below)
@@ -156,6 +157,7 @@ data_annotation_tool/
 | `/api/annotations/jobs/[jobId]` | `app/api/annotations/jobs/[jobId]/route.ts` | Route handler (GET: progress + per-image updates; restarts an idle worker) |
 | `/api/annotations/jobs/[jobId]/cancel` | `app/api/annotations/jobs/[jobId]/cancel/route.ts` | Route handler (POST: cancel an active run) |
 | `/api/projects/[id]/thumbnail` | `app/api/projects/[id]/thumbnail/route.ts` | Route handler (POST: replace the project thumbnail) |
+| `/api/projects/[id]/export` | `app/api/projects/[id]/export/route.ts` | Route handler (GET: project, signed image URLs, saved annotations, labels for the export sheet) |
 | `/api/projects/[id]/images/[imageId]/suggestions` | `app/api/projects/[id]/images/[imageId]/suggestions/route.ts` | Route handler (GET: pending AI suggestions for one image) |
 
 **Route group `(app)`:** Wraps dashboard, projects, annotate, and the Recycle Bin in the sidebar shell (`app/(app)/layout.tsx`). URLs are `/dashboard`, `/projects`, `/annotate`, `/recycle-bin` — the group name is omitted from the path.
@@ -281,7 +283,7 @@ Manual types in `lib/types/projects.ts`, `lib/types/annotations.ts` (`BoundingBo
 | Dashboard metrics (total/annotated/unannotated) | **Real** | RLS-filtered Supabase `images` rows aggregated by `lib/images.ts` |
 | Sidebar storage widget ("Storage used") | **Real (S3, with DB fallback)** | `app/(app)/layout.tsx` passes `components/app-shell/storage-usage-widget.tsx` (server component, own Suspense + skeleton) into `AppSidebar` as `storageSlot`, and the account row (`sidebar-account.tsx`, email from `getClaims()`) as `accountSlot`; the rest of the sidebar is in the prerendered shell. `getStorageUsage()` in `lib/storage-usage.ts` (React `cache()`, per request) lists every RLS-visible project's `projects/{id}/` prefix with `measureProjectStorage()` in `lib/uploads/s3-server.ts` (paginated ListObjectsV2, 4 prefixes at a time, 10s budget; needs `s3:ListBucket` on the `projects/` prefix) plus the projects of Recycle Bin items (`fetchRecycleBinProjectIds()`, loaded in parallel; their S3 objects still exist; none if the migration is missing). Any S3 failure logs one `console.warn` per error type and falls back to summing the user's `images.size_bytes` plus `recycle_bin_items.size_bytes` (binned files are still stored; ignored if the table is missing; excludes thumbnails); a Supabase failure renders "Storage unavailable". Quota is `STORAGE_QUOTA_GB` (default 100); the card's `title` says "Measured from S3" or "Estimated from uploaded files" |
 | Nav: Datasets, Recent Files, Starred, Settings, Get Help | **Placeholder** | `disabled: true` in `lib/nav.ts` |
-| Recent Annotations (`/annotate`) | **Real** | `fetchRecentlyAnnotatedImages()` in `lib/images.ts` loads the user's images with a non-null `annotation` (RLS-filtered, project name embedded), newest `modified_at` first, capped at 200, with signed thumbnails. `components/recent-annotations/` filters, searches, and sorts client-side; a card opens the workspace. Move/Add use `ImageTransferDialog` with its `sources` prop (one `transferProjectImages` call per source project; a move skips images already in the target). Export loads `getProjectExportData` and needs a single-project selection. Delete calls `moveImagesToRecycleBin` per project (restorable for 30 days) |
+| Recent Annotations (`/annotate`) | **Real** | `fetchRecentlyAnnotatedImages()` in `lib/images.ts` loads the user's images with a non-null `annotation` (RLS-filtered, project name embedded), newest `modified_at` first, capped at 200, with signed thumbnails. `components/recent-annotations/` filters, searches, and sorts client-side; a card opens the workspace. Move/Add use `ImageTransferDialog` with its `sources` prop (one `transferProjectImages` call per source project; a move skips images already in the target). Export loads `GET /api/projects/[id]/export` (`fetchExportData`) and needs a single-project selection. Delete calls `moveImagesToRecycleBin` per project (restorable for 30 days) |
 | Nav: Annotate | **Enabled** | Links to `/annotate`; the sidebar highlights it there and in `/projects/[id]/annotate/[imageId]` |
 | Recycle Bin (`/recycle-bin`) | **Real** | `fetchRecycleBin()` in `lib/recycle-bin.ts` loads unexpired `recycle_bin_items` with signed thumbnails (project thumbnail, else first image) and each image's `projectState` (`active` / `in_bin` / `gone`). `components/recycle-bin/` has Projects and Images tabs with search, sort (Deleted Date / Name + direction), a project filter for images, per-item Restore / Delete Permanently, and a bulk selection bar. Images whose project is in the bin or gone show that state and cannot be restored; items with `deletionPending` show "Deletion didn't finish — delete permanently again" with Restore disabled. Delete Permanently always confirms; per-item failures from `restoreRecycleBinItems` / `deleteRecycleBinItemsPermanently` show inline, and ids that were no longer in the bin are reported in the notice. Missing migration → `RecycleBinUnavailableError` → setup notice |
 | Nav: Recycle Bin | **Enabled** | Links to `/recycle-bin` (sidebar "Pages" section) |
@@ -332,7 +334,7 @@ Every page and feature follows these rules. The bar: navigation and interaction 
 - **Page-shaped skeletons.** Each Suspense fallback mirrors the final layout (`AnnotationWorkspaceSkeleton`). With `cacheComponents` it becomes the prerendered shell shown instantly on navigation. Put boundaries around the region that waits, so the rest of the page renders. Shared shell UI must not read the URL outside Suspense (`usePathname` blocks prerendering on dynamic routes): pages pass breadcrumbs to `AppHeader`, and only the sidebar's active-item highlight is suspended.
 - **Parallel, request-deduplicated server loads.** Start independent queries together (`Promise.all`, including the ownership/existence lookup when RLS already scopes the others); share one request's load between layout and page with React `cache()` (`loadAnnotationWorkspace`).
 - **Client reads via GET route handlers**, cached per key and prefetched for the likely next selection (`workspace-cache.ts`). Server actions are for mutations: Next runs them one at a time, so a read queued behind a save waits.
-- **Optimistic, derived client state.** Apply edits locally, then persist in the background through a serial queue (`useSerialQueue`), saving the diff against a mirror of the server copy (`planSave`). Derive anything that follows props or the URL (defaults, validity, per-key resets) during render; keep effects for syncing with external systems.
+- **Optimistic, derived client state.** Apply edits locally, then persist in the background through a serial queue (`useSerialQueue`), saving the diff against a mirror of the server copy (`planSave`). Derive anything that follows props or the URL (defaults, validity, per-key resets) during render; keep effects for syncing with external systems. Dialog forms live in a component inside `DialogContent`, which mounts on open, so each open starts from props with no reset effects. Load heavy, rarely used libraries (JSZip) with `import()` where they are used.
 - **Images placeholder-first.** Every S3 image sits over its ThumbHash placeholder: `thumbhashColor` for thumbnails, a `thumbhashDataUrl` preview for the single large image a page leads with. Thumbnails use `loading="lazy" decoding="async"`; the leading image gets `preload()`; likely next images are warmed. URLs come from `createImageReadUrl` (hour-stable, so the browser cache works); `fetch` S3 bytes with `cache: "no-store"`, because cached copies come from no-CORS `<img>` loads and lack CORS headers.
 - **Memoised long lists** (`ImageStrip`) when the parent re-renders on every edit, fed stable callbacks.
 
@@ -380,7 +382,6 @@ There is no hard-delete action for projects or images (`deleteProject`, `deleteP
 | `duplicateProject(sourceProjectId, name, description)` | Duplicate an owned project together with its labels, S3 images, and saved annotations |
 | `copyProjectImages(sourceProjectId, targetProjectId, keepAnnotations)` | Copy every image into another owned project; optionally copy required labels and saved annotations |
 | `transferProjectImages(sourceProjectId, targetProjectId, imageIds, mode, keepAnnotations)` | Copy/add or move selected S3 images to an owned project, optionally remapping labels and annotations; copy-to-current duplicates images while move-to-current is rejected |
-| `getProjectExportData(projectId)` | Load an owned project, its signed image URLs, labels, and annotations for the shared export sheet |
 | `renameProjectImage(imageId, projectId, fileName)` | Rename an owned image's display/export file name |
 | `saveImageThumbhash(projectId, imageId, thumbhash)` | Backfill an image's ThumbHash placeholder (never overwrites one); no revalidation |
 | `createLabel(projectId, name)` | Insert a `project_labels` row with an auto-assigned palette color, revalidate |

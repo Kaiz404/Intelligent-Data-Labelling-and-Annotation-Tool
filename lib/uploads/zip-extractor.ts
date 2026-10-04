@@ -1,4 +1,4 @@
-import JSZip from "jszip";
+import type JSZip from "jszip";
 
 function imageMimeType(fileName: string) {
   const extension = fileName.split(".").pop()?.toLowerCase();
@@ -13,10 +13,12 @@ function baseFileName(fileName: string) {
 
 /** Extract JPEG and PNG entries from a ZIP for the existing browser upload queue. */
 export async function extractZipImages(archive: File): Promise<File[]> {
+  // Loaded on demand: only ZIP uploads need it.
+  const { default: Zip } = await import("jszip");
   let zip: JSZip;
 
   try {
-    zip = await JSZip.loadAsync(archive);
+    zip = await Zip.loadAsync(archive);
   } catch {
     throw new Error(`Could not read ${archive.name} as a ZIP file.`);
   }

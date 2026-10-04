@@ -12,7 +12,10 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { startTransition, useCallback, useMemo, useState } from "react";
-import { AnnotationExportSheet } from "@/components/annotate/annotation-export-sheet";
+import {
+  AnnotationExportSheet,
+  fetchExportData,
+} from "@/components/annotate/annotation-export-sheet";
 import {
   ImageTransferDialog,
   type ImageTransferSource,
@@ -48,7 +51,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useNow } from "@/hooks/use-now";
-import { getProjectExportData } from "@/lib/actions/projects";
 import { moveImagesToRecycleBin } from "@/lib/actions/recycle-bin";
 import type { AnnotationLabel } from "@/lib/types/annotations";
 import type { Project, ProjectImage } from "@/lib/types/projects";
@@ -236,7 +238,7 @@ export function RecentAnnotationsClient({
     setActionError(null);
     try {
       // Fresh signed URLs, saved annotations, and the project's label list.
-      const data = await getProjectExportData(first.projectId);
+      const data = await fetchExportData(first.projectId);
       const targetIds = new Set(targets.map((image) => image.id));
       const exportImages = data.images.filter((image) => targetIds.has(image.id));
       if (exportImages.length === 0) {

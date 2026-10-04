@@ -1,4 +1,4 @@
-import type { BoundingBox } from "@/lib/types/annotations";
+import type { AnnotationLabel, BoundingBox } from "@/lib/types/annotations";
 
 export type Project = {
   id: string;
@@ -34,4 +34,11 @@ export type ProjectImage = {
 export type ProjectDraft = {
   name: string;
   description: string;
+};
+
+/** What the export sheet needs: signed image URLs, saved annotations, labels. */
+export type ProjectExportData = {
+  project: Project;
+  images: ProjectImage[];
+  labels: AnnotationLabel[];
 };

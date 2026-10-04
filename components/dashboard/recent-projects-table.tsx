@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Copy, Download, Edit3, Folder, Images, MoreVertical, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { AnnotationExportSheet } from "@/components/annotate/annotation-export-sheet";
+import { AnnotationExportSheet, fetchExportData } from "@/components/annotate/annotation-export-sheet";
 import { CopyImagesDialog, DeleteProjectDialog, DuplicateProjectDialog, EditProjectDialog } from "@/components/dashboard/project-action-dialogs";
 import { CreateProjectDialog } from "@/components/projects/create-project-dialog";
 import { Button } from "@/components/ui/button";
@@ -11,17 +11,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { getProjectExportData } from "@/lib/actions/projects";
 import { relativeTimeFromDate, toPercent } from "@/lib/format";
-import type { AnnotationLabel } from "@/lib/types/annotations";
-import type { Project, ProjectImage } from "@/lib/types/projects";
+import type { Project, ProjectExportData } from "@/lib/types/projects";
 
 type RecentProjectsTableProps = {
   projects: Project[];
   copyDestinations?: Project[];
 };
 type ProjectAction = "edit" | "duplicate" | "copy" | "delete" | null;
-type ExportData = { project: Project; images: ProjectImage[]; labels: AnnotationLabel[] };
 
 export function RecentProjectsTable({
   projects,
@@ -30,7 +27,7 @@ export function RecentProjectsTable({
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [action, setAction] = useState<ProjectAction>(null);
-  const [exportData, setExportData] = useState<ExportData | null>(null);
+  const [exportData, setExportData] = useState<ProjectExportData | null>(null);
   const [exportingProjectId, setExportingProjectId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -44,7 +41,7 @@ export function RecentProjectsTable({
     setExportingProjectId(project.id);
     setActionError(null);
     try {
-      setExportData(await getProjectExportData(project.id));
+      setExportData(await fetchExportData(project.id));
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : "Could not prepare the export.");
     } finally {
