@@ -319,15 +319,19 @@ const READ_URL_WINDOW_SECONDS = 60 * 60;
  */
 export async function createImageReadUrl(key: string) {
   projectIdFromObjectKey(key);
+  return signHourlyReadUrl(getS3Client(), key, "inline");
+}
+
+function signHourlyReadUrl(client: S3Client, key: string, disposition: string) {
   const { bucket } = getS3Config();
   const windowMs = READ_URL_WINDOW_SECONDS * 1000;
 
   return getSignedUrl(
-    getS3Client(),
+    client,
     new GetObjectCommand({
       Bucket: bucket,
       Key: key,
-      ResponseContentDisposition: "inline",
+      ResponseContentDisposition: disposition,
       ResponseCacheControl: `private, max-age=${READ_URL_WINDOW_SECONDS}, immutable`,
     }),
     {
@@ -374,22 +378,22 @@ export async function uploadProjectThumbnail(projectId: string, file: File) {
   return createProjectThumbnailReadUrl(projectId);
 }
 
+/**
+ * Signed URL of the project's thumbnail, or null without one. Hour-stable like
+ * image URLs; the thumbnail can be replaced at the same key, so its ETag goes
+ * into the signed URL and a new thumbnail gets a new URL.
+ */
 export async function createProjectThumbnailReadUrl(projectId: string) {
   try {
     const { bucket } = getS3Config();
     const client = getS3Client();
     const key = projectThumbnailKey(projectId);
-    await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
-
-    return getSignedUrl(
-      client,
-      new GetObjectCommand({
-        Bucket: bucket,
-        Key: key,
-        ResponseContentDisposition: "inline",
-      }),
-      { expiresIn: 60 * 60 },
+    const { ETag } = await client.send(
+      new HeadObjectCommand({ Bucket: bucket, Key: key }),
     );
+    const version = (ETag ?? "").replace(/\W/g, "");
+
+    return signHourlyReadUrl(client, key, `inline; filename="thumbnail-${version}"`);
   } catch {
     return null;
   }

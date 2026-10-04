@@ -19,7 +19,7 @@ async function RecentAnnotationsContent() {
 
     // Every owned project is a Move/Add destination, shown with its image count.
     const destinations = (projectRows ?? []) as Project[];
-    const stats = await fetchImageStats(destinations.map((project) => project.id));
+    const stats = await fetchImageStats();
     const projects = destinations.map((project) => ({
       ...project,
       image_count: stats.byProject[project.id]?.total ?? 0,

@@ -1,7 +1,7 @@
 "use client";
 
 import { Plus, Search } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   AnnotationExportSheet,
   fetchExportData,
@@ -31,29 +31,41 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useQueryParams } from "@/hooks/use-query-params";
 import type { Project, ProjectExportData } from "@/lib/types/projects";
 
-const sortOptions = ["Date Edited", "Name", "Images", "Favourite"] as const;
+const sortOptions = {
+  edited: { label: "Date Edited", defaultDirection: "descending" },
+  name: { label: "Name", defaultDirection: "ascending" },
+  images: { label: "Images", defaultDirection: "descending" },
+  favourite: { label: "Favourite", defaultDirection: "descending" },
+} as const satisfies Record<string, { label: string; defaultDirection: SortDirection }>;
 
-type SortOption = (typeof sortOptions)[number];
+type SortOption = keyof typeof sortOptions;
 
-const defaultSortDirections: Record<SortOption, SortDirection> = {
-  "Date Edited": "descending",
-  Name: "ascending",
-  Images: "descending",
-  Favourite: "descending",
-};
+/** `dir` is empty while the sort's default direction applies. */
+const QUERY_DEFAULTS = { q: "", sort: "edited", dir: "" };
 
 type ProjectBrowserProps = {
-  initialProjects: Project[];
+  projects: Project[];
 };
 
-export function ProjectBrowser({ initialProjects }: ProjectBrowserProps) {
-  const [projects, setProjects] = useState(initialProjects);
-  const [search, setSearch] = useState("");
-  const [sortBy, setSortBy] = useState<SortOption>("Date Edited");
-  const [sortDirection, setSortDirection] = useState<SortDirection>(
-    defaultSortDirections["Date Edited"],
+export function ProjectBrowser({ projects: allProjects }: ProjectBrowserProps) {
+  const [query, setQuery] = useQueryParams(QUERY_DEFAULTS);
+  const sortBy: SortOption = Object.hasOwn(sortOptions, query.sort)
+    ? (query.sort as SortOption)
+    : "edited";
+  const sortDirection: SortDirection =
+    query.dir === "ascending" || query.dir === "descending"
+      ? query.dir
+      : sortOptions[sortBy].defaultDirection;
+  // Typed text updates at once; the URL only keeps it for revisits.
+  const [search, setSearch] = useState(query.q);
+  // Hidden as soon as they reach the Recycle Bin, before the refresh lands.
+  const [removedIds, setRemovedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const projects = useMemo(
+    () => allProjects.filter((project) => !removedIds.has(project.id)),
+    [allProjects, removedIds],
   );
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
@@ -61,10 +73,6 @@ export function ProjectBrowser({ initialProjects }: ProjectBrowserProps) {
   const [exportData, setExportData] = useState<ProjectExportData | null>(null);
   const [exportingProjectId, setExportingProjectId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setProjects(initialProjects);
-  }, [initialProjects]);
 
   const visibleProjects = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
@@ -76,7 +84,7 @@ export function ProjectBrowser({ initialProjects }: ProjectBrowserProps) {
         name.toLowerCase().includes(normalizedSearch) ||
         description.toLowerCase().includes(normalizedSearch);
       const matchesFavourite =
-        sortBy !== "Favourite" || project.starred === true;
+        sortBy !== "favourite" || project.starred === true;
 
       return matchesSearch && matchesFavourite;
     });
@@ -84,14 +92,10 @@ export function ProjectBrowser({ initialProjects }: ProjectBrowserProps) {
     return [...filtered].sort((first, second) => {
       let comparison = 0;
 
-      if (sortBy === "Name") {
+      if (sortBy === "name") {
         comparison = (first.name ?? "").localeCompare(second.name ?? "");
-      } else if (sortBy === "Images") {
+      } else if (sortBy === "images") {
         comparison = (first.image_count ?? 0) - (second.image_count ?? 0);
-      } else if (sortBy === "Favourite") {
-        comparison =
-          new Date(second.updated_at ?? 0).getTime() -
-          new Date(first.updated_at ?? 0).getTime();
       } else {
         comparison =
           new Date(second.updated_at ?? 0).getTime() -
@@ -103,8 +107,12 @@ export function ProjectBrowser({ initialProjects }: ProjectBrowserProps) {
   }, [projects, search, sortBy, sortDirection]);
 
   function handleSortChange(nextSortBy: SortOption) {
-    setSortBy(nextSortBy);
-    setSortDirection(defaultSortDirections[nextSortBy]);
+    setQuery({ sort: nextSortBy, dir: "" });
+  }
+
+  function toggleSortDirection() {
+    const next = reverseSortDirection(sortDirection);
+    setQuery({ dir: next === sortOptions[sortBy].defaultDirection ? "" : next });
   }
 
   function openAction(project: Project, nextAction: ProjectCardAction) {
@@ -129,19 +137,15 @@ export function ProjectBrowser({ initialProjects }: ProjectBrowserProps) {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">All Projects</h1>
-        <p className="text-muted-foreground">
-          Manage and organize all your projects
-        </p>
-      </div>
-
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => {
+              setSearch(event.target.value);
+              setQuery({ q: event.target.value });
+            }}
             placeholder="Search projects..."
             className="pl-9"
             type="search"
@@ -158,9 +162,9 @@ export function ProjectBrowser({ initialProjects }: ProjectBrowserProps) {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {sortOptions.map((option) => (
+                {(Object.keys(sortOptions) as SortOption[]).map((option) => (
                   <SelectItem key={option} value={option}>
-                    {option}
+                    {sortOptions[option].label}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -169,7 +173,7 @@ export function ProjectBrowser({ initialProjects }: ProjectBrowserProps) {
           <SortOrderButton
             direction={sortDirection}
             label="project sort order"
-            onToggle={() => setSortDirection(reverseSortDirection)}
+            onToggle={toggleSortDirection}
           />
           <Button onClick={() => setIsCreateOpen(true)}>
             <Plus className="size-4" />
@@ -213,7 +217,7 @@ export function ProjectBrowser({ initialProjects }: ProjectBrowserProps) {
       <EditProjectDialog project={selectedProject} open={action === "edit"} onOpenChange={(open) => !open && setAction(null)} />
       <DuplicateProjectDialog project={selectedProject} open={action === "duplicate"} onOpenChange={(open) => !open && setAction(null)} />
       <CopyImagesDialog project={selectedProject} projects={projects} open={action === "copy"} onOpenChange={(open) => !open && setAction(null)} />
-      <DeleteProjectDialog project={selectedProject} open={action === "delete"} onOpenChange={(open) => !open && setAction(null)} />
+      <DeleteProjectDialog project={selectedProject} open={action === "delete"} onOpenChange={(open) => !open && setAction(null)} onDeleted={(id) => setRemovedIds((current) => new Set(current).add(id))} />
       {exportData ? (
         <AnnotationExportSheet
           key={exportData.project.id}

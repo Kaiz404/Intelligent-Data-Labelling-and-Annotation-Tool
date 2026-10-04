@@ -138,7 +138,8 @@ export async function fetchRecentlyAnnotatedImages(
 }
 type ImageStatsRow = {
   project_id: string;
-  annotation: unknown;
+  /** First saved box only: enough to tell annotated from not, at a fraction of the bytes. */
+  first_box: unknown;
 };
 
 export type ImageStats = {
@@ -148,20 +149,12 @@ export type ImageStats = {
   byProject: Record<string, { total: number; annotated: number }>;
 };
 
-export async function fetchImageStats(
-  projectIds?: string[],
-): Promise<ImageStats> {
-  if (projectIds?.length === 0) {
-    return { total: 0, annotated: 0, unannotated: 0, byProject: {} };
-  }
-
+/** Image counts for every project the user owns (RLS-filtered). */
+export async function fetchImageStats(): Promise<ImageStats> {
   const supabase = await createClient();
-  let query = supabase.from("images").select("project_id, annotation");
-  if (projectIds) {
-    query = query.in("project_id", projectIds);
-  }
-
-  const { data, error } = await query;
+  const { data, error } = await supabase
+    .from("images")
+    .select("project_id, first_box:annotation->0");
   if (error) {
     throw new Error(`Could not load image statistics: ${error.message}`);
   }
@@ -175,7 +168,7 @@ export async function fetchImageStats(
       annotated: 0,
     };
     projectStats.total += 1;
-    if (annotationStatus(row.annotation).status === "Annotated") {
+    if (annotationStatus(row.first_box).status === "Annotated") {
       projectStats.annotated += 1;
       annotated += 1;
     }

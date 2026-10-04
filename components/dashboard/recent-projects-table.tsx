@@ -21,9 +21,13 @@ type RecentProjectsTableProps = {
 type ProjectAction = "edit" | "duplicate" | "copy" | "delete" | null;
 
 export function RecentProjectsTable({
-  projects,
-  copyDestinations = projects,
+  projects: allProjects,
+  copyDestinations: allDestinations = allProjects,
 }: RecentProjectsTableProps) {
+  // Hidden as soon as they reach the Recycle Bin, before the refresh lands.
+  const [removedIds, setRemovedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const projects = allProjects.filter((project) => !removedIds.has(project.id));
+  const copyDestinations = allDestinations.filter((project) => !removedIds.has(project.id));
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [action, setAction] = useState<ProjectAction>(null);
@@ -104,7 +108,7 @@ export function RecentProjectsTable({
       <EditProjectDialog project={selectedProject} open={action === "edit"} onOpenChange={(open) => !open && setAction(null)} />
       <DuplicateProjectDialog project={selectedProject} open={action === "duplicate"} onOpenChange={(open) => !open && setAction(null)} />
       <CopyImagesDialog project={selectedProject} projects={copyDestinations} open={action === "copy"} onOpenChange={(open) => !open && setAction(null)} />
-      <DeleteProjectDialog project={selectedProject} open={action === "delete"} onOpenChange={(open) => !open && setAction(null)} />
+      <DeleteProjectDialog project={selectedProject} open={action === "delete"} onOpenChange={(open) => !open && setAction(null)} onDeleted={(id) => setRemovedIds((current) => new Set(current).add(id))} />
       {exportData ? <AnnotationExportSheet key={exportData.project.id} open onOpenChange={(open) => !open && setExportData(null)} projectId={exportData.project.id} projectName={exportData.project.name} images={exportData.images} labels={exportData.labels} /> : null}
     </>
   );

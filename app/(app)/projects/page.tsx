@@ -1,20 +1,19 @@
 import { AppHeader } from "@/components/app-shell/app-header";
 import { ProjectBrowser } from "@/components/projects/project-browser";
-import { fetchImageStats } from "@/lib/images";
-import { createClient } from "@/lib/supabase/server";
-import { createProjectThumbnailReadUrl } from "@/lib/uploads/s3-server";
+import { ProjectBrowserSkeleton } from "@/components/projects/project-browser-skeleton";
+import { loadProjectSummaries, loadProjectThumbnails } from "@/lib/projects";
 import { connection } from "next/server";
 import { Suspense } from "react";
 
 async function ProjectsContent() {
   await connection();
-  const supabase = await createClient();
-  const { data: projects, error } = await supabase
-    .from("projects")
-    .select("*")
-    .order("updated_at", { ascending: false });
-
-  if (error) {
+  let loaded;
+  try {
+    loaded = await Promise.all([
+      loadProjectSummaries(),
+      loadProjectThumbnails(Number.POSITIVE_INFINITY),
+    ]);
+  } catch {
     return (
       <p className="text-sm text-destructive">
         Failed to load projects. If you recently updated the schema, run the
@@ -23,28 +22,29 @@ async function ProjectsContent() {
     );
   }
 
-  const projectRows = projects ?? [];
-  const stats = await fetchImageStats(projectRows.map((project) => project.id));
-  const projectsWithStats = await Promise.all(
-    projectRows.map(async (project) => ({
-      ...project,
-      image_count: stats.byProject[project.id]?.total ?? 0,
-      annotated_count: stats.byProject[project.id]?.annotated ?? 0,
-      thumbnailUrl: await createProjectThumbnailReadUrl(project.id),
-    })),
+  const [{ projects }, thumbnails] = loaded;
+  return (
+    <ProjectBrowser
+      projects={projects.map((project) => ({
+        ...project,
+        thumbnailUrl: thumbnails.get(project.id),
+      }))}
+    />
   );
-
-  return <ProjectBrowser initialProjects={projectsWithStats} />;
 }
 
 export default function ProjectsPage() {
   return (
     <>
       <AppHeader segments={[{ label: "Projects" }]} />
-      <div className="flex-1 p-4 md:p-6">
-        <Suspense
-          fallback={<p className="text-muted-foreground">Loading projects...</p>}
-        >
+      <div className="flex-1 space-y-6 p-4 md:p-6">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">All Projects</h1>
+          <p className="text-muted-foreground">
+            Manage and organize all your projects
+          </p>
+        </div>
+        <Suspense fallback={<ProjectBrowserSkeleton />}>
           <ProjectsContent />
         </Suspense>
       </div>

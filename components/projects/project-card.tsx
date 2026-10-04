@@ -54,11 +54,13 @@ export function ProjectCard({
           >
             {project.thumbnailUrl ? (
               <>
-                {/* Signed private S3 URLs are generated dynamically server-side. */}
+                {/* Hour-stable signed S3 URL, versioned by the thumbnail's ETag. */}
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={project.thumbnailUrl}
                   alt={`${project.name} thumbnail`}
+                  loading="lazy"
+                  decoding="async"
                   className="h-full w-full object-cover transition-transform duration-200 hover:scale-105"
                 />
               </>

@@ -1,21 +1,22 @@
 import { AppHeader } from "@/components/app-shell/app-header";
+import { DashboardSkeleton } from "@/components/dashboard/dashboard-skeleton";
 import { MetricCards } from "@/components/dashboard/metric-cards";
 import { RecentProjectsTable } from "@/components/dashboard/recent-projects-table";
-import { fetchImageStats } from "@/lib/images";
-import { createClient } from "@/lib/supabase/server";
-import { createProjectThumbnailReadUrl } from "@/lib/uploads/s3-server";
+import { loadProjectSummaries, loadProjectThumbnails } from "@/lib/projects";
 import { connection } from "next/server";
 import { Suspense } from "react";
 
+const RECENT_PROJECT_COUNT = 7;
+
 async function DashboardContent() {
   await connection();
-  const supabase = await createClient();
-  const { data: projects, error } = await supabase
-    .from("projects")
-    .select("*")
-    .order("updated_at", { ascending: false });
-
-  if (error) {
+  let loaded;
+  try {
+    loaded = await Promise.all([
+      loadProjectSummaries(),
+      loadProjectThumbnails(RECENT_PROJECT_COUNT),
+    ]);
+  } catch {
     return (
       <p className="text-sm text-destructive">
         Failed to load projects. If you recently updated the schema, run the
@@ -24,19 +25,10 @@ async function DashboardContent() {
     );
   }
 
-  const projectRows = projects ?? [];
-  const stats = await fetchImageStats();
-  const projectsWithStats = projectRows.map((project) => ({
-    ...project,
-    image_count: stats.byProject[project.id]?.total ?? 0,
-    annotated_count: stats.byProject[project.id]?.annotated ?? 0,
-  }));
-  const recentProjects = await Promise.all(
-    projectsWithStats.slice(0, 7).map(async (project) => ({
-      ...project,
-      thumbnailUrl: await createProjectThumbnailReadUrl(project.id),
-    })),
-  );
+  const [{ projects, stats }, thumbnails] = loaded;
+  const recentProjects = projects
+    .slice(0, RECENT_PROJECT_COUNT)
+    .map((project) => ({ ...project, thumbnailUrl: thumbnails.get(project.id) }));
 
   return (
     <div className="space-y-6">
@@ -45,10 +37,7 @@ async function DashboardContent() {
         annotated={stats.annotated}
         unannotated={stats.unannotated}
       />
-      <RecentProjectsTable
-        projects={recentProjects}
-        copyDestinations={projectsWithStats}
-      />
+      <RecentProjectsTable projects={recentProjects} copyDestinations={projects} />
     </div>
   );
 }
@@ -58,11 +47,7 @@ export default function DashboardPage() {
     <>
       <AppHeader segments={[{ label: "Dashboard" }]} />
       <div className="flex-1 space-y-6 p-4 md:p-6">
-        <Suspense
-          fallback={
-            <p className="text-muted-foreground">Loading dashboard...</p>
-          }
-        >
+        <Suspense fallback={<DashboardSkeleton />}>
           <DashboardContent />
         </Suspense>
       </div>

@@ -35,7 +35,7 @@ async function ProjectDetailContent({ id }: { id: string }) {
     fetchImageAiStates(project.id),
   ]);
   const destinations = projectRows ?? [];
-  const stats = await fetchImageStats(destinations.map((item) => item.id));
+  const stats = await fetchImageStats();
   const projects = destinations.map((item) => ({
     ...item,
     image_count: stats.byProject[item.id]?.total ?? 0,
