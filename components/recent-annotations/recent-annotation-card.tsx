@@ -11,7 +11,7 @@ import {
   SquarePen,
   Trash2,
 } from "lucide-react";
-import { useState } from "react";
+import { memo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -42,7 +42,8 @@ type RecentAnnotationCardProps = {
   onDelete: (image: RecentAnnotatedImage) => void;
 };
 
-export function RecentAnnotationCard({
+/** Memoised: the grid re-renders on every keystroke and selection change. */
+export const RecentAnnotationCard = memo(function RecentAnnotationCard({
   image,
   now,
   isSelected,
@@ -167,4 +168,4 @@ export function RecentAnnotationCard({
       </DropdownMenu>
     </div>
   );
-}
+});

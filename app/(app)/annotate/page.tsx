@@ -1,40 +1,20 @@
 import { AppHeader } from "@/components/app-shell/app-header";
 import { RecentAnnotationsClient } from "@/components/recent-annotations/recent-annotations-client";
-import { fetchImageStats, fetchRecentlyAnnotatedImages } from "@/lib/images";
-import { createClient } from "@/lib/supabase/server";
-import type { Project } from "@/lib/types/projects";
+import { RecentAnnotationsSkeleton } from "@/components/recent-annotations/recent-annotations-skeleton";
+import { fetchRecentlyAnnotatedImages } from "@/lib/images";
+import { loadProjectSummaries } from "@/lib/projects";
 import { connection } from "next/server";
 import { Suspense } from "react";
 
 async function RecentAnnotationsContent() {
   await connection();
-  const supabase = await createClient();
-
+  let loaded;
   try {
-    const [recent, { data: projectRows, error }] = await Promise.all([
-      fetchRecentlyAnnotatedImages(),
-      supabase.from("projects").select("*").order("name", { ascending: true }),
-    ]);
-    if (error) throw new Error(`Could not load projects: ${error.message}`);
-
     // Every owned project is a Move/Add destination, shown with its image count.
-    const destinations = (projectRows ?? []) as Project[];
-    const stats = await fetchImageStats();
-    const projects = destinations.map((project) => ({
-      ...project,
-      image_count: stats.byProject[project.id]?.total ?? 0,
-      annotated_count: stats.byProject[project.id]?.annotated ?? 0,
-    }));
-
-    return (
-      <RecentAnnotationsClient
-        images={recent.images}
-        projects={projects}
-        limit={recent.limit}
-        isCapped={recent.isCapped}
-        serverNow={Date.now()}
-      />
-    );
+    loaded = await Promise.all([
+      fetchRecentlyAnnotatedImages(),
+      loadProjectSummaries(),
+    ]);
   } catch (cause) {
     return (
       <p className="text-sm text-destructive">
@@ -42,6 +22,17 @@ async function RecentAnnotationsContent() {
       </p>
     );
   }
+
+  const [recent, { projects }] = loaded;
+  return (
+    <RecentAnnotationsClient
+      images={recent.images}
+      projects={projects.toSorted((a, b) => a.name.localeCompare(b.name))}
+      limit={recent.limit}
+      isCapped={recent.isCapped}
+      serverNow={Date.now()}
+    />
+  );
 }
 
 export default function AnnotatePage() {
@@ -57,11 +48,7 @@ export default function AnnotatePage() {
             View and manage your latest annotated images across all projects
           </p>
         </div>
-        <Suspense
-          fallback={
-            <p className="text-muted-foreground">Loading recent annotations...</p>
-          }
-        >
+        <Suspense fallback={<RecentAnnotationsSkeleton />}>
           <RecentAnnotationsContent />
         </Suspense>
       </div>

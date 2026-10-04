@@ -122,13 +122,13 @@ export async function fetchRecentlyAnnotatedImages(
   const rows = (data ?? []) as RecentImageRow[];
   const images = await Promise.all(
     rows.slice(0, limit).map(async (row) => {
-      const image = await toProjectImage(row, row.project_id);
+      const { annotations, ...image } = await toProjectImage(row, row.project_id);
       const project = Array.isArray(row.projects) ? row.projects[0] : row.projects;
       return {
         ...image,
         projectId: row.project_id,
         projectName: project?.name ?? "Untitled project",
-        annotationCount: image.annotations.length,
+        annotationCount: annotations.length,
         lastAnnotatedAt: row.modified_at ?? row.created_at,
       };
     }),
