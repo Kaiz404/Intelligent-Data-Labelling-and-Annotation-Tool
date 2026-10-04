@@ -180,8 +180,10 @@ function toIsoString(value: string) {
 // Listing
 // ---------------------------------------------------------------------------
 
+// The ThumbHashes come from the snapshot JSON: the image's own (kind = image)
+// and the first image's (kind = project, whose cover is its first image).
 const LIST_COLUMNS =
-  "id, kind, project_id, image_id, name, project_name, description, image_count, size_bytes, cover_object_key, deleted_at, expires_at, purge_started_at";
+  "id, kind, project_id, image_id, name, project_name, description, image_count, size_bytes, cover_object_key, deleted_at, expires_at, purge_started_at, thumbhash:snapshot->image->>thumbhash, cover_thumbhash:snapshot->images->0->>thumbhash";
 
 type RecycleBinListRow = {
   id: string;
@@ -197,17 +199,20 @@ type RecycleBinListRow = {
   deleted_at: string;
   expires_at: string;
   purge_started_at: string | null;
+  thumbhash?: string | null;
+  cover_thumbhash?: string | null;
 };
 
 /**
  * The signed-in user's recycle bin, newest deletion first. Expired items are
- * hidden even before {@link purgeExpiredRecycleBinItems} removes them.
+ * hidden even before {@link purgeExpiredRecycleBinItems} removes them. RLS
+ * scopes the rows, so callers can check the session alongside this.
  * Throws {@link RecycleBinUnavailableError} if the migration is not applied.
  */
 export async function fetchRecycleBin(
-  session?: RecycleBinSession,
+  session?: Pick<RecycleBinSession, "supabase">,
 ): Promise<RecycleBinContents> {
-  const { supabase, userId } = session ?? (await getRecycleBinSession());
+  const supabase = session?.supabase ?? (await createClient());
   const serverNow = new Date().toISOString();
 
   const rows = await selectAllPages<RecycleBinListRow>(
@@ -216,7 +221,6 @@ export async function fetchRecycleBin(
       supabase
         .from("recycle_bin_items")
         .select(LIST_COLUMNS)
-        .eq("user_id", userId)
         .gt("expires_at", serverNow)
         .order("deleted_at", { ascending: false })
         .order("id", { ascending: true })
@@ -231,13 +235,30 @@ export async function fetchRecycleBin(
     projectRows.filter((row) => !row.purge_started_at).map((row) => row.project_id),
   );
   const binnedProjectIds = new Set(projectRows.map((row) => row.project_id));
-  const activeProjectIds = await findExistingIds(
-    supabase,
-    "projects",
-    imageRows
-      .map((row) => row.project_id)
-      .filter((projectId) => !binnedProjectIds.has(projectId)),
-  );
+
+  const [activeProjectIds, projectCovers, imageUrls] = await Promise.all([
+    findExistingIds(
+      supabase,
+      "projects",
+      imageRows
+        .map((row) => row.project_id)
+        .filter((projectId) => !binnedProjectIds.has(projectId)),
+    ),
+    Promise.all(
+      projectRows.map(async (row) => {
+        const thumbnailUrl = await createProjectThumbnailReadUrl(row.project_id);
+        return thumbnailUrl
+          ? { thumbnailUrl, thumbhash: null }
+          : {
+              thumbnailUrl: await signObjectKey(row.cover_object_key, row.project_id),
+              thumbhash: row.cover_thumbhash ?? null,
+            };
+      }),
+    ),
+    Promise.all(
+      imageRows.map((row) => signObjectKey(row.cover_object_key, row.project_id)),
+    ),
+  ]);
 
   function projectState(projectId: string): RecycleBinProjectState {
     if (activeProjectIds.has(projectId)) return "active";
@@ -245,43 +266,36 @@ export async function fetchRecycleBin(
     return "gone";
   }
 
-  const [projects, images] = await Promise.all([
-    Promise.all(
-      projectRows.map(
-        async (row): Promise<RecycleBinProject> => ({
-          id: row.id,
-          projectId: row.project_id,
-          name: row.name,
-          description: row.description,
-          imageCount: Number(row.image_count),
-          sizeBytes: Number(row.size_bytes),
-          deletedAt: toIsoString(row.deleted_at),
-          expiresAt: toIsoString(row.expires_at),
-          thumbnailUrl:
-            (await createProjectThumbnailReadUrl(row.project_id)) ??
-            (await signObjectKey(row.cover_object_key, row.project_id)),
-          deletionPending: row.purge_started_at !== null,
-        }),
-      ),
-    ),
-    Promise.all(
-      imageRows.map(
-        async (row): Promise<RecycleBinImage> => ({
-          id: row.id,
-          imageId: row.image_id ?? "",
-          projectId: row.project_id,
-          projectName: row.project_name,
-          projectState: projectState(row.project_id),
-          fileName: row.name,
-          sizeBytes: Number(row.size_bytes),
-          deletedAt: toIsoString(row.deleted_at),
-          expiresAt: toIsoString(row.expires_at),
-          thumbnailUrl: await signObjectKey(row.cover_object_key, row.project_id),
-          deletionPending: row.purge_started_at !== null,
-        }),
-      ),
-    ),
-  ]);
+  const projects = projectRows.map(
+    (row, index): RecycleBinProject => ({
+      id: row.id,
+      projectId: row.project_id,
+      name: row.name,
+      description: row.description,
+      imageCount: Number(row.image_count),
+      sizeBytes: Number(row.size_bytes),
+      deletedAt: toIsoString(row.deleted_at),
+      expiresAt: toIsoString(row.expires_at),
+      ...projectCovers[index],
+      deletionPending: row.purge_started_at !== null,
+    }),
+  );
+  const images = imageRows.map(
+    (row, index): RecycleBinImage => ({
+      id: row.id,
+      imageId: row.image_id ?? "",
+      projectId: row.project_id,
+      projectName: row.project_name,
+      projectState: projectState(row.project_id),
+      fileName: row.name,
+      sizeBytes: Number(row.size_bytes),
+      deletedAt: toIsoString(row.deleted_at),
+      expiresAt: toIsoString(row.expires_at),
+      thumbnailUrl: imageUrls[index],
+      thumbhash: row.thumbhash ?? null,
+      deletionPending: row.purge_started_at !== null,
+    }),
+  );
 
   return { projects, images, serverNow };
 }

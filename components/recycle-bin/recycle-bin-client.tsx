@@ -3,7 +3,14 @@
 import Link from "next/link";
 import { RotateCcw, Search, Trash2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { startTransition, useCallback, useMemo, useState } from "react";
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   reverseSortDirection,
   SortOrderButton,
@@ -40,16 +47,13 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useNow } from "@/hooks/use-now";
+import { useQueryParams } from "@/hooks/use-query-params";
 import {
   deleteRecycleBinItemsPermanently,
   restoreRecycleBinItems,
 } from "@/lib/actions/recycle-bin";
 import { numberFormatter } from "@/lib/format";
-import type {
-  RecycleBinContents,
-  RecycleBinImage,
-  RecycleBinProject,
-} from "@/lib/types/recycle-bin";
+import type { RecycleBinContents } from "@/lib/types/recycle-bin";
 import { cn } from "@/lib/utils";
 
 type Tab = "projects" | "images";
@@ -64,10 +68,38 @@ const sortOptions = {
 type SortOption = keyof typeof sortOptions;
 type SortState = { by: SortOption; direction: SortDirection };
 
-const DEFAULT_SORT: SortState = {
-  by: "deletedAt",
-  direction: sortOptions.deletedAt.defaultDirection,
+/**
+ * List controls kept in the URL. `tab` is empty until the user picks one;
+ * `dir`/`idir` are empty while the sort's default direction applies. The
+ * Images tab's controls are prefixed with `i`.
+ */
+const QUERY_DEFAULTS = {
+  tab: "",
+  q: "",
+  sort: "deletedAt",
+  dir: "",
+  iq: "",
+  project: ALL_PROJECTS,
+  isort: "deletedAt",
+  idir: "",
 };
+
+function sortFromQuery(by: string, dir: string): SortState {
+  const sortBy: SortOption = Object.hasOwn(sortOptions, by)
+    ? (by as SortOption)
+    : "deletedAt";
+  return {
+    by: sortBy,
+    direction:
+      dir === "ascending" || dir === "descending"
+        ? dir
+        : sortOptions[sortBy].defaultDirection,
+  };
+}
+
+function directionQuery(sort: SortState) {
+  return sort.direction === sortOptions[sort.by].defaultDirection ? "" : sort.direction;
+}
 
 type Notice = {
   tone: "success" | "error";
@@ -130,6 +162,8 @@ function SortControls({
       <Select
         value={sort.by}
         onValueChange={(value) => {
+          // Radix Select reports "" when it unmounts during navigation.
+          if (!value) return;
           const by = value as SortOption;
           onChange({ by, direction: sortOptions[by].defaultDirection });
         }}
@@ -211,25 +245,41 @@ type RecycleBinClientProps = RecycleBinContents & {
 };
 
 export function RecycleBinClient({
-  projects,
-  images,
+  projects: serverProjects,
+  images: serverImages,
   serverNow,
   retentionDays,
 }: RecycleBinClientProps) {
   const router = useRouter();
   const now = useNow(Date.parse(serverNow));
-  const [tab, setTab] = useState<Tab>(
-    projects.length === 0 && images.length > 0 ? "images" : "projects",
+  const [query, setQuery] = useQueryParams(QUERY_DEFAULTS);
+  // Until the user picks a tab, the one chosen on arrival stays put.
+  const [arrivalTab] = useState<Tab>(
+    serverProjects.length === 0 && serverImages.length > 0 ? "images" : "projects",
   );
-  const [projectSearch, setProjectSearch] = useState("");
-  const [projectSort, setProjectSort] = useState<SortState>(DEFAULT_SORT);
-  const [imageSearch, setImageSearch] = useState("");
-  const [imageProjectFilter, setImageProjectFilter] = useState(ALL_PROJECTS);
-  const [imageSort, setImageSort] = useState<SortState>(DEFAULT_SORT);
+  const tab: Tab = query.tab === "projects" || query.tab === "images" ? query.tab : arrivalTab;
+  // Typed text updates at once; the URL only keeps it for revisits.
+  const [projectSearch, setProjectSearch] = useState(query.q);
+  const projectSort = sortFromQuery(query.sort, query.dir);
+  const [imageSearch, setImageSearch] = useState(query.iq);
+  const imageProjectFilter = query.project;
+  const imageSort = sortFromQuery(query.isort, query.idir);
+  // Restored or deleted items leave at once; the refresh then confirms it.
+  const [removedIds, setRemovedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const projects = useMemo(
+    () => serverProjects.filter((project) => !removedIds.has(project.id)),
+    [removedIds, serverProjects],
+  );
+  const images = useMemo(
+    () => serverImages.filter((image) => !removedIds.has(image.id)),
+    [removedIds, serverImages],
+  );
   const [selectedIds, setSelectedIds] = useState<Record<Tab, string[]>>({
     projects: [],
     images: [],
   });
+  const selectedProjectIds = useMemo(() => new Set(selectedIds.projects), [selectedIds.projects]);
+  const selectedImageIds = useMemo(() => new Set(selectedIds.images), [selectedIds.images]);
   const [itemErrors, setItemErrors] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState<Notice | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
@@ -240,13 +290,14 @@ export function RecycleBinClient({
     startTransition(() => router.refresh());
   }, [router]);
 
+  // Server lists, so items stay nameable in notices after they leave.
   const projectsById = useMemo(
-    () => new Map(projects.map((project) => [project.id, project])),
-    [projects],
+    () => new Map(serverProjects.map((project) => [project.id, project])),
+    [serverProjects],
   );
   const imagesById = useMemo(
-    () => new Map(images.map((image) => [image.id, image])),
-    [images],
+    () => new Map(serverImages.map((image) => [image.id, image])),
+    [serverImages],
   );
 
   const visibleProjects = useMemo(() => {
@@ -293,12 +344,8 @@ export function RecycleBinClient({
   }, [activeImageProjectFilter, imageSearch, imageSort, images]);
 
   // Derived from the current props, so items that vanished after a refresh drop out.
-  const selectedProjects = projects.filter((project) =>
-    selectedIds.projects.includes(project.id),
-  );
-  const selectedImages = images.filter((image) =>
-    selectedIds.images.includes(image.id),
-  );
+  const selectedProjects = projects.filter((project) => selectedProjectIds.has(project.id));
+  const selectedImages = images.filter((image) => selectedImageIds.has(image.id));
   const tabSelectionIds =
     tab === "projects"
       ? selectedProjects.map((project) => project.id)
@@ -315,7 +362,7 @@ export function RecycleBinClient({
       ? selectedProjects.some((project) => !project.deletionPending)
       : selectedImages.some((image) => restoreBlockedReason(image) === null);
 
-  function toggleSelection(target: Tab, id: string, isSelected: boolean) {
+  const toggleSelection = useCallback((target: Tab, id: string, isSelected: boolean) => {
     setSelectedIds((current) => {
       const ids = current[target];
       return {
@@ -325,12 +372,24 @@ export function RecycleBinClient({
           : ids.filter((candidate) => candidate !== id),
       };
     });
-  }
+  }, []);
+  const toggleProject = useCallback(
+    (id: string, isSelected: boolean) => toggleSelection("projects", id, isSelected),
+    [toggleSelection],
+  );
+  const toggleImage = useCallback(
+    (id: string, isSelected: boolean) => toggleSelection("images", id, isSelected),
+    [toggleSelection],
+  );
 
   function clearSelection(target?: Tab) {
     setSelectedIds((current) =>
       target ? { ...current, [target]: [] } : { projects: [], images: [] },
     );
+  }
+
+  function hide(ids: string[]) {
+    if (ids.length > 0) setRemovedIds((current) => new Set([...current, ...ids]));
   }
 
   function setErrorsFor(ids: string[], failures: Array<{ id: string; error?: string }>, fallback: string) {
@@ -365,6 +424,7 @@ export function RecycleBinClient({
       const failures = results.filter((result) => !result.ok);
       const restored = results.filter((result) => result.ok);
       setErrorsFor(ids, failures, "Could not restore this item.");
+      hide(restored.map((result) => result.id));
 
       if (failures.length === 0) {
         const projectIds = new Set(restored.flatMap((result) => result.projectId ?? []));
@@ -412,8 +472,19 @@ export function RecycleBinClient({
     try {
       const { failed, skipped } = await deleteRecycleBinItemsPermanently(ids);
       setErrorsFor(ids, failed, "Could not delete this item.");
-      const unfinished = new Set([...failed.map((failure) => failure.id), ...skipped]);
+      const failedIds = new Set(failed.map((failure) => failure.id));
+      const unfinished = new Set([...failedIds, ...skipped]);
       const deletedIds = ids.filter((id) => !unfinished.has(id));
+      // Gone from the bin, along with the binned images of deleted projects.
+      const deletedProjectIds = new Set(
+        deletedIds.flatMap((id) => projectsById.get(id)?.projectId ?? []),
+      );
+      hide([
+        ...ids.filter((id) => !failedIds.has(id)),
+        ...images
+          .filter((image) => deletedProjectIds.has(image.projectId))
+          .map((image) => image.id),
+      ]);
 
       const parts: string[] = [];
       if (deletedIds.length > 0) {
@@ -473,6 +544,20 @@ export function RecycleBinClient({
   const pendingFor = (id: string) =>
     pending?.ids.includes(id) ? pending.kind : null;
 
+  // Stable handlers for the memoised rows and cards, running the latest actions.
+  const actionsRef = useRef({ restore, requestDelete });
+  useEffect(() => {
+    actionsRef.current = { restore, requestDelete };
+  });
+  const restoreItem = useCallback(
+    (item: { id: string }) => void actionsRef.current.restore([item.id]),
+    [],
+  );
+  const deleteItem = useCallback(
+    (item: { id: string }) => actionsRef.current.requestDelete([item.id]),
+    [],
+  );
+
   return (
     <div className={tabSelectionIds.length > 0 ? "space-y-4 pb-20" : "space-y-4"}>
       {notice ? (
@@ -510,7 +595,7 @@ export function RecycleBinClient({
         </div>
       ) : null}
 
-      <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)} className="gap-5">
+      <Tabs value={tab} onValueChange={(value) => setQuery({ tab: value })} className="gap-5">
         <TabsList
           variant="line"
           className="w-full justify-start gap-0 border-b p-0 group-data-[orientation=horizontal]/tabs:h-auto"
@@ -535,17 +620,27 @@ export function RecycleBinClient({
                 <SearchInput
                   value={projectSearch}
                   placeholder="Search deleted projects..."
-                  onChange={setProjectSearch}
+                  onChange={(value) => {
+                    setProjectSearch(value);
+                    setQuery({ q: value });
+                  }}
                 />
                 <div className="flex items-center gap-2">
-                  <SortControls sort={projectSort} label="projects" onChange={setProjectSort} />
+                  <SortControls
+                    sort={projectSort}
+                    label="projects"
+                    onChange={(sort) => setQuery({ sort: sort.by, dir: directionQuery(sort) })}
+                  />
                 </div>
               </div>
 
               {visibleProjects.length === 0 ? (
                 <NoMatches
                   text="No deleted projects match your search."
-                  onClear={() => setProjectSearch("")}
+                  onClear={() => {
+                    setProjectSearch("");
+                    setQuery({ q: "" });
+                  }}
                 />
               ) : (
                 <div className="space-y-3">
@@ -554,15 +649,13 @@ export function RecycleBinClient({
                       key={project.id}
                       project={project}
                       now={now}
-                      isSelected={selectedIds.projects.includes(project.id)}
+                      isSelected={selectedProjectIds.has(project.id)}
                       disabled={isBusy}
                       pendingAction={pendingFor(project.id)}
                       error={itemErrors[project.id]}
-                      onSelectionChange={(id, isSelected) =>
-                        toggleSelection("projects", id, isSelected)
-                      }
-                      onRestore={(target: RecycleBinProject) => void restore([target.id])}
-                      onDelete={(target: RecycleBinProject) => requestDelete([target.id])}
+                      onSelectionChange={toggleProject}
+                      onRestore={restoreItem}
+                      onDelete={deleteItem}
                     />
                   ))}
                 </div>
@@ -583,12 +676,17 @@ export function RecycleBinClient({
                 <SearchInput
                   value={imageSearch}
                   placeholder="Search images..."
-                  onChange={setImageSearch}
+                  onChange={(value) => {
+                    setImageSearch(value);
+                    setQuery({ iq: value });
+                  }}
                 />
                 <div className="flex flex-wrap items-center gap-2">
                   <Select
                     value={activeImageProjectFilter}
-                    onValueChange={setImageProjectFilter}
+                    onValueChange={(value) => {
+                      if (value) setQuery({ project: value });
+                    }}
                   >
                     <SelectTrigger className="w-[180px]" aria-label="Filter by project">
                       <SelectValue />
@@ -602,7 +700,11 @@ export function RecycleBinClient({
                       ))}
                     </SelectContent>
                   </Select>
-                  <SortControls sort={imageSort} label="images" onChange={setImageSort} />
+                  <SortControls
+                    sort={imageSort}
+                    label="images"
+                    onChange={(sort) => setQuery({ isort: sort.by, idir: directionQuery(sort) })}
+                  />
                 </div>
               </div>
 
@@ -611,7 +713,7 @@ export function RecycleBinClient({
                   text="No deleted images match your filters."
                   onClear={() => {
                     setImageSearch("");
-                    setImageProjectFilter(ALL_PROJECTS);
+                    setQuery({ iq: "", project: ALL_PROJECTS });
                   }}
                 />
               ) : (
@@ -621,15 +723,13 @@ export function RecycleBinClient({
                       key={image.id}
                       image={image}
                       now={now}
-                      isSelected={selectedIds.images.includes(image.id)}
+                      isSelected={selectedImageIds.has(image.id)}
                       disabled={isBusy}
                       pendingAction={pendingFor(image.id)}
                       error={itemErrors[image.id]}
-                      onSelectionChange={(id, isSelected) =>
-                        toggleSelection("images", id, isSelected)
-                      }
-                      onRestore={(target: RecycleBinImage) => void restore([target.id])}
-                      onDelete={(target: RecycleBinImage) => requestDelete([target.id])}
+                      onSelectionChange={toggleImage}
+                      onRestore={restoreItem}
+                      onDelete={deleteItem}
                     />
                   ))}
                 </div>

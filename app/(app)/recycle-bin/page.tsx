@@ -3,28 +3,34 @@ import { after, connection } from "next/server";
 import { Suspense } from "react";
 import { AppHeader } from "@/components/app-shell/app-header";
 import { RecycleBinClient } from "@/components/recycle-bin/recycle-bin-client";
+import { RecycleBinSkeleton } from "@/components/recycle-bin/recycle-bin-skeleton";
 import { RecycleBinSetupNotice } from "@/components/recycle-bin/recycle-bin-setup-notice";
 import {
   fetchRecycleBin,
-  getRecycleBinSession,
   purgeExpiredRecycleBinItems,
   RECYCLE_BIN_MIGRATION,
   RECYCLE_BIN_RETENTION_DAYS,
   RecycleBinUnavailableError,
+  requireRecycleBinUser,
 } from "@/lib/recycle-bin";
+import { createClient } from "@/lib/supabase/server";
 
 async function RecycleBinContent() {
   await connection();
 
   try {
     // Created up front: after() callbacks in Server Components cannot read cookies.
-    const session = await getRecycleBinSession();
+    const supabase = await createClient();
+    const session = requireRecycleBinUser(supabase).then((user) => ({
+      supabase,
+      userId: user.id,
+    }));
 
     // Lazy retention: purge expired items once the response is sent, so it
     // never delays the page. fetchRecycleBin() already hides expired rows.
     after(async () => {
       try {
-        await purgeExpiredRecycleBinItems(session);
+        await purgeExpiredRecycleBinItems(await session);
       } catch (error) {
         if (!(error instanceof RecycleBinUnavailableError)) {
           console.error("[recycle-bin] Could not purge expired items", error);
@@ -32,7 +38,8 @@ async function RecycleBinContent() {
       }
     });
 
-    const contents = await fetchRecycleBin(session);
+    // RLS scopes the listing, so it loads alongside the sign-in check.
+    const [contents] = await Promise.all([fetchRecycleBin({ supabase }), session]);
     return (
       <RecycleBinClient {...contents} retentionDays={RECYCLE_BIN_RETENTION_DAYS} />
     );
@@ -70,9 +77,7 @@ export default function RecycleBinPage() {
             </span>
           </p>
         </div>
-        <Suspense
-          fallback={<p className="text-muted-foreground">Loading the Recycle Bin...</p>}
-        >
+        <Suspense fallback={<RecycleBinSkeleton />}>
           <RecycleBinContent />
         </Suspense>
       </div>

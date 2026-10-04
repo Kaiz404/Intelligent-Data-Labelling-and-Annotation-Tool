@@ -17,7 +17,9 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { memo } from "react";
 import { numberFormatter } from "@/lib/format";
+import { thumbhashColor } from "@/lib/image-placeholder";
 import type { RecycleBinProject } from "@/lib/types/recycle-bin";
 import { cn } from "@/lib/utils";
 
@@ -35,7 +37,8 @@ type RecycleBinProjectRowProps = {
   onDelete: (project: RecycleBinProject) => void;
 };
 
-export function RecycleBinProjectRow({
+/** Memoised: the list re-renders on every keystroke and selection change. */
+export const RecycleBinProjectRow = memo(function RecycleBinProjectRow({
   project,
   now,
   isSelected,
@@ -61,7 +64,10 @@ export function RecycleBinProjectRow({
             aria-label={`Select ${project.name}`}
           />
         </label>
-        <div className="size-16 shrink-0 overflow-hidden rounded-lg bg-muted">
+        <div
+          className="size-16 shrink-0 overflow-hidden rounded-lg bg-muted"
+          style={{ backgroundColor: thumbhashColor(project.thumbhash) }}
+        >
           {project.thumbnailUrl ? (
             // Signed S3 URLs are not configured for next/image optimisation.
             // eslint-disable-next-line @next/next/no-img-element
@@ -157,4 +163,4 @@ export function RecycleBinProjectRow({
       </div>
     </div>
   );
-}
+});

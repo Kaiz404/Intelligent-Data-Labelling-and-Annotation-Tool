@@ -9,7 +9,7 @@ import {
   RotateCcw,
   Trash2,
 } from "lucide-react";
-import { useState } from "react";
+import { memo, useState } from "react";
 import {
   daysLeftLabel,
   deletedLabel,
@@ -29,6 +29,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { thumbhashColor } from "@/lib/image-placeholder";
 import type {
   RecycleBinImage,
   RecycleBinProjectState,
@@ -93,7 +94,8 @@ type RecycleBinImageCardProps = {
   onDelete: (image: RecycleBinImage) => void;
 };
 
-export function RecycleBinImageCard({
+/** Memoised: the list re-renders on every keystroke and selection change. */
+export const RecycleBinImageCard = memo(function RecycleBinImageCard({
   image,
   now,
   isSelected,
@@ -119,7 +121,10 @@ export function RecycleBinImageCard({
         isSelected && "border-primary/50 bg-primary/5 ring-1 ring-primary/20",
       )}
     >
-      <div className="aspect-[16/10] overflow-hidden rounded-lg bg-muted">
+      <div
+        className="aspect-[16/10] overflow-hidden rounded-lg bg-muted"
+        style={{ backgroundColor: thumbhashColor(image.thumbhash) }}
+      >
         {image.thumbnailUrl ? (
           // Signed S3 URLs are not configured for next/image optimisation.
           // eslint-disable-next-line @next/next/no-img-element
@@ -237,4 +242,4 @@ export function RecycleBinImageCard({
       </DropdownMenu>
     </div>
   );
-}
+});

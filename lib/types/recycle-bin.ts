@@ -16,6 +16,8 @@ export type RecycleBinProject = {
   expiresAt: string;
   /** Project thumbnail, else its first image; short-lived signed URL. */
   thumbnailUrl: string | null;
+  /** ThumbHash of the first image while it is the thumbnail, else null. */
+  thumbhash: string | null;
   /**
    * Permanent deletion started but did not finish (some files may be gone).
    * The item can no longer be restored; deleting it permanently again retries.
@@ -49,6 +51,8 @@ export type RecycleBinImage = {
   expiresAt: string;
   /** Short-lived signed URL for the image object. */
   thumbnailUrl: string | null;
+  /** ThumbHash placeholder from the image's snapshot. */
+  thumbhash: string | null;
   /**
    * Permanent deletion started but did not finish (its file may be gone).
    * The item can no longer be restored; deleting it permanently again retries.
