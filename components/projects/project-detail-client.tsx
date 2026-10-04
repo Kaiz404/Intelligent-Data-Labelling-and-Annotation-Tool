@@ -169,6 +169,8 @@ export function ProjectDetailClient({
   const visibleImages = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
     const status = imageStatusFilters[statusFilter];
+    // Images arrive oldest first (`created_at`), so their index is the upload order.
+    const uploadOrder = new Map(images.map((image, index) => [image.id, index]));
 
     return images
       .filter((image) =>
@@ -192,7 +194,7 @@ export function ProjectDetailClient({
         } else if (sortBy === "status") {
           comparison = first.status.localeCompare(second.status);
         } else {
-          comparison = first.id.localeCompare(second.id);
+          comparison = uploadOrder.get(first.id)! - uploadOrder.get(second.id)!;
         }
 
         return sortDirection === "ascending" ? comparison : -comparison;
