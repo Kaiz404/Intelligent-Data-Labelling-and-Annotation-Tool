@@ -31,8 +31,8 @@ function nodes(tree) {
   if (typeof tree !== "object") return [tree];
   return [tree, ...nodes(tree.props?.children)];
 }
-function setup(reader, start, yoloReader = reader) {
-  const calls = [], yoloCalls = [], starts = [], completions = [], hookProjects = [];
+function setup(reader, start, yoloReader = reader, vocReader = reader) {
+  const calls = [], yoloCalls = [], vocCalls = [], starts = [], completions = [], hookProjects = [];
   const instances = new Map();
   let slots, cursor = 0, closed = false, open = true;
   let importState = {
@@ -86,6 +86,7 @@ function setup(reader, start, yoloReader = reader) {
     "@/lib/utils": { cn: (...values) => values.filter(Boolean).join(" ") },
     "@/lib/uploads/dataset-zip": { readCocoDatasetZip: (file) => { calls.push(file); return reader(file); } },
     "@/lib/uploads/yolo-dataset-zip": { readYoloDatasetZip: (file) => { yoloCalls.push(file); return yoloReader(file); } },
+    "@/lib/uploads/voc-dataset-zip": { readVocDatasetZip: (file, options) => { vocCalls.push({ file, options }); return vocReader(file, options); } },
   };
   const exports = {};
   new Function("require", "exports", outputText)((name) => {
@@ -118,8 +119,9 @@ function setup(reader, start, yoloReader = reader) {
     assert.equal(target.value, "");
   }
   return {
-    render, find, select, calls, yoloCalls, starts, completions, hookProjects,
+    render, find, select, calls, yoloCalls, vocCalls, starts, completions, hookProjects,
     changeFormat: (value) => find((node) => node.type === "Select").props.onValueChange(value),
+    changeProfile: (value) => find((node) => node.type === "Select" && ["app-native", "one-based-inclusive"].includes(node.props.value)).props.onValueChange(value),
     setImportState: (value) => { importState = value; },
     setOpen: (value) => { open = value; },
     unmount: () => { for (const values of instances.values()) for (const value of values) value?.cleanup?.(); },
@@ -429,4 +431,92 @@ test("missing-label notice is limited to YOLO plans with missing labels", async 
     assert.equal(!!notice, !!missingLabelImagePaths?.length);
     if (notice) assert.ok(nodes(notice).includes("image has"));
   }
+});
+
+test("VOC selector defaults to app-native, provides guidance, and dispatches explicit profiles", async () => {
+  const ui = setup(async () => plan());
+  assert.ok(ui.find((node) => node.type === "SelectItem" && node.props.value === "voc" && node.props.children === "Pascal VOC"));
+  assert.equal(ui.find((node) => node.props["aria-label"] === "Coordinate profile"), undefined);
+  ui.changeFormat("voc");
+  assert.ok(ui.find((node) => node.type === "Select" && node.props.value === "app-native"));
+  const guidance = nodes(ui.render()).filter((node) => typeof node === "string").join(" ");
+  for (const text of ["images/", "annotations/", "JPEGImages/", "Annotations/", "zero objects", "metadata is not preserved", "exported by this application"]) assert.ok(guidance.includes(text));
+  ui.select([zip("native.zip")]); await tick();
+  assert.deepEqual(ui.vocCalls[0].options, { coordinateProfile: "app-native" });
+  assert.equal(ui.calls.length + ui.yoloCalls.length, 0);
+  let preview = nodes(ui.find((node) => node.props["aria-label"] === "Dataset preview"));
+  assert.ok(preview.includes("Pascal VOC") && preview.includes("App-native"));
+  ui.changeProfile("one-based-inclusive");
+  ui.select([zip("standard.zip")]); await tick();
+  assert.deepEqual(ui.vocCalls[1].options, { coordinateProfile: "one-based-inclusive" });
+  preview = nodes(ui.find((node) => node.props["aria-label"] === "Dataset preview"));
+  assert.ok(preview.includes("Standard Pascal VOC (1-based inclusive)"));
+  for (const text of ["Images", "Bounding boxes", "Categories", "Extracted image size", "10 B", "Cat", "Dog", "annotations.json"]) assert.ok(preview.includes(text));
+  assert.equal(ui.starts.length, 0);
+});
+
+test("profile changes clear ZIP, preview, errors and retained Import handlers", async () => {
+  const ui = setup(async () => plan());
+  ui.changeFormat("voc"); ui.select([zip("old.zip")]); await tick();
+  const oldStart = ui.find((node) => node.props.children === "Import").props.onClick;
+  ui.changeProfile("one-based-inclusive"); oldStart();
+  assert.equal(ui.starts.length, 0);
+  assert.equal(ui.find((node) => node.props["aria-label"] === "Dataset preview"), undefined);
+  assert.ok(!nodes(ui.render()).includes("old.zip"));
+  assert.ok(nodes(ui.render()).includes("Browse files"));
+  ui.select([zip("wrong.json")]);
+  assert.ok(ui.find((node) => node.props.role === "alert"));
+  ui.changeProfile("app-native");
+  assert.equal(ui.find((node) => node.props.role === "alert"), undefined);
+  assert.ok(!nodes(ui.render()).includes("wrong.json"));
+});
+
+test("old-profile validation success and errors cannot restore state", async () => {
+  for (const fails of [false, true]) {
+    const old = deferred(), current = deferred();
+    const ui = setup(async () => plan(), undefined, undefined, (_file, options) => options.coordinateProfile === "app-native" ? old.promise : current.promise);
+    ui.changeFormat("voc");
+    const inputHandler = ui.find((node) => node.type === "input").props.onChange;
+    ui.select([zip("old.zip")]);
+    ui.changeProfile("one-based-inclusive");
+    assert.ok(!nodes(ui.render()).includes("Validating..."));
+    inputHandler({ currentTarget: { files: [zip("current.zip")], value: "selected" } });
+    assert.deepEqual(ui.vocCalls[1].options, { coordinateProfile: "one-based-inclusive" });
+    current.resolve({ ...plan(), annotationPath: "Annotations" }); await tick();
+    if (fails) old.reject(new Error("Old profile error")); else old.resolve(plan());
+    await tick();
+    const text = nodes(ui.render());
+    assert.ok(text.includes("current.zip") && text.includes("Annotations"));
+    assert.ok(!text.includes("old.zip") && !text.includes("Old profile error"));
+  }
+});
+
+test("changing format invalidates pending VOC validation and hides profile selector", async () => {
+  const pending = deferred();
+  const ui = setup(async () => plan(), undefined, undefined, () => pending.promise);
+  ui.changeFormat("voc"); ui.select([zip("voc.zip")]);
+  ui.changeFormat("coco");
+  assert.equal(ui.find((node) => node.props["aria-label"] === "Coordinate profile"), undefined);
+  pending.resolve(plan()); await tick();
+  assert.equal(ui.find((node) => node.props["aria-label"] === "Dataset preview"), undefined);
+  assert.ok(!nodes(ui.render()).includes("voc.zip"));
+});
+
+test("VOC imports use shared progress and block immediate profile and format changes", async () => {
+  const pending = deferred(), validated = plan();
+  const ui = setup(async () => validated, () => pending.promise);
+  ui.changeFormat("voc"); ui.select([zip("voc.zip")]); await tick();
+  const profileChange = ui.find((node) => node.type === "Select" && node.props.value === "app-native").props.onValueChange;
+  const formatChange = ui.find((node) => node.type === "Select" && node.props.value === "voc").props.onValueChange;
+  const start = ui.find((node) => node.props.children === "Import").props.onClick;
+  start(); start(); profileChange("one-based-inclusive"); formatChange("yolo");
+  assert.deepEqual(ui.starts, [validated]);
+  assert.ok(nodes(ui.render()).includes("Preparing labels..."));
+  for (const value of ["voc", "app-native"]) assert.equal(ui.find((node) => node.type === "Select" && node.props.value === value).props.disabled, true);
+  assert.equal(ui.find((node) => node.type === "DialogContent").props.showCloseButton, false);
+  const result = outcome("completed"); pending.resolve(result); await tick();
+  assert.ok(nodes(ui.render()).includes("Import complete"));
+  assert.deepEqual(ui.completions, [result]);
+  ui.changeProfile("one-based-inclusive");
+  assert.equal(ui.find((node) => node.props["aria-label"] === "Dataset preview"), undefined);
 });

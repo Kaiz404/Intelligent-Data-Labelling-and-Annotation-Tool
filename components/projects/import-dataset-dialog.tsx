@@ -16,6 +16,8 @@ import { formatBytes, numberFormatter } from "@/lib/format";
 import type { ValidatedDatasetImportPlan } from "@/lib/types/dataset-import";
 import { readCocoDatasetZip } from "@/lib/uploads/dataset-zip";
 import { readYoloDatasetZip } from "@/lib/uploads/yolo-dataset-zip";
+import { readVocDatasetZip } from "@/lib/uploads/voc-dataset-zip";
+import type { VocCoordinateProfile } from "@/lib/annotations/voc-import";
 import { cn } from "@/lib/utils";
 
 type ImportDatasetDialogProps = {
@@ -31,8 +33,12 @@ type Selection =
   | { status: "error"; filename?: string; error: string }
   | { status: "ready"; filename: string; plan: ValidatedDatasetImportPlan };
 
-type DatasetFormat = "coco" | "yolo";
-const formatNames = { coco: "COCO", yolo: "YOLO" } as const;
+type DatasetFormat = "coco" | "yolo" | "voc";
+const formatNames = { coco: "COCO", yolo: "YOLO", voc: "Pascal VOC" } as const;
+const profileNames = {
+  "app-native": "App-native",
+  "one-based-inclusive": "Standard Pascal VOC (1-based inclusive)",
+} as const;
 
 export function ImportDatasetDialog({ projectId, open, onOpenChange, onImportComplete }: ImportDatasetDialogProps) {
   // Owned outside Radix's conditionally mounted content for the entire run.
@@ -117,6 +123,8 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
   // Retained input handlers must use the new format even before React re-renders.
   const formatRef = useRef<DatasetFormat>("coco");
   const [format, setFormat] = useState<DatasetFormat>("coco");
+  const profileRef = useRef<VocCoordinateProfile>("app-native");
+  const [coordinateProfile, setCoordinateProfile] = useState<VocCoordinateProfile>("app-native");
   const [selection, setSelection] = useState<Selection | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
@@ -133,9 +141,18 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
   }
 
   function changeFormat(value: string) {
-    if (!canChange() || (value !== "coco" && value !== "yolo") || value === formatRef.current) return;
+    if (!canChange() || (value !== "coco" && value !== "yolo" && value !== "voc") || value === formatRef.current) return;
     formatRef.current = value;
     setFormat(value);
+    removeSelection();
+    setIsDragging(false);
+  }
+
+  function changeProfile(value: string) {
+    if (!canChange() || formatRef.current !== "voc" ||
+        (value !== "app-native" && value !== "one-based-inclusive") || value === profileRef.current) return;
+    profileRef.current = value;
+    setCoordinateProfile(value);
     removeSelection();
     setIsDragging(false);
   }
@@ -158,7 +175,9 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
     setSelection({ status: "validating", filename: file.name });
     try {
       // Keep the complete plan; importing only starts from the explicit action.
-      const plan = await (selectedFormat === "coco" ? readCocoDatasetZip(file) : readYoloDatasetZip(file));
+      const plan = await (selectedFormat === "coco" ? readCocoDatasetZip(file)
+        : selectedFormat === "yolo" ? readYoloDatasetZip(file)
+          : readVocDatasetZip(file, { coordinateProfile: profileRef.current }));
       if (version !== validationVersion.current) return;
       if (plan.images.length === 0) {
         setSelection({ status: "error", filename: file.name, error: "The dataset contains no images. Choose a ZIP with at least one referenced image." });
@@ -201,14 +220,32 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
             <SelectContent>
               <SelectItem value="coco">COCO</SelectItem>
               <SelectItem value="yolo">YOLO</SelectItem>
+              <SelectItem value="voc">Pascal VOC</SelectItem>
             </SelectContent>
           </Select>
           <p className="text-xs text-muted-foreground">
             {format === "coco"
               ? "Expected ZIP: one COCO annotation JSON and its referenced JPEG/PNG images."
-              : "Expected ZIP: classes.txt, images/, and labels/. YOLO data.yaml-only datasets are not currently supported."}
+              : format === "yolo"
+                ? "Expected ZIP: classes.txt, images/, and labels/. YOLO data.yaml-only datasets are not currently supported."
+                : "Expected ZIP: images/ and annotations/, or JPEGImages/ and Annotations/. Each image must have an XML annotation file; XML files with zero objects are valid. pose/truncated/difficult metadata is not preserved."}
           </p>
         </div>
+        {format === "voc" ? <div className="space-y-2">
+          <label htmlFor="voc-coordinate-profile" className="text-sm font-medium">Coordinate profile</label>
+          <Select value={coordinateProfile} onValueChange={changeProfile} disabled={active}>
+            <SelectTrigger id="voc-coordinate-profile" aria-label="Coordinate profile" className="w-full"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="app-native">{profileNames["app-native"]}</SelectItem>
+              <SelectItem value="one-based-inclusive">{profileNames["one-based-inclusive"]}</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            {coordinateProfile === "app-native"
+              ? "Compatible with Pascal VOC datasets exported by this application."
+              : "For traditional VOC datasets using one-based inclusive pixel coordinates."}
+          </p>
+        </div> : null}
         <div
           onDragEnter={(event) => { event.preventDefault(); if (canChange()) setIsDragging(true); }}
           onDragOver={(event) => event.preventDefault()}
@@ -267,6 +304,7 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
               <CheckCircle2 className="size-4 text-emerald-600" aria-hidden="true" />Dataset validated
             </p>
             <p className="text-sm">Format: <Badge variant="secondary">{formatNames[format]}</Badge></p>
+            {format === "voc" ? <p className="text-sm">Coordinate profile: {profileNames[coordinateProfile]}</p> : null}
             <dl className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
               {[
                 ["Images", numberFormatter.format(plan.images.length)],
