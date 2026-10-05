@@ -113,8 +113,8 @@ export function AppSidebar({ userEmail }: AppSidebarProps) {
                     <SidebarMenuItem key={item.label}>
                       {item.disabled ? (
                         <SidebarMenuButton
-                          disabled
-                          className="cursor-not-allowed opacity-50"
+                          aria-disabled="true"
+                          className="cursor-default"
                           tooltip={item.label}
                         >
                           <item.icon />

@@ -1,13 +1,8 @@
 import type { LucideIcon } from "lucide-react";
 import {
-  CircleHelp,
-  Clock,
-  Database,
   Folder,
   LayoutDashboard,
   Route,
-  Settings,
-  Star,
   Trash2,
 } from "lucide-react";
 
@@ -30,54 +25,14 @@ export const navSections: NavSection[] = [
       { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
       { label: "Projects", href: "/projects", icon: Folder },
       {
-        label: "Datasets",
-        href: "#",
-        icon: Database,
-        disabled: true,
-      },
-      {
         label: "Annotate",
         href: "/projects",
         icon: Route,
-      },
-    ],
-  },
-  {
-    title: "Pages",
-    items: [
-      {
-        label: "Recent Files",
-        href: "#",
-        icon: Clock,
-        disabled: true,
-      },
-      {
-        label: "Starred",
-        href: "#",
-        icon: Star,
-        disabled: true,
       },
       {
         label: "Recycle Bin",
         href: "#",
         icon: Trash2,
-        disabled: true,
-      },
-    ],
-  },
-  {
-    title: "Misc",
-    items: [
-      {
-        label: "Settings",
-        href: "#",
-        icon: Settings,
-        disabled: true,
-      },
-      {
-        label: "Get Help",
-        href: "#",
-        icon: CircleHelp,
         disabled: true,
       },
     ],
