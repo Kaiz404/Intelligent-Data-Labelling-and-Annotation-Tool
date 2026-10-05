@@ -601,6 +601,7 @@ export function ProjectDetailClient({
         open={isImportOpen}
         onOpenChange={setIsImportOpen}
         projectId={project.id}
+        onImportComplete={refresh}
       />
 
       <BatchAiAnnotateDialog
