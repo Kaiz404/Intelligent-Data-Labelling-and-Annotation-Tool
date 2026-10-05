@@ -5,6 +5,7 @@ import { AlertCircle, CheckCircle2, CloudUpload, FileArchive, Loader2, X } from 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useDatasetImport, type DatasetImportState } from "@/hooks/use-dataset-import";
 import {
@@ -14,6 +15,7 @@ import {
 import { formatBytes, numberFormatter } from "@/lib/format";
 import type { ValidatedDatasetImportPlan } from "@/lib/types/dataset-import";
 import { readCocoDatasetZip } from "@/lib/uploads/dataset-zip";
+import { readYoloDatasetZip } from "@/lib/uploads/yolo-dataset-zip";
 import { cn } from "@/lib/utils";
 
 type ImportDatasetDialogProps = {
@@ -28,6 +30,9 @@ type Selection =
   | { status: "validating"; filename: string }
   | { status: "error"; filename?: string; error: string }
   | { status: "ready"; filename: string; plan: ValidatedDatasetImportPlan };
+
+type DatasetFormat = "coco" | "yolo";
+const formatNames = { coco: "COCO", yolo: "YOLO" } as const;
 
 export function ImportDatasetDialog({ projectId, open, onOpenChange, onImportComplete }: ImportDatasetDialogProps) {
   // Owned outside Radix's conditionally mounted content for the entire run.
@@ -85,10 +90,9 @@ export function ImportDatasetDialog({ projectId, open, onOpenChange, onImportCom
         onInteractOutside={preventDismiss}
       >
         <DialogHeader className="gap-1.5 text-left">
-          <DialogTitle className="text-lg font-normal">Import COCO dataset</DialogTitle>
+          <DialogTitle className="text-lg font-normal">Import dataset</DialogTitle>
           <DialogDescription>
-            Choose a ZIP containing one COCO JSON document and its JPEG or PNG images.
-            Validate and preview your dataset, then import it into this project.
+            Choose a format and ZIP. Validate and preview your dataset, then import it into this project.
           </DialogDescription>
         </DialogHeader>
         {open || active ? <DatasetSelection
@@ -110,6 +114,9 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const validationVersion = useRef(0);
+  // Retained input handlers must use the new format even before React re-renders.
+  const formatRef = useRef<DatasetFormat>("coco");
+  const [format, setFormat] = useState<DatasetFormat>("coco");
   const [selection, setSelection] = useState<Selection | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
@@ -125,23 +132,33 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
     if (inputRef.current) inputRef.current.value = "";
   }
 
+  function changeFormat(value: string) {
+    if (!canChange() || (value !== "coco" && value !== "yolo") || value === formatRef.current) return;
+    formatRef.current = value;
+    setFormat(value);
+    removeSelection();
+    setIsDragging(false);
+  }
+
   async function selectFiles(files: File[]) {
     if (!canChange() || files.length === 0) return;
     setHasStarted(false);
     const version = ++validationVersion.current;
+    const selectedFormat = formatRef.current;
+    const formatName = formatNames[selectedFormat];
     if (files.length !== 1) {
-      setSelection({ status: "error", error: "Choose one COCO ZIP at a time." });
+      setSelection({ status: "error", error: `Choose one ${formatName} ZIP at a time.` });
       return;
     }
     const file = files[0];
     if (!file.name.toLowerCase().endsWith(".zip")) {
-      setSelection({ status: "error", filename: file.name, error: "Choose a .zip file containing your COCO dataset." });
+      setSelection({ status: "error", filename: file.name, error: `Choose a .zip file containing your ${formatName} dataset.` });
       return;
     }
     setSelection({ status: "validating", filename: file.name });
     try {
       // Keep the complete plan; importing only starts from the explicit action.
-      const plan = await readCocoDatasetZip(file);
+      const plan = await (selectedFormat === "coco" ? readCocoDatasetZip(file) : readYoloDatasetZip(file));
       if (version !== validationVersion.current) return;
       if (plan.images.length === 0) {
         setSelection({ status: "error", filename: file.name, error: "The dataset contains no images. Choose a ZIP with at least one referenced image." });
@@ -152,7 +169,7 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
       if (version !== validationVersion.current) return;
       setSelection({
         status: "error", filename: file.name,
-        error: error instanceof Error ? error.message : "Could not validate this dataset. Choose another COCO ZIP.",
+        error: error instanceof Error ? error.message : `Could not validate this dataset. Choose another ${formatName} ZIP.`,
       });
     }
   }
@@ -177,6 +194,21 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
   return (
     <>
       <div className="min-h-0 space-y-4 overflow-y-auto">
+        <div className="space-y-2">
+          <label htmlFor="dataset-format" className="text-sm font-medium">Dataset format</label>
+          <Select value={format} onValueChange={changeFormat} disabled={active}>
+            <SelectTrigger id="dataset-format" aria-label="Dataset format" className="w-full"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="coco">COCO</SelectItem>
+              <SelectItem value="yolo">YOLO</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            {format === "coco"
+              ? "Expected ZIP: one COCO annotation JSON and its referenced JPEG/PNG images."
+              : "Expected ZIP: classes.txt, images/, and labels/. YOLO data.yaml-only datasets are not currently supported."}
+          </p>
+        </div>
         <div
           onDragEnter={(event) => { event.preventDefault(); if (canChange()) setIsDragging(true); }}
           onDragOver={(event) => event.preventDefault()}
@@ -191,7 +223,7 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
         >
           <CloudUpload className="size-[50px] text-muted-foreground" strokeWidth={1.5} />
           <div className="space-y-1">
-            <p className="text-[13px]">Drag & Drop or Choose a COCO ZIP</p>
+            <p className="text-[13px]">Drag & Drop or Choose a {formatNames[format]} ZIP</p>
             <p className="text-xs text-muted-foreground">Bounding boxes only · JPEG and PNG images</p>
           </div>
           <Button
@@ -203,7 +235,7 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
             {selection ? "Replace ZIP" : "Browse files"}
           </Button>
           <input ref={inputRef} type="file" accept=".zip,application/zip,application/x-zip-compressed"
-            className="hidden" aria-label="Choose COCO ZIP" onChange={handleFileInput} disabled={active} />
+            className="hidden" aria-label={`Choose ${formatNames[format]} ZIP`} onChange={handleFileInput} disabled={active} />
         </div>
 
         {selection ? (
@@ -234,6 +266,7 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
             <p role="status" className="flex items-center gap-2 text-sm font-medium">
               <CheckCircle2 className="size-4 text-emerald-600" aria-hidden="true" />Dataset validated
             </p>
+            <p className="text-sm">Format: <Badge variant="secondary">{formatNames[format]}</Badge></p>
             <dl className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
               {[
                 ["Images", numberFormatter.format(plan.images.length)],
@@ -244,7 +277,12 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
                 <div key={label}><dt className="text-muted-foreground">{label}</dt><dd className="mt-1 font-medium">{value}</dd></div>
               ))}
             </dl>
-            <p className="break-all text-xs text-muted-foreground">Annotation document: {plan.annotationPath}</p>
+            <p className="break-all text-xs text-muted-foreground">Annotation source: {plan.annotationPath}</p>
+            {format === "yolo" && !!plan.missingLabelImagePaths?.length ? (
+              <p role="note" className="text-sm text-muted-foreground">
+                {numberFormatter.format(plan.missingLabelImagePaths.length)} {plan.missingLabelImagePaths.length === 1 ? "image has" : "images have"} no label file and will be imported without annotations.
+              </p>
+            ) : null}
             <div className="space-y-2">
               <h3 className="text-sm font-medium">Category names</h3>
               {plan.categories.length ? (

@@ -31,8 +31,8 @@ function nodes(tree) {
   if (typeof tree !== "object") return [tree];
   return [tree, ...nodes(tree.props?.children)];
 }
-function setup(reader, start) {
-  const calls = [], starts = [], completions = [], hookProjects = [];
+function setup(reader, start, yoloReader = reader) {
+  const calls = [], yoloCalls = [], starts = [], completions = [], hookProjects = [];
   const instances = new Map();
   let slots, cursor = 0, closed = false, open = true;
   let importState = {
@@ -59,6 +59,7 @@ function setup(reader, start) {
     "@/components/ui/button": primitives,
     "@/components/ui/dialog": primitives,
     "@/components/ui/progress": primitives,
+    "@/components/ui/select": primitives,
     "@/components/ui/table": primitives,
     "@/hooks/use-dataset-import": {
       useDatasetImport({ projectId }) {
@@ -84,6 +85,7 @@ function setup(reader, start) {
     "@/lib/format": { formatBytes: (bytes) => `${bytes} B`, numberFormatter: new Intl.NumberFormat("en-US") },
     "@/lib/utils": { cn: (...values) => values.filter(Boolean).join(" ") },
     "@/lib/uploads/dataset-zip": { readCocoDatasetZip: (file) => { calls.push(file); return reader(file); } },
+    "@/lib/uploads/yolo-dataset-zip": { readYoloDatasetZip: (file) => { yoloCalls.push(file); return yoloReader(file); } },
   };
   const exports = {};
   new Function("require", "exports", outputText)((name) => {
@@ -116,7 +118,8 @@ function setup(reader, start) {
     assert.equal(target.value, "");
   }
   return {
-    render, find, select, calls, starts, completions, hookProjects,
+    render, find, select, calls, yoloCalls, starts, completions, hookProjects,
+    changeFormat: (value) => find((node) => node.type === "Select").props.onValueChange(value),
     setImportState: (value) => { importState = value; },
     setOpen: (value) => { open = value; },
     unmount: () => { for (const values of instances.values()) for (const value of values) value?.cleanup?.(); },
@@ -332,4 +335,98 @@ test("a rejected start produces a fatal outcome and releases the dialog", async 
   assert.ok(nodes(ui.render()).includes("Start rejected"));
   assert.equal(ui.completions[0].status, "failed");
   assert.equal(ui.find((node) => node.props.children === "Close").props.disabled, false);
+});
+
+test("COCO is the default format and dispatches only to the COCO reader", async () => {
+  const ui = setup(async () => plan());
+  assert.equal(ui.find((node) => node.type === "Select").props.value, "coco");
+  assert.ok(nodes(ui.render()).some((value) => typeof value === "string" && value.includes("COCO annotation JSON")));
+  ui.select([zip("coco.zip")]); await tick();
+  assert.equal(ui.calls.length, 1);
+  assert.equal(ui.yoloCalls.length, 0);
+  const preview = ui.find((node) => node.props["aria-label"] === "Dataset preview");
+  assert.ok(nodes(preview).includes("COCO"));
+});
+
+test("YOLO dispatches validation and imports the same plan through the shared orchestration", async () => {
+  const validated = { ...plan(), annotationPath: "classes.txt", missingLabelImagePaths: ["images/negative.png", "images/other.png"] };
+  const result = outcome("completed");
+  const ui = setup(async () => plan(), async () => result, async () => validated);
+  ui.changeFormat("yolo");
+  assert.ok(nodes(ui.render()).some((value) => typeof value === "string" && value.includes("data.yaml-only")));
+  assert.equal(ui.find((node) => node.type === "input").props["aria-label"], "Choose YOLO ZIP");
+  ui.select([zip("yolo.zip")]); await tick();
+  assert.equal(ui.calls.length, 0);
+  assert.equal(ui.yoloCalls[0].name, "yolo.zip");
+  const preview = nodes(ui.find((node) => node.props["aria-label"] === "Dataset preview"));
+  assert.ok(preview.includes("YOLO") && preview.includes("classes.txt"));
+  assert.ok(preview.includes("2") && preview.includes("images have"));
+  assert.ok(preview.some((value) => typeof value === "string" && value.includes("no label file")));
+  assert.equal(ui.find((node) => node.props.role === "alert"), undefined);
+  assert.equal(ui.starts.length, 0);
+  ui.find((node) => node.props.children === "Import").props.onClick(); await tick();
+  assert.deepEqual(ui.starts, [validated]);
+  assert.deepEqual(ui.completions, [result]);
+});
+
+test("changing format clears validated preview, filename, errors and stale Import handlers", async () => {
+  const ui = setup(async () => plan());
+  ui.select([zip("old.zip")]); await tick();
+  const oldImport = ui.find((node) => node.props.children === "Import").props.onClick;
+  ui.changeFormat("yolo"); oldImport();
+  assert.equal(ui.starts.length, 0);
+  assert.equal(ui.find((node) => node.props["aria-label"] === "Dataset preview"), undefined);
+  assert.ok(!nodes(ui.render()).includes("old.zip"));
+  assert.ok(nodes(ui.render()).includes("Browse files"));
+  ui.select([zip("bad.json")]);
+  assert.ok(ui.find((node) => node.props.role === "alert"));
+  ui.changeFormat("coco");
+  assert.equal(ui.find((node) => node.props.role === "alert"), undefined);
+  assert.ok(!nodes(ui.render()).includes("bad.json"));
+});
+
+test("format changes invalidate old-format success and errors, even before re-render", async () => {
+  for (const fails of [false, true]) {
+    const old = deferred(), current = deferred();
+    const ui = setup(() => old.promise, undefined, () => current.promise);
+    const staleInput = ui.find((node) => node.type === "input").props.onChange;
+    ui.select([zip("old.zip")]);
+    ui.changeFormat("yolo");
+    assert.ok(!nodes(ui.render()).includes("Validating..."));
+    staleInput({ currentTarget: { files: [zip("current.zip")], value: "selected" } });
+    assert.equal(ui.yoloCalls.length, 1);
+    current.resolve({ ...plan(), annotationPath: "classes.txt" }); await tick();
+    if (fails) old.reject(new Error("Old-format error")); else old.resolve(plan());
+    await tick();
+    const text = nodes(ui.render());
+    assert.ok(text.includes("current.zip") && text.includes("classes.txt"));
+    assert.ok(!text.includes("old.zip") && !text.includes("Old-format error"));
+  }
+});
+
+test("active import disables format selection and blocks retained change handlers", async () => {
+  const pending = deferred();
+  const ui = setup(async () => plan(), () => pending.promise);
+  ui.select([zip("active.zip")]); await tick();
+  const change = ui.find((node) => node.type === "Select").props.onValueChange;
+  ui.find((node) => node.props.children === "Import").props.onClick();
+  change("yolo");
+  const selector = ui.find((node) => node.type === "Select");
+  assert.equal(selector.props.disabled, true);
+  assert.equal(selector.props.value, "coco");
+  assert.ok(nodes(ui.render()).includes("active.zip"));
+  pending.resolve(outcome("completed")); await tick();
+  assert.equal(ui.find((node) => node.type === "Select").props.disabled, false);
+});
+
+test("missing-label notice is limited to YOLO plans with missing labels", async () => {
+  for (const missingLabelImagePaths of [undefined, [], ["images/negative.png"]]) {
+    const ui = setup(async () => ({ ...plan(), missingLabelImagePaths }));
+    ui.select([zip("coco.zip")]); await tick();
+    assert.equal(ui.find((node) => node.props.role === "note"), undefined);
+    ui.changeFormat("yolo"); ui.select([zip("yolo.zip")]); await tick();
+    const notice = ui.find((node) => node.props.role === "note");
+    assert.equal(!!notice, !!missingLabelImagePaths?.length);
+    if (notice) assert.ok(nodes(notice).includes("image has"));
+  }
 });
