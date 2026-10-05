@@ -14,6 +14,14 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import {
+  createCocoExport,
+  createVocExport,
+  createYoloClasses,
+  createYoloExport,
+  exportStem,
+  nameExportImages,
+} from "@/lib/annotations/export";
 import { loadAnnotations } from "@/lib/annotations/storage";
 import type { AnnotationLabel, BoundingBox } from "@/lib/types/annotations";
 import type { ProjectExportData, ProjectImage } from "@/lib/types/projects";
@@ -61,55 +69,13 @@ function download(blob: Blob, name: string) {
 }
 
 function getDimensions(url: string | null) {
-  return new Promise<{ width: number; height: number }>((resolve) => {
-    if (!url) return resolve({ width: 1, height: 1 });
+  return new Promise<{ width: number; height: number }>((resolve, reject) => {
+    if (!url) return reject(new Error("An image is unavailable. Refresh the page and try again."));
     const image = new window.Image();
     image.onload = () => resolve({ width: image.naturalWidth || 1, height: image.naturalHeight || 1 });
-    image.onerror = () => resolve({ width: 1, height: 1 });
+    image.onerror = () => reject(new Error("Could not read an image's dimensions. Refresh the page and try again."));
     image.src = url;
   });
-}
-
-function xmlEscape(value: string) {
-  return value.replace(/[<>&'\"]/g, (character) => ({
-    "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", "\"": "&quot;",
-  })[character] ?? character);
-}
-
-function createCoco(images: ExportImage[], labels: AnnotationLabel[]) {
-  let annotationId = 1;
-  return JSON.stringify({
-    info: { description: "SmartAnnoTool export", date_created: new Date().toISOString() },
-    images: images.map((image, index) => ({ id: index + 1, file_name: image.fileName, width: image.width, height: image.height })),
-    categories: labels.map((label, index) => ({ id: index + 1, name: label.name, supercategory: "object" })),
-    annotations: images.flatMap((image, imageIndex) => image.boxes.map((box) => ({
-      id: annotationId++,
-      image_id: imageIndex + 1,
-      category_id: Math.max(labels.findIndex((label) => label.id === box.labelId) + 1, 1),
-      bbox: [box.x, box.y, box.width, box.height],
-      area: box.width * box.height,
-      iscrowd: 0,
-    }))),
-  }, null, 2);
-}
-
-function createYolo(image: ExportImage, labels: AnnotationLabel[]) {
-  return image.boxes.map((box) => {
-    const classIndex = Math.max(labels.findIndex((label) => label.id === box.labelId), 0);
-    const centerX = (box.x + box.width / 2) / image.width;
-    const centerY = (box.y + box.height / 2) / image.height;
-    return [classIndex, centerX, centerY, box.width / image.width, box.height / image.height]
-      .map((value, index) => index === 0 ? String(value) : Number(value).toFixed(6))
-      .join(" ");
-  }).join("\n");
-}
-
-function createVoc(image: ExportImage, labels: AnnotationLabel[]) {
-  const objects = image.boxes.map((box) => {
-    const label = labels.find((item) => item.id === box.labelId)?.name ?? "unknown";
-    return `  <object>\n    <name>${xmlEscape(label)}</name>\n    <pose>Unspecified</pose>\n    <truncated>0</truncated>\n    <difficult>0</difficult>\n    <bndbox>\n      <xmin>${Math.round(box.x)}</xmin>\n      <ymin>${Math.round(box.y)}</ymin>\n      <xmax>${Math.round(box.x + box.width)}</xmax>\n      <ymax>${Math.round(box.y + box.height)}</ymax>\n    </bndbox>\n  </object>`;
-  }).join("\n");
-  return `<annotation>\n  <filename>${xmlEscape(image.fileName)}</filename>\n  <size>\n    <width>${image.width}</width>\n    <height>${image.height}</height>\n    <depth>3</depth>\n  </size>\n${objects}\n</annotation>`;
 }
 
 /** Loads a project's export data (fresh signed URLs, saved annotations, labels). */
@@ -147,9 +113,9 @@ export function AnnotationExportSheet({
   const [compress, setCompress] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Several files (per-image YOLO/VOC labels, images, or many images) can
-  // only be delivered as one ZIP; a single COCO JSON can go either way.
-  const zipRequired = content === "images" || format !== "coco" || images.length > 1;
+  // Per-image YOLO/VOC labels and source images need one ZIP; a COCO JSON
+  // remains a single file regardless of how many images it describes.
+  const zipRequired = content === "images" || format !== "coco";
   const exportAsZip = zipRequired || compress;
 
   const handleExport = async () => {
@@ -158,21 +124,21 @@ export function AnnotationExportSheet({
     try {
       // Loaded on demand: only exports need it.
       const { default: JSZip } = await import("jszip");
-      const exportImages: ExportImage[] = await Promise.all(images.map(async (image) => ({
+      const exportImages = nameExportImages(await Promise.all(images.map(async (image): Promise<ExportImage> => ({
         ...image,
         boxes: loadAnnotations(projectId, image.id, image.annotations),
         ...await getDimensions(image.url),
-      })));
+      }))));
       const baseName = safeName(fileName);
       const zip = new JSZip();
 
       if (format === "coco") {
-        zip.file("annotations.json", createCoco(exportImages, labels));
+        zip.file("annotations.json", createCocoExport(exportImages, labels));
       } else if (format === "yolo") {
-        zip.file("classes.txt", labels.map((label) => label.name).join("\n"));
-        exportImages.forEach((image) => zip.file(`labels/${safeName(image.fileName.replace(/\.[^.]+$/, ""))}.txt`, createYolo(image, labels)));
+        zip.file("classes.txt", createYoloClasses(labels));
+        exportImages.forEach((image) => zip.file(`labels/${exportStem(image.exportFileName)}.txt`, createYoloExport(image, labels)));
       } else {
-        exportImages.forEach((image) => zip.file(`annotations/${safeName(image.fileName.replace(/\.[^.]+$/, ""))}.xml`, createVoc(image, labels)));
+        exportImages.forEach((image) => zip.file(`annotations/${exportStem(image.exportFileName)}.xml`, createVocExport(image, labels)));
       }
 
       if (content === "images") {
@@ -182,14 +148,14 @@ export function AnnotationExportSheet({
           // the CORS headers a fetch needs.
           const response = await fetch(image.url, { cache: "no-store" });
           if (!response.ok) throw new Error(`Could not download ${image.fileName}.`);
-          zip.file(`images/${image.fileName}`, await response.blob());
+          zip.file(`images/${image.exportFileName}`, await response.blob());
         }));
       }
 
       if (exportAsZip) {
         download(await zip.generateAsync({ type: "blob", compression: "DEFLATE" }), `${baseName}.zip`);
       } else {
-        download(new Blob([createCoco(exportImages, labels)], { type: "application/json" }), `${baseName}.json`);
+        download(new Blob([createCocoExport(exportImages, labels)], { type: "application/json" }), `${baseName}.json`);
       }
       onOpenChange(false);
     } catch (cause) {
