@@ -1,6 +1,6 @@
 "use client";
 
-import { CopyPlus, Download, FolderInput, Pencil, Search, Trash2, Upload, WandSparkles } from "lucide-react";
+import { CopyPlus, Download, FileArchive, FolderInput, Pencil, Search, Trash2, Upload, WandSparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { startTransition, useCallback, useMemo, useState } from "react";
 import { moveImagesToRecycleBin } from "@/lib/actions/recycle-bin";
@@ -10,6 +10,7 @@ import { AiJobBanner } from "@/components/projects/ai-job-banner";
 import { BatchAiAnnotateDialog } from "@/components/projects/batch-ai-annotate-dialog";
 import { ImageCard } from "@/components/projects/image-card";
 import { ImageTransferDialog, RenameImageDialog } from "@/components/projects/image-action-dialogs";
+import { ImportDatasetDialog } from "@/components/projects/import-dataset-dialog";
 import { LabelFilterMenu } from "@/components/projects/label-filter-menu";
 import {
   reverseSortDirection,
@@ -126,6 +127,7 @@ export function ProjectDetailClient({
       ? query.dir
       : imageSortOptions[sortBy].defaultDirection;
   const [isUploadOpen, setIsUploadOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<ProjectImage | null>(null);
   const [transferMode, setTransferMode] = useState<"copy" | "move" | null>(null);
   const [transferImageIds, setTransferImageIds] = useState<string[]>([]);
@@ -384,6 +386,15 @@ export function ProjectDetailClient({
             Upload Images
           </Button>
           <Button
+            type="button"
+            variant="outline"
+            onClick={() => setIsImportOpen(true)}
+            className="text-primary border-primary hover:text-primary"
+          >
+            <FileArchive className="size-4 text-primary" />
+            Import Dataset
+          </Button>
+          <Button
             onClick={() => setIsAiOpen(true)}
             disabled={images.length === 0 || isAiJobActive}
             className="bg-violet-600 text-white hover:bg-violet-700"
@@ -584,6 +595,12 @@ export function ProjectDetailClient({
         onOpenChange={setIsUploadOpen}
         projectId={project.id}
         onUploadComplete={refresh}
+      />
+
+      <ImportDatasetDialog
+        open={isImportOpen}
+        onOpenChange={setIsImportOpen}
+        projectId={project.id}
       />
 
       <BatchAiAnnotateDialog

@@ -4,6 +4,9 @@ import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "r
 import { AlertCircle, CheckCircle2, CloudUpload, FileArchive, Loader2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useDatasetImport, type DatasetImportState } from "@/hooks/use-dataset-import";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter,
   DialogHeader, DialogTitle,
@@ -14,8 +17,11 @@ import { readCocoDatasetZip } from "@/lib/uploads/dataset-zip";
 import { cn } from "@/lib/utils";
 
 type ImportDatasetDialogProps = {
+  projectId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Called once for every finished run, including partial and fatal failures. */
+  onImportComplete?: (outcome: DatasetImportState) => void;
 };
 
 type Selection =
@@ -23,41 +29,105 @@ type Selection =
   | { status: "error"; filename?: string; error: string }
   | { status: "ready"; filename: string; plan: ValidatedDatasetImportPlan };
 
-export function ImportDatasetDialog({ open, onOpenChange }: ImportDatasetDialogProps) {
+export function ImportDatasetDialog({ projectId, open, onOpenChange, onImportComplete }: ImportDatasetDialogProps) {
+  // Owned outside Radix's conditionally mounted content for the entire run.
+  const importer = useDatasetImport({ projectId });
+  const running = useRef(false);
+  const consumedPlan = useRef<ValidatedDatasetImportPlan | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [outcome, setOutcome] = useState<DatasetImportState | null>(null);
+  const active = busy || importer.isImporting;
+
+  function changeOpen(nextOpen: boolean) {
+    if (!nextOpen && (running.current || importer.isImporting)) return;
+    onOpenChange(nextOpen);
+  }
+
+  function start(plan: ValidatedDatasetImportPlan): boolean {
+    if (running.current || importer.isImporting || consumedPlan.current === plan) return false;
+    running.current = true;
+    consumedPlan.current = plan;
+    setBusy(true);
+    setOutcome(null);
+    void finish(plan);
+    return true;
+  }
+
+  async function finish(plan: ValidatedDatasetImportPlan) {
+    let result: DatasetImportState;
+    try {
+      result = await importer.startImport(plan);
+    } catch (error) {
+      // The hook normally returns failures; also release the UI if starting rejects.
+      result = {
+        status: "failed", totalImageCount: plan.images.length,
+        completedImageCount: 0, successfulImageCount: 0, failedImageCount: 0,
+        uploadProgress: 0, images: [], labelResolutionFailed: false,
+        error: error instanceof Error ? error.message : "Could not start the dataset import.",
+      };
+    }
+    setOutcome(result);
+    running.current = false;
+    setBusy(false);
+    onImportComplete?.(result);
+  }
+
+  function preventDismiss(event: { preventDefault: () => void }) {
+    if (running.current || importer.isImporting) event.preventDefault();
+  }
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[90vh] flex-col gap-6 overflow-hidden sm:max-w-[720px]">
+    <Dialog open={open || active} onOpenChange={changeOpen}>
+      <DialogContent
+        className="flex max-h-[90vh] flex-col gap-6 overflow-hidden sm:max-w-[720px]"
+        showCloseButton={!active}
+        onEscapeKeyDown={preventDismiss}
+        onInteractOutside={preventDismiss}
+      >
         <DialogHeader className="gap-1.5 text-left">
           <DialogTitle className="text-lg font-normal">Import COCO dataset</DialogTitle>
           <DialogDescription>
             Choose a ZIP containing one COCO JSON document and its JPEG or PNG images.
-            This step validates and previews your dataset.
+            Validate and preview your dataset, then import it into this project.
           </DialogDescription>
         </DialogHeader>
-        {/* A fresh form on each open; no import hook or mutations yet. */}
-        {open ? <DatasetSelection onClose={() => onOpenChange(false)} /> : null}
+        {open || active ? <DatasetSelection
+          onClose={() => changeOpen(false)} onStart={start}
+          canChange={() => !running.current && !importer.isImporting}
+          active={active} importState={outcome ?? importer}
+        /> : null}
       </DialogContent>
     </Dialog>
   );
 }
 
-function DatasetSelection({ onClose }: { onClose: () => void }) {
+function DatasetSelection({ onClose, onStart, canChange, active, importState }: {
+  onClose: () => void;
+  onStart: (plan: ValidatedDatasetImportPlan) => boolean;
+  canChange: () => boolean;
+  active: boolean;
+  importState: DatasetImportState;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
   const validationVersion = useRef(0);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [hasStarted, setHasStarted] = useState(false);
 
   // Invalidates pending work on unmount (including closing the dialog).
   useEffect(() => () => { validationVersion.current += 1; }, []);
 
   function removeSelection() {
+    if (!canChange()) return;
     validationVersion.current += 1;
     setSelection(null);
+    setHasStarted(false);
     if (inputRef.current) inputRef.current.value = "";
   }
 
   async function selectFiles(files: File[]) {
-    if (files.length === 0) return;
+    if (!canChange() || files.length === 0) return;
+    setHasStarted(false);
     const version = ++validationVersion.current;
     if (files.length !== 1) {
       setSelection({ status: "error", error: "Choose one COCO ZIP at a time." });
@@ -70,7 +140,7 @@ function DatasetSelection({ onClose }: { onClose: () => void }) {
     }
     setSelection({ status: "validating", filename: file.name });
     try {
-      // Retain the complete validated plan for the future startImport(plan) step.
+      // Keep the complete plan; importing only starts from the explicit action.
       const plan = await readCocoDatasetZip(file);
       if (version !== validationVersion.current) return;
       if (plan.images.length === 0) {
@@ -102,12 +172,13 @@ function DatasetSelection({ onClose }: { onClose: () => void }) {
   const plan = selection?.status === "ready" ? selection.plan : null;
   const boxCount = plan?.images.reduce((total, image) => total + image.boxes.length, 0) ?? 0;
   const imageBytes = plan?.images.reduce((total, image) => total + image.file.size, 0) ?? 0;
+  const renderedVersion = validationVersion.current;
 
   return (
     <>
       <div className="min-h-0 space-y-4 overflow-y-auto">
         <div
-          onDragEnter={(event) => { event.preventDefault(); setIsDragging(true); }}
+          onDragEnter={(event) => { event.preventDefault(); if (canChange()) setIsDragging(true); }}
           onDragOver={(event) => event.preventDefault()}
           onDragLeave={(event) => {
             if (!event.currentTarget.contains(event.relatedTarget as Node)) setIsDragging(false);
@@ -127,18 +198,19 @@ function DatasetSelection({ onClose }: { onClose: () => void }) {
             type="button" variant="outline"
             className="h-9 border-primary text-primary shadow-sm hover:bg-primary/5 hover:text-primary"
             onClick={() => inputRef.current?.click()}
+            disabled={active}
           >
             {selection ? "Replace ZIP" : "Browse files"}
           </Button>
           <input ref={inputRef} type="file" accept=".zip,application/zip,application/x-zip-compressed"
-            className="hidden" aria-label="Choose COCO ZIP" onChange={handleFileInput} />
+            className="hidden" aria-label="Choose COCO ZIP" onChange={handleFileInput} disabled={active} />
         </div>
 
         {selection ? (
           <div className="flex items-center gap-3 rounded-lg border p-3">
             <FileArchive className="size-8 shrink-0 text-primary" />
             <p className="min-w-0 flex-1 break-all text-sm font-medium">{selection.filename ?? "No ZIP selected"}</p>
-            <Button type="button" variant="ghost" size="icon" onClick={removeSelection} aria-label="Remove selected ZIP">
+            <Button type="button" variant="ghost" size="icon" disabled={active} onClick={removeSelection} aria-label="Remove selected ZIP">
               <X className="size-4" />
             </Button>
           </div>
@@ -181,13 +253,70 @@ function DatasetSelection({ onClose }: { onClose: () => void }) {
                 </div>
               ) : <p className="text-sm text-muted-foreground">No categories in this dataset.</p>}
             </div>
-            <p className="text-xs text-muted-foreground">Preview only. No images, labels, or annotations have been imported.</p>
+            {!hasStarted ? <div className="space-y-3">
+              <p className="text-xs text-muted-foreground">No images, labels, or annotations have been imported yet.</p>
+              <Button type="button" disabled={active} onClick={() => {
+                // Reject a click retained from an older preview, even before a re-render.
+                if (renderedVersion !== validationVersion.current || !canChange()) return;
+                if (onStart(plan)) setHasStarted(true);
+              }}>Import</Button>
+            </div> : null}
           </section>
         ) : null}
+        {hasStarted ? <ImportOutcome state={importState} active={active} /> : null}
       </div>
       <DialogFooter>
-        <Button type="button" variant="outline" onClick={onClose}>Close</Button>
+        <Button type="button" variant="outline" disabled={active} onClick={onClose}>Close</Button>
       </DialogFooter>
     </>
+  );
+}
+
+const imageStatusLabels = {
+  queued: "Pending", uploading: "Uploading", saving_annotations: "Saving annotations",
+  succeeded: "Success", failed: "Failed",
+} as const;
+
+function ImportOutcome({ state, active }: { state: DatasetImportState; active: boolean }) {
+  const status = active
+    ? state.status === "resolving_labels" ? "Preparing labels..." : "Import is still running..."
+    : state.status === "completed" ? "Import complete"
+      : state.status === "completed_with_errors" ? "Import finished with failures" : "Import failed";
+  return (
+    <section aria-label="Import progress and outcome" className="space-y-4 rounded-lg border p-4">
+      <p role="status" className="flex items-center gap-2 text-sm font-medium">
+        {active ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}{status}
+      </p>
+      <dl className="grid grid-cols-3 gap-3 text-sm">
+        <div><dt className="text-muted-foreground">Completed images</dt><dd>{state.completedImageCount} / {state.totalImageCount}</dd></div>
+        <div><dt className="text-muted-foreground">Successful images</dt><dd>{state.successfulImageCount}</dd></div>
+        <div><dt className="text-muted-foreground">Failed images</dt><dd>{state.failedImageCount}</dd></div>
+      </dl>
+      <div className="space-y-2">
+        <p className="text-sm">Upload progress (by image bytes): {Math.round(state.uploadProgress)}%</p>
+        <Progress value={state.uploadProgress} aria-label="Byte-weighted upload progress" />
+        <p className="text-xs text-muted-foreground">100% uploaded does not mean the import is complete. Images succeed only after their annotations are saved.</p>
+      </div>
+      {active ? <p className="text-sm text-muted-foreground">Keep this dialog and page open until the import finishes.</p> : null}
+      {state.status === "failed" ? <div role="alert" className="space-y-1 text-sm text-destructive">
+        {state.labelResolutionFailed ? <p>Label preparation failed. No image uploads were started; some labels may already have been created.</p> : null}
+        <p>{state.error ?? "An unexpected import error occurred."}</p>
+      </div> : null}
+      {!active && state.status !== "completed" ? <p className="text-sm text-muted-foreground">
+        Existing uploads and successful saves are kept. Importing the same dataset again may create duplicate images.
+      </p> : null}
+      {state.images.length ? <Table>
+        <TableHeader><TableRow><TableHead>Image</TableHead><TableHead>Status</TableHead><TableHead>Upload</TableHead></TableRow></TableHeader>
+        <TableBody>{state.images.map((image) => <TableRow key={image.sourceImageId}>
+          <TableCell className="max-w-[300px] whitespace-normal break-all">
+            {image.path}
+            {image.failureStage === "annotations" ? <p className="mt-1 text-xs text-destructive">Image uploaded, but its annotations were not imported.</p> : null}
+            {image.error ? <p className="mt-1 text-xs text-destructive">{image.error}</p> : null}
+          </TableCell>
+          <TableCell><Badge variant={image.status === "failed" ? "destructive" : "secondary"}>{imageStatusLabels[image.status]}</Badge></TableCell>
+          <TableCell>{Math.round(image.uploadProgress)}%</TableCell>
+        </TableRow>)}</TableBody>
+      </Table> : null}
+    </section>
   );
 }
