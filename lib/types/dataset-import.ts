@@ -12,7 +12,7 @@ export type DatasetBox = {
 
 export type DatasetImage = {
   id: string;
-  /** Normalized, case-sensitive path from the annotation document. */
+  /** Normalized, case-sensitive source image path. */
   path: string;
   width: number;
   height: number;
@@ -28,5 +28,7 @@ export type DatasetImportPlan = {
 /** ZIP output: every referenced file has been matched and decoded. */
 export type ValidatedDatasetImportPlan = Omit<DatasetImportPlan, "images"> & {
   annotationPath: string;
+  /** YOLO negatives with no label file (not explicit empty label files). */
+  missingLabelImagePaths?: string[];
   images: Array<DatasetImage & { archivePath: string; file: File }>;
 };

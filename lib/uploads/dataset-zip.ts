@@ -1,6 +1,7 @@
 import JSZip from "jszip";
 import { normalizeDatasetPath, parseCocoDataset } from "@/lib/annotations/coco-import";
 import type { ValidatedDatasetImportPlan } from "@/lib/types/dataset-import";
+import { decodeDatasetImage } from "@/lib/uploads/dataset-image";
 
 type Entry = { path: string; entry: JSZip.JSZipObject };
 
@@ -12,27 +13,9 @@ function isCocoCandidate(value: unknown): boolean {
 }
 
 async function validateImage(file: File, width: number, height: number) {
-  const bytes = new Uint8Array(await file.slice(0, 8).arrayBuffer());
-  const png = [137, 80, 78, 71, 13, 10, 26, 10].every((byte, i) => bytes[i] === byte);
-  const jpeg = bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
-  if ((file.type === "image/png" && !png) || (file.type === "image/jpeg" && !jpeg)) {
-    throw new Error(`${file.name}: file contents do not match its JPEG/PNG extension.`);
-  }
-  if (typeof createImageBitmap !== "function") {
-    throw new Error("Dataset image validation requires a browser with createImageBitmap support.");
-  }
-  let bitmap: ImageBitmap;
-  try {
-    bitmap = await createImageBitmap(file, { imageOrientation: "none" });
-  } catch {
-    throw new Error(`${file.name}: could not decode the image.`);
-  }
-  try {
-    if (bitmap.width !== width || bitmap.height !== height) {
-      throw new Error(`${file.name}: actual dimensions ${bitmap.width}×${bitmap.height} do not match declared dimensions ${width}×${height}.`);
-    }
-  } finally {
-    bitmap.close();
+  const actual = await decodeDatasetImage(file);
+  if (actual.width !== width || actual.height !== height) {
+    throw new Error(`${file.name}: actual dimensions ${actual.width}×${actual.height} do not match declared dimensions ${width}×${height}.`);
   }
 }
 
