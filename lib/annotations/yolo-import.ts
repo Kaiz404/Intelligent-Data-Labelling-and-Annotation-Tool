@@ -50,7 +50,7 @@ export function parseYoloAnnotations(
       throw new Error(`${context}: class ID must be a nonnegative safe integer.`);
     }
     const categoryId = String(classId);
-    if (!categoryIds.has(categoryId)) throw new Error(`${context}: class ID ${classId} is not declared in classes.txt.`);
+    if (!categoryIds.has(categoryId)) throw new Error(`${context}: class ID ${classId} is not declared in the dataset class table.`);
     const coordinates = fields.slice(1).map(Number);
     if (fields.slice(1).some((field) => !decimal.test(field)) || coordinates.some((value) => !Number.isFinite(value))) {
       throw new Error(`${context}: coordinates must be finite decimal numbers.`);
@@ -95,6 +95,11 @@ export function parseYoloDataset(
   classesPath = "classes.txt",
 ): DatasetImportPlan {
   const categories = parseYoloClasses(classesText, classesPath);
+  return buildYoloDatasetPlan(categories, images);
+}
+
+/** Shared dataset construction for validated TXT or YAML class declarations. */
+export function buildYoloDatasetPlan(categories: DatasetCategory[], images: YoloDatasetImageInput[]): DatasetImportPlan {
   const paths = new Set<string>();
   return {
     categories,

@@ -355,7 +355,9 @@ test("YOLO dispatches validation and imports the same plan through the shared or
   const result = outcome("completed");
   const ui = setup(async () => plan(), async () => result, async () => validated);
   ui.changeFormat("yolo");
-  assert.ok(nodes(ui.render()).some((value) => typeof value === "string" && value.includes("data.yaml-only")));
+  const guidance = nodes(ui.render()).filter((value) => typeof value === "string").join(" ");
+  assert.ok(guidance.includes("classes.txt with images/labels") && guidance.includes("data.yaml datasets"));
+  assert.ok(guidance.includes("Dataset splits are combined into this project."));
   assert.equal(ui.find((node) => node.type === "input").props["aria-label"], "Choose YOLO ZIP");
   ui.select([zip("yolo.zip")]); await tick();
   assert.equal(ui.calls.length, 0);

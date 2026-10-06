@@ -227,7 +227,7 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
             {format === "coco"
               ? "Expected ZIP: one COCO annotation JSON and its referenced JPEG/PNG images."
               : format === "yolo"
-                ? "Expected ZIP: classes.txt, images/, and labels/. YOLO data.yaml-only datasets are not currently supported."
+                ? "Supports classes.txt with images/labels, or data.yaml datasets with train/val/valid/test image and label folders. JPEG/PNG object detection only. Dataset splits are combined into this project."
                 : "Expected ZIP: images/ and annotations/, or JPEGImages/ and Annotations/. Each image must have an XML annotation file; XML files with zero objects are valid. pose/truncated/difficult metadata is not preserved."}
           </p>
         </div>
