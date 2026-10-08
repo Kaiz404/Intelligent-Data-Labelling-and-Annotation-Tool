@@ -10,7 +10,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
+import { AlertCircle, CheckCircle2, Loader2, X } from "lucide-react";
 import { numberFormatter } from "@/lib/format";
 import {
   createDatasetImportStore,
@@ -110,6 +110,7 @@ function DatasetImportPills() {
 }
 
 function ImportPill({ run }: { run: DatasetImportRun }) {
+  const { dismissDatasetImport } = useDatasetImportActions();
   const { state } = run;
   const active = isImportActive(state);
   const Icon = active ? Loader2 : state.status === "completed" ? CheckCircle2 : AlertCircle;
@@ -124,23 +125,35 @@ function ImportPill({ run }: { run: DatasetImportRun }) {
         : "Import failed";
 
   return (
-    <Link
-      href={`/projects/${run.projectId}`}
-      className="flex max-w-80 items-center gap-2 rounded-full border bg-background/95 px-3 py-1.5 text-sm shadow-lg backdrop-blur transition-colors hover:bg-accent"
-    >
-      <Icon
-        className={cn(
-          "size-4 shrink-0",
-          active && "animate-spin text-primary",
-          state.status === "completed" && "text-emerald-600",
-          (state.status === "completed_with_errors" || state.status === "failed") && "text-destructive",
-        )}
-        aria-hidden="true"
-      />
-      <span className="truncate">
-        <span className="font-medium">{label}</span>
-        <span className="text-muted-foreground"> · {run.projectName}</span>
-      </span>
-    </Link>
+    <div className="flex max-w-80 items-center rounded-full border bg-background/95 text-sm shadow-lg backdrop-blur">
+      <Link
+        href={`/projects/${run.projectId}`}
+        className="flex min-w-0 items-center gap-2 rounded-full px-3 py-1.5 transition-colors hover:bg-accent"
+      >
+        <Icon
+          className={cn(
+            "size-4 shrink-0",
+            active && "animate-spin text-primary",
+            state.status === "completed" && "text-emerald-600",
+            (state.status === "completed_with_errors" || state.status === "failed") && "text-destructive",
+          )}
+          aria-hidden="true"
+        />
+        <span className="truncate">
+          <span className="font-medium">{label}</span>
+          <span className="text-muted-foreground"> · {run.projectName}</span>
+        </span>
+      </Link>
+      {active ? null : (
+        <button
+          type="button"
+          onClick={() => dismissDatasetImport(run.projectId)}
+          className="mr-1 rounded-full p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          aria-label={`Dismiss import into ${run.projectName}`}
+        >
+          <X className="size-3.5" />
+        </button>
+      )}
+    </div>
   );
 }
