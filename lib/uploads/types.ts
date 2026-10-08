@@ -74,6 +74,8 @@ export type UploadResult = {
   key: string;
   imageId: string;
   uploadId?: string;
+  /** ThumbHash sent with completion; null when the file could not be hashed. */
+  thumbhash: string | null;
 };
 
 export type UploadStartContext = {

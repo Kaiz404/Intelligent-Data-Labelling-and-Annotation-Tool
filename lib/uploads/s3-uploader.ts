@@ -291,6 +291,7 @@ export function createS3Uploader(options?: {
       const parts = [...completedParts]
         .map(([partNumber, eTag]) => ({ partNumber, eTag }))
         .sort((a, b) => a.partNumber - b.partNumber);
+      const hash = await thumbhash;
       const completed = await requestApi<CompleteResponse>(
         "/api/uploads/complete",
         {
@@ -300,7 +301,7 @@ export function createS3Uploader(options?: {
           fileName: file.name,
           contentType: file.type,
           sizeBytes: file.size,
-          thumbhash: await thumbhash,
+          thumbhash: hash,
         },
         context.signal,
       );
@@ -310,6 +311,7 @@ export function createS3Uploader(options?: {
         key: completed.key,
         imageId: completed.imageId,
         uploadId,
+        thumbhash: hash,
       };
     },
 

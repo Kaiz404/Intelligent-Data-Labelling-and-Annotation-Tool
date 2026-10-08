@@ -1,5 +1,16 @@
 export const numberFormatter = new Intl.NumberFormat("en-US");
 
+/** `ProjectImage.capturedAt`; UTC, so server renders and client-built images agree. */
+export const dateFormatter = new Intl.DateTimeFormat("en-US", {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  timeZone: "UTC",
+  timeZoneName: "short",
+});
+
 export function sumBy<T>(items: T[], selector: (item: T) => number) {
   return items.reduce((total, item) => total + selector(item), 0);
 }

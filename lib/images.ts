@@ -1,5 +1,6 @@
 import "server-only";
 
+import { dateFormatter } from "@/lib/format";
 import { fetchAllRows, forEachRowPage } from "@/lib/supabase/rows";
 import { createClient } from "@/lib/supabase/server";
 import {
@@ -23,16 +24,6 @@ type ImageRow = {
 
 const IMAGE_COLUMNS =
   "id, name, object_key, size_bytes, created_at, modified_at, annotation, thumbhash";
-
-const dateFormatter = new Intl.DateTimeFormat("en-US", {
-  year: "numeric",
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-  timeZone: "UTC",
-  timeZoneName: "short",
-});
 
 function annotationStatus(annotation: unknown): {
   status: ImageStatus;
