@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { numberFormatter, relativeTimeFromDate, toPercent } from "@/lib/format";
 import type { Project } from "@/lib/types/projects";
+import { ThumbhashImage } from "@/components/thumbhash-preview";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -56,18 +57,13 @@ export function ProjectCard({
             className="block size-16 shrink-0 overflow-hidden rounded-lg bg-muted"
             aria-label={`Open ${project.name}`}
           >
-            {project.thumbnailUrl ? (
-              <>
-                {/* Hour-stable signed S3 URL, versioned by the thumbnail's ETag. */}
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={project.thumbnailUrl}
-                  alt={`${project.name} thumbnail`}
-                  loading="lazy"
-                  decoding="async"
-                  className="h-full w-full object-cover transition-transform duration-200 hover:scale-105"
-                />
-              </>
+            {project.cover ? (
+              <ThumbhashImage
+                src={project.cover.url}
+                alt={`${project.name} thumbnail`}
+                thumbhash={project.cover.thumbhash}
+                className="size-full transition-transform duration-200 hover:scale-105"
+              />
             ) : null}
           </Link>
 

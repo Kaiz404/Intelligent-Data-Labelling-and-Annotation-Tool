@@ -15,8 +15,23 @@ export type Project = {
    * saves (set by `loadProjectSummaries`): the "Edited" time and sort key.
    */
   last_activity_at?: string;
-  /** Short-lived signed URL for the optional deterministic S3 thumbnail. */
+  /**
+   * Short-lived signed URL for the optional deterministic S3 thumbnail. Only
+   * the uploaded thumbnail: the edit dialog previews it as the current one.
+   */
   thumbnailUrl?: string | null;
+  /**
+   * What the project card shows: the uploaded thumbnail, else the oldest
+   * image over its ThumbHash; null when the project has neither.
+   */
+  cover?: ProjectCover | null;
+};
+
+export type ProjectCover = {
+  /** Signed S3 URL, stable within the hour. */
+  url: string;
+  /** Null for an uploaded thumbnail or an image not yet backfilled. */
+  thumbhash: string | null;
 };
 
 export type ImageStatus = "Annotated" | "Unannotated";

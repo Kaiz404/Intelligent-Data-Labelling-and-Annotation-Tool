@@ -27,7 +27,7 @@ async function ProjectsContent() {
     <ProjectBrowser
       projects={projects.map((project) => ({
         ...project,
-        thumbnailUrl: thumbnails.get(project.id),
+        ...thumbnails.get(project.id),
       }))}
     />
   );

@@ -1,12 +1,21 @@
 import "server-only";
 
 import { cache } from "react";
-import { fetchImageStats, fetchProjectImages, type ImageStats } from "@/lib/images";
+import {
+  fetchImageStats,
+  fetchProjectCoverImage,
+  fetchProjectImages,
+  type ImageStats,
+} from "@/lib/images";
 import { fetchProjectLabels } from "@/lib/labels";
 import { fetchAllRows } from "@/lib/supabase/rows";
 import { createClient } from "@/lib/supabase/server";
 import { createProjectThumbnailReadUrl } from "@/lib/uploads/s3-server";
-import type { Project, ProjectExportData } from "@/lib/types/projects";
+import type {
+  Project,
+  ProjectCover,
+  ProjectExportData,
+} from "@/lib/types/projects";
 
 /** The user's projects (RLS-filtered), most recently updated row first. */
 const loadProjectRows = cache(async (): Promise<Project[]> => {
@@ -59,10 +68,10 @@ export const loadProjectSummaries = cache(async (): Promise<ProjectSummaries> =>
 });
 
 /**
- * Thumbnail URLs of the `limit` most recently active projects (null when a
- * project has none). Covering every project starts once the rows arrive,
- * alongside the stats; a shorter list needs the activity order, so it waits
- * for them.
+ * Uploaded thumbnail URL and card cover of the `limit` most recently active
+ * projects, ready to spread into each `Project`. Covering every project starts
+ * once the rows arrive, alongside the stats; a shorter list needs the activity
+ * order, so it waits for them.
  */
 export const loadProjectThumbnails = cache(async (limit: number) => {
   const rows = await loadProjectRows();
@@ -72,9 +81,16 @@ export const loadProjectThumbnails = cache(async (limit: number) => {
       : (await loadProjectSummaries()).projects.slice(0, limit);
   return new Map(
     await Promise.all(
-      projects.map(async (project) =>
-        [project.id, await createProjectThumbnailReadUrl(project.id)] as const,
-      ),
+      projects.map(async (project) => {
+        const [thumbnailUrl, firstImage] = await Promise.all([
+          createProjectThumbnailReadUrl(project.id),
+          fetchProjectCoverImage(project.id),
+        ]);
+        const cover: ProjectCover | null = thumbnailUrl
+          ? { url: thumbnailUrl, thumbhash: null }
+          : firstImage;
+        return [project.id, { thumbnailUrl, cover }] as const;
+      }),
     ),
   );
 });

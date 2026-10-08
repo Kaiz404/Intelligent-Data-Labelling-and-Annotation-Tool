@@ -8,7 +8,11 @@ import {
   objectKeyBelongsToProject,
 } from "@/lib/uploads/s3-server";
 import type { BoundingBox } from "@/lib/types/annotations";
-import type { ImageStatus, ProjectImage } from "@/lib/types/projects";
+import type {
+  ImageStatus,
+  ProjectCover,
+  ProjectImage,
+} from "@/lib/types/projects";
 import type { RecentAnnotationsResult } from "@/lib/types/recent-annotations";
 
 type ImageRow = {
@@ -78,6 +82,31 @@ export async function fetchProjectImages(
   );
 
   return Promise.all(rows.map((row) => toProjectImage(row, projectId)));
+}
+
+/**
+ * A project's oldest image as its cover, or null when it has none. A failed
+ * query also gives null: a missing cover should not fail the project list.
+ */
+export async function fetchProjectCoverImage(
+  projectId: string,
+): Promise<ProjectCover | null> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("images")
+    .select("object_key, thumbhash")
+    .eq("project_id", projectId)
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true })
+    .limit(1)
+    .maybeSingle<Pick<ImageRow, "object_key" | "thumbhash">>();
+  if (error || !data || !objectKeyBelongsToProject(data.object_key, projectId)) {
+    return null;
+  }
+  return {
+    url: await createImageReadUrl(data.object_key),
+    thumbhash: data.thumbhash,
+  };
 }
 
 type RecentImageRow = ImageRow & {
