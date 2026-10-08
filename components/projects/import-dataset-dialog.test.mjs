@@ -31,15 +31,11 @@ function nodes(tree) {
   if (typeof tree !== "object") return [tree];
   return [tree, ...nodes(tree.props?.children)];
 }
-function setup(reader, start, yoloReader = reader, vocReader = reader) {
-  const calls = [], yoloCalls = [], vocCalls = [], starts = [], completions = [], hookProjects = [];
+const isActive = (state) => ["resolving_labels", "importing"].includes(state.status);
+function setup(reader, yoloReader = reader, vocReader = reader) {
+  const calls = [], yoloCalls = [], vocCalls = [], starts = [], dismissals = [], hookProjects = [];
   const instances = new Map();
-  let slots, cursor = 0, closed = false, open = true;
-  let importState = {
-    status: "idle", totalImageCount: 0, completedImageCount: 0,
-    successfulImageCount: 0, failedImageCount: 0, uploadProgress: 0,
-    images: [], labelResolutionFailed: false,
-  };
+  let slots, cursor = 0, closed = false, open = true, run;
   const jsx = (type, props) => ({ type, props });
   const primitives = new Proxy({}, { get: (_, key) => key });
   const dependencies = {
@@ -61,27 +57,27 @@ function setup(reader, start, yoloReader = reader, vocReader = reader) {
     "@/components/ui/progress": primitives,
     "@/components/ui/select": primitives,
     "@/components/ui/table": primitives,
-    "@/hooks/use-dataset-import": {
-      useDatasetImport({ projectId }) {
-        hookProjects.push(projectId);
-        return {
-          ...importState,
-          isImporting: ["resolving_labels", "importing"].includes(importState.status),
-          async startImport(value) {
-            starts.push(value);
-            importState = { ...importState, status: "resolving_labels", totalImageCount: value.images.length };
-            try {
-              const result = start ? await start(value) : outcome("completed");
-              importState = result;
-              return result;
-            } catch (error) {
-              importState = { ...importState, status: "idle" };
-              throw error;
-            }
-          },
-        };
-      },
+    // Mirrors the store: one active run per project, replaced only once finished.
+    "@/components/projects/dataset-import-provider": {
+      useDatasetImportRun(projectId) { hookProjects.push(projectId); return run; },
+      useDatasetImportActions: () => ({
+        startDatasetImport(input) {
+          if (run && isActive(run.state)) return false;
+          starts.push(input);
+          run = {
+            id: `run-${starts.length}`, projectId: input.projectId, projectName: input.projectName, fileName: input.fileName,
+            state: outcome("resolving_labels", { totalImageCount: input.plan.images.length, completedImageCount: 0, successfulImageCount: 0, uploadProgress: 0 }),
+            importedImages: [],
+          };
+          return true;
+        },
+        dismissDatasetImport(projectId) {
+          dismissals.push(projectId);
+          if (run && !isActive(run.state)) run = undefined;
+        },
+      }),
     },
+    "@/lib/uploads/dataset-import": { isImportActive: isActive },
     "@/lib/format": { formatBytes: (bytes) => `${bytes} B`, numberFormatter: new Intl.NumberFormat("en-US") },
     "@/lib/utils": { cn: (...values) => values.filter(Boolean).join(" ") },
     "@/lib/uploads/dataset-zip": { readCocoDatasetZip: (file) => { calls.push(file); return reader(file); } },
@@ -93,7 +89,9 @@ function setup(reader, start, yoloReader = reader, vocReader = reader) {
     if (!(name in dependencies)) throw new Error(`Unexpected dependency: ${name}`);
     return dependencies[name];
   }, exports);
+  let rendered;
   function renderComponent(type, props) {
+    rendered.add(type);
     if (!instances.has(type)) instances.set(type, []);
     slots = instances.get(type); cursor = 0;
     return type(props);
@@ -104,12 +102,22 @@ function setup(reader, start, yoloReader = reader, vocReader = reader) {
     if (typeof tree.type === "function") return expand(renderComponent(tree.type, tree.props));
     return { ...tree, props: { ...tree.props, children: expand(tree.props?.children) } };
   }
+  // A component left out of a render unmounts: its effects clean up and its state is dropped.
+  function unmountMissing() {
+    for (const [type, values] of instances) {
+      if (rendered.has(type)) continue;
+      for (const value of values) value?.cleanup?.();
+      instances.delete(type);
+    }
+  }
   function render() {
-    return expand(renderComponent(exports.ImportDatasetDialog, {
-      projectId: "project-id", open,
+    rendered = new Set();
+    const tree = expand(renderComponent(exports.ImportDatasetDialog, {
+      projectId: "project-id", projectName: "Project", open,
       onOpenChange: (value) => { open = value; closed = !value; },
-      onImportComplete: (value) => completions.push(value),
     }));
+    unmountMissing();
+    return tree;
   }
   const find = (predicate) => nodes(render()).find((node) => node?.props && predicate(node));
   const input = () => find((node) => node.type === "input");
@@ -119,10 +127,10 @@ function setup(reader, start, yoloReader = reader, vocReader = reader) {
     assert.equal(target.value, "");
   }
   return {
-    render, find, select, calls, yoloCalls, vocCalls, starts, completions, hookProjects,
+    render, find, select, calls, yoloCalls, vocCalls, starts, dismissals, hookProjects,
     changeFormat: (value) => find((node) => node.type === "Select").props.onValueChange(value),
     changeProfile: (value) => find((node) => node.type === "Select" && ["app-native", "one-based-inclusive"].includes(node.props.value)).props.onValueChange(value),
-    setImportState: (value) => { importState = value; },
+    setRunState: (state) => { run = { ...run, state }; },
     setOpen: (value) => { open = value; },
     unmount: () => { for (const values of instances.values()) for (const value of values) value?.cleanup?.(); },
     isClosed: () => closed,
@@ -214,10 +222,14 @@ test("removal and unmount invalidate pending validation; close remains available
   assert.ok(!nodes(second.render()).includes("Dataset validated"));
 });
 
+async function startImport(ui, name) {
+  ui.select([zip(name)]); await tick();
+  ui.find((node) => node.props.children === "Import").props.onClick();
+}
+
 test("Import starts only the current plan explicitly and prevents duplicate starts before re-render", async () => {
-  const pending = deferred();
   const first = plan(), latest = plan();
-  const ui = setup(async (file) => file.name === "first.zip" ? first : latest, () => pending.promise);
+  const ui = setup(async (file) => file.name === "first.zip" ? first : latest);
   ui.select([zip("first.zip")]); await tick();
   const staleClick = ui.find((node) => node.props.children === "Import").props.onClick;
   ui.select([zip("latest.zip")]);
@@ -227,116 +239,91 @@ test("Import starts only the current plan explicitly and prevents duplicate star
   const importClick = ui.find((node) => node.props.children === "Import").props.onClick;
   assert.equal(ui.starts.length, 0);
   importClick(); importClick();
-  assert.deepEqual(ui.starts, [latest]);
+  assert.deepEqual(ui.starts, [{ projectId: "project-id", projectName: "Project", fileName: "latest.zip", plan: latest }]);
   assert.ok(ui.hookProjects.every((id) => id === "project-id"));
-  pending.resolve(outcome("completed")); await tick();
-  importClick();
-  assert.equal(ui.starts.length, 1);
+  assert.ok(nodes(ui.render()).includes("Preparing labels..."));
+  assert.equal(ui.find((node) => node.props.children === "Import"), undefined);
 });
 
-test("active runs block all dismissal and file changes, including immediate stale handlers", async () => {
-  const pending = deferred();
-  const ui = setup(async () => plan(), () => pending.promise);
-  ui.select([zip("active.zip")]); await tick();
-  const close = ui.find((node) => node.type === "Dialog").props.onOpenChange;
-  const remove = ui.find((node) => node.props["aria-label"] === "Remove selected ZIP").props.onClick;
+test("the dialog can be dismissed at any time; the run keeps going and shows again on reopen", async () => {
+  const ui = setup(async () => plan());
+  await startImport(ui, "active.zip");
   const content = ui.find((node) => node.type === "DialogContent");
-  ui.find((node) => node.props.children === "Import").props.onClick();
-  close(false); remove();
-  let prevented = 0;
-  const event = { preventDefault() { prevented++; } };
-  content.props.onEscapeKeyDown(event); content.props.onInteractOutside(event);
-  assert.equal(prevented, 2);
-  assert.equal(ui.isClosed(), false);
-  assert.equal(ui.find((node) => node.type === "DialogContent").props.showCloseButton, false);
-  for (const label of ["Remove selected ZIP", "Choose COCO ZIP"]) {
-    assert.equal(ui.find((node) => node.props["aria-label"] === label).props.disabled, true);
-  }
-  assert.equal(ui.find((node) => node.props.children === "Replace ZIP").props.disabled, true);
-  assert.equal(ui.find((node) => node.props.children === "Close").props.disabled, true);
-  ui.select([zip("blocked.zip")]);
-  assert.equal(ui.calls.length, 1);
-  ui.setOpen(false);
-  assert.equal(ui.find((node) => node.type === "Dialog").props.open, true);
-  assert.ok(nodes(ui.render()).includes("active.zip"));
-  pending.resolve(outcome("completed")); await tick();
+  assert.equal(content.props.showCloseButton, undefined);
+  assert.equal(content.props.onEscapeKeyDown, undefined);
+  assert.equal(content.props.onInteractOutside, undefined);
+  const text = nodes(ui.render());
+  assert.ok(text.some((node) => typeof node === "string" && node.includes("keeps running in the background")));
+  assert.ok(text.some((node) => typeof node === "string" && node.includes("active.zip")));
+  assert.equal(ui.find((node) => node.type === "Select"), undefined, "the picker is replaced while a run exists");
+  assert.equal(ui.find((node) => node.props.children === "Import another dataset"), undefined);
+  ui.find((node) => node.type === "Button" && node.props.children === "Close").props.onClick();
+  assert.ok(ui.isClosed());
+  assert.equal(ui.find((node) => node.type === "Dialog").props.open, false);
+  ui.setOpen(true);
+  assert.ok(nodes(ui.render()).includes("Preparing labels..."));
+  ui.find((node) => node.type === "Dialog").props.onOpenChange(false);
+  assert.ok(ui.isClosed());
+  assert.equal(ui.starts.length, 1);
 });
 
 test("progress distinguishes upload completion from annotation saves and displays all image states", async () => {
-  const pending = deferred();
-  const ui = setup(async () => plan(), () => pending.promise);
-  ui.select([zip("progress.zip")]); await tick();
-  ui.find((node) => node.props.children === "Import").props.onClick();
+  const ui = setup(async () => plan());
+  await startImport(ui, "progress.zip");
   assert.ok(nodes(ui.render()).includes("Preparing labels..."));
-  ui.setImportState(outcome("importing", {
+  ui.setRunState(outcome("importing", {
     totalImageCount: 5, completedImageCount: 2, successfulImageCount: 1, failedImageCount: 1,
     images: ["queued", "uploading", "saving_annotations", "succeeded", "failed"].map((status, index) => ({
       sourceImageId: String(index), path: `${index}.png`, sizeBytes: 1, status, uploadProgress: 100,
+      ...(status === "failed" ? { failureStage: "upload", error: "Network down" } : {}),
     })),
   }));
   const text = nodes(ui.render());
-  for (const label of ["Import is still running...", "Completed images", "Successful images", "Failed images", "Pending", "Uploading", "Saving annotations", "Success", "Failed"]) assert.ok(text.includes(label));
+  for (const label of ["Import is still running...", "Completed images", "Successful images", "Failed images", "Pending", "Uploading", "Saving annotations", "Success", "Failed", "Network down"]) assert.ok(text.includes(label));
   assert.equal(ui.find((node) => node.type === "Progress").props.value, 100);
   assert.ok(text.some((node) => typeof node === "string" && node.includes("100% uploaded does not mean")));
-  assert.equal(ui.completions.length, 0);
-  pending.resolve(outcome("completed")); await tick();
 });
 
-test("success releases dismissal and notifies completion once with the exact outcome", async () => {
-  const pending = deferred();
-  const ui = setup(async () => plan(), () => pending.promise);
-  ui.select([zip("success.zip")]); await tick();
-  ui.find((node) => node.props.children === "Import").props.onClick();
-  const result = outcome("completed");
-  pending.resolve(result); await tick();
+test("a finished run shows its outcome until another import dismisses it", async () => {
+  const ui = setup(async () => plan());
+  await startImport(ui, "success.zip");
+  ui.setRunState(outcome("completed"));
   assert.ok(nodes(ui.render()).includes("Import complete"));
-  assert.deepEqual(ui.completions, [result]);
-  assert.equal(ui.find((node) => node.type === "DialogContent").props.showCloseButton, true);
   assert.equal(ui.find((node) => node.props.children === "Import"), undefined);
-  ui.render();
-  assert.equal(ui.completions.length, 1);
-  ui.find((node) => node.props.children === "Close").props.onClick();
-  assert.ok(ui.isClosed());
+  assert.ok(!nodes(ui.render()).some((node) => typeof node === "string" && node.includes("keeps running in the background")));
+  ui.find((node) => node.props.children === "Import another dataset").props.onClick();
+  assert.deepEqual(ui.dismissals, ["project-id"]);
+  const text = nodes(ui.render());
+  assert.ok(text.includes("Browse files"));
+  assert.ok(!text.includes("success.zip") && !text.includes("Dataset validated"), "the picker starts fresh");
+  assert.equal(ui.find((node) => node.type === "Select").props.value, "coco");
 });
 
 test("partial failures retain uploaded-image context and do not offer automatic retries", async () => {
-  const result = outcome("completed_with_errors", {
+  const ui = setup(async () => plan());
+  await startImport(ui, "partial.zip");
+  ui.setRunState(outcome("completed_with_errors", {
     successfulImageCount: 1, failedImageCount: 1,
     images: [{ sourceImageId: "1", path: "cat.png", status: "failed", uploadProgress: 100,
       failureStage: "annotations", error: "Save refused", imageId: "uploaded-id" }],
-  });
-  const ui = setup(async () => plan(), async () => result);
-  ui.select([zip("partial.zip")]); await tick();
-  ui.find((node) => node.props.children === "Import").props.onClick(); await tick();
+  }));
   const text = nodes(ui.render());
   for (const value of ["Import finished with failures", "Image uploaded, but its annotations were not imported.", "Save refused"]) assert.ok(text.includes(value));
   assert.ok(text.some((node) => typeof node === "string" && node.includes("duplicate images")));
-  assert.deepEqual(ui.completions, [result]);
   assert.equal(ui.starts.length, 1);
   assert.equal(ui.find((node) => node.props.children === "Import"), undefined);
 });
 
-test("fatal and label-resolution failures surface errors and notify the parent", async () => {
+test("fatal and label-resolution failures surface errors", async () => {
   for (const labelResolutionFailed of [false, true]) {
-    const result = outcome("failed", { labelResolutionFailed, error: "Access denied", completedImageCount: 0, successfulImageCount: 0 });
-    const ui = setup(async () => plan(), async () => result);
-    ui.select([zip("fatal.zip")]); await tick();
-    ui.find((node) => node.props.children === "Import").props.onClick(); await tick();
+    const ui = setup(async () => plan());
+    await startImport(ui, "fatal.zip");
+    ui.setRunState(outcome("failed", { labelResolutionFailed, error: "Access denied", completedImageCount: 0, successfulImageCount: 0 }));
     const text = nodes(ui.render());
     assert.ok(text.includes("Import failed") && text.includes("Access denied"));
     assert.equal(text.some((node) => typeof node === "string" && node.includes("No image uploads were started")), labelResolutionFailed);
-    assert.deepEqual(ui.completions, [result]);
-    assert.equal(ui.find((node) => node.props.children === "Close").props.disabled, false);
+    assert.ok(ui.find((node) => node.props.children === "Import another dataset"));
   }
-});
-
-test("a rejected start produces a fatal outcome and releases the dialog", async () => {
-  const ui = setup(async () => plan(), async () => { throw new Error("Start rejected"); });
-  ui.select([zip("rejected.zip")]); await tick();
-  ui.find((node) => node.props.children === "Import").props.onClick(); await tick();
-  assert.ok(nodes(ui.render()).includes("Start rejected"));
-  assert.equal(ui.completions[0].status, "failed");
-  assert.equal(ui.find((node) => node.props.children === "Close").props.disabled, false);
 });
 
 test("COCO is the default format and dispatches only to the COCO reader", async () => {
@@ -352,8 +339,7 @@ test("COCO is the default format and dispatches only to the COCO reader", async 
 
 test("YOLO dispatches validation and imports the same plan through the shared orchestration", async () => {
   const validated = { ...plan(), annotationPath: "classes.txt", missingLabelImagePaths: ["images/negative.png", "images/other.png"] };
-  const result = outcome("completed");
-  const ui = setup(async () => plan(), async () => result, async () => validated);
+  const ui = setup(async () => plan(), async () => validated);
   ui.changeFormat("yolo");
   const guidance = nodes(ui.render()).filter((value) => typeof value === "string").join(" ");
   assert.ok(guidance.includes("classes.txt with images/labels") && guidance.includes("data.yaml datasets"));
@@ -368,9 +354,8 @@ test("YOLO dispatches validation and imports the same plan through the shared or
   assert.ok(preview.some((value) => typeof value === "string" && value.includes("no label file")));
   assert.equal(ui.find((node) => node.props.role === "alert"), undefined);
   assert.equal(ui.starts.length, 0);
-  ui.find((node) => node.props.children === "Import").props.onClick(); await tick();
-  assert.deepEqual(ui.starts, [validated]);
-  assert.deepEqual(ui.completions, [result]);
+  ui.find((node) => node.props.children === "Import").props.onClick();
+  assert.deepEqual(ui.starts.map((start) => start.plan), [validated]);
 });
 
 test("changing format clears validated preview, filename, errors and stale Import handlers", async () => {
@@ -392,7 +377,7 @@ test("changing format clears validated preview, filename, errors and stale Impor
 test("format changes invalidate old-format success and errors, even before re-render", async () => {
   for (const fails of [false, true]) {
     const old = deferred(), current = deferred();
-    const ui = setup(() => old.promise, undefined, () => current.promise);
+    const ui = setup(() => old.promise, () => current.promise);
     const staleInput = ui.find((node) => node.type === "input").props.onChange;
     ui.select([zip("old.zip")]);
     ui.changeFormat("yolo");
@@ -408,19 +393,17 @@ test("format changes invalidate old-format success and errors, even before re-re
   }
 });
 
-test("active import disables format selection and blocks retained change handlers", async () => {
-  const pending = deferred();
-  const ui = setup(async () => plan(), () => pending.promise);
+test("format changes retained from before the import cannot alter the next picker", async () => {
+  const ui = setup(async () => plan());
   ui.select([zip("active.zip")]); await tick();
   const change = ui.find((node) => node.type === "Select").props.onValueChange;
   ui.find((node) => node.props.children === "Import").props.onClick();
   change("yolo");
-  const selector = ui.find((node) => node.type === "Select");
-  assert.equal(selector.props.disabled, true);
-  assert.equal(selector.props.value, "coco");
-  assert.ok(nodes(ui.render()).includes("active.zip"));
-  pending.resolve(outcome("completed")); await tick();
-  assert.equal(ui.find((node) => node.type === "Select").props.disabled, false);
+  assert.equal(ui.find((node) => node.type === "Select"), undefined);
+  ui.setRunState(outcome("completed"));
+  ui.find((node) => node.props.children === "Import another dataset").props.onClick();
+  assert.equal(ui.find((node) => node.type === "Select").props.value, "coco");
+  assert.equal(ui.starts.length, 1);
 });
 
 test("missing-label notice is limited to YOLO plans with missing labels", async () => {
@@ -476,7 +459,7 @@ test("profile changes clear ZIP, preview, errors and retained Import handlers", 
 test("old-profile validation success and errors cannot restore state", async () => {
   for (const fails of [false, true]) {
     const old = deferred(), current = deferred();
-    const ui = setup(async () => plan(), undefined, undefined, (_file, options) => options.coordinateProfile === "app-native" ? old.promise : current.promise);
+    const ui = setup(async () => plan(), undefined, (_file, options) => options.coordinateProfile === "app-native" ? old.promise : current.promise);
     ui.changeFormat("voc");
     const inputHandler = ui.find((node) => node.type === "input").props.onChange;
     ui.select([zip("old.zip")]);
@@ -495,7 +478,7 @@ test("old-profile validation success and errors cannot restore state", async () 
 
 test("changing format invalidates pending VOC validation and hides profile selector", async () => {
   const pending = deferred();
-  const ui = setup(async () => plan(), undefined, undefined, () => pending.promise);
+  const ui = setup(async () => plan(), undefined, () => pending.promise);
   ui.changeFormat("voc"); ui.select([zip("voc.zip")]);
   ui.changeFormat("coco");
   assert.equal(ui.find((node) => node.props["aria-label"] === "Coordinate profile"), undefined);
@@ -504,21 +487,17 @@ test("changing format invalidates pending VOC validation and hides profile selec
   assert.ok(!nodes(ui.render()).includes("voc.zip"));
 });
 
-test("VOC imports use shared progress and block immediate profile and format changes", async () => {
-  const pending = deferred(), validated = plan();
-  const ui = setup(async () => validated, () => pending.promise);
+test("VOC imports use shared progress and ignore retained profile and format changes", async () => {
+  const validated = plan();
+  const ui = setup(async () => validated);
   ui.changeFormat("voc"); ui.select([zip("voc.zip")]); await tick();
   const profileChange = ui.find((node) => node.type === "Select" && node.props.value === "app-native").props.onValueChange;
   const formatChange = ui.find((node) => node.type === "Select" && node.props.value === "voc").props.onValueChange;
   const start = ui.find((node) => node.props.children === "Import").props.onClick;
   start(); start(); profileChange("one-based-inclusive"); formatChange("yolo");
-  assert.deepEqual(ui.starts, [validated]);
+  assert.deepEqual(ui.starts.map((value) => value.plan), [validated]);
   assert.ok(nodes(ui.render()).includes("Preparing labels..."));
-  for (const value of ["voc", "app-native"]) assert.equal(ui.find((node) => node.type === "Select" && node.props.value === value).props.disabled, true);
-  assert.equal(ui.find((node) => node.type === "DialogContent").props.showCloseButton, false);
-  const result = outcome("completed"); pending.resolve(result); await tick();
+  assert.equal(ui.find((node) => node.type === "Select"), undefined);
+  ui.setRunState(outcome("completed"));
   assert.ok(nodes(ui.render()).includes("Import complete"));
-  assert.deepEqual(ui.completions, [result]);
-  ui.changeProfile("one-based-inclusive");
-  assert.equal(ui.find((node) => node.props["aria-label"] === "Dataset preview"), undefined);
 });

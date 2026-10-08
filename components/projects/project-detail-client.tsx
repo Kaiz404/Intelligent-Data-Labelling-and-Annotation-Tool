@@ -2,12 +2,17 @@
 
 import { CopyPlus, Download, FileArchive, FolderInput, Pencil, Search, Trash2, Upload, WandSparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { startTransition, useCallback, useMemo, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { moveImagesToRecycleBin } from "@/lib/actions/recycle-bin";
 import { AnnotationExportSheet } from "@/components/annotate/annotation-export-sheet";
 import { EditProjectDialog } from "@/components/dashboard/project-action-dialogs";
 import { AiJobBanner } from "@/components/projects/ai-job-banner";
 import { BatchAiAnnotateDialog } from "@/components/projects/batch-ai-annotate-dialog";
+import { DatasetImportBanner } from "@/components/projects/dataset-import-banner";
+import {
+  useDatasetImportActions,
+  useDatasetImportRun,
+} from "@/components/projects/dataset-import-provider";
 import { ImageCard } from "@/components/projects/image-card";
 import { ImageTransferDialog, RenameImageDialog } from "@/components/projects/image-action-dialogs";
 import { ImportDatasetDialog } from "@/components/projects/import-dataset-dialog";
@@ -159,9 +164,20 @@ export function ProjectDetailClient({
     ReadonlyMap<string, { from: string; to: string }>
   >(() => new Map());
 
+  const importRun = useDatasetImportRun(serverProject.id);
+  const { dismissDatasetImport } = useDatasetImportActions();
+  const importedImages = importRun?.importedImages;
+  // Images a running import created show at once, after the server's, until
+  // a refresh brings their server copies.
+  const projectImages = useMemo(() => {
+    if (!importedImages?.length) return serverImages;
+    const serverIds = new Set(serverImages.map((image) => image.id));
+    return [...serverImages, ...importedImages.filter((image) => !serverIds.has(image.id))];
+  }, [importedImages, serverImages]);
+
   const images = useMemo(
     () =>
-      serverImages.flatMap((image) => {
+      projectImages.flatMap((image) => {
         if (removedIds.has(image.id)) return [];
         const rename = renames.get(image.id);
         // Only until the server copy changes: then it is the source of truth.
@@ -169,7 +185,7 @@ export function ProjectDetailClient({
           ? [{ ...image, fileName: rename.to }]
           : [image];
       }),
-    [removedIds, renames, serverImages],
+    [projectImages, removedIds, renames],
   );
 
   const refresh = useCallback(() => {
@@ -177,6 +193,19 @@ export function ProjectDetailClient({
     // payload into this client boundary.
     startTransition(() => router.refresh());
   }, [router]);
+
+  // Refresh once labels are resolved (the Label filter needs any new ones)
+  // and once the run ends. Only transitions seen here count, so returning to
+  // the page after a run does not refresh again.
+  const importStatus = importRun?.state.status;
+  const seenImportStatus = useRef(importStatus);
+  useEffect(() => {
+    const previous = seenImportStatus.current;
+    seenImportStatus.current = importStatus;
+    if ((previous === "resolving_labels" || previous === "importing") && importStatus !== previous) {
+      refresh();
+    }
+  }, [importStatus, refresh]);
 
   const {
     job: aiJob,
@@ -405,6 +434,14 @@ export function ProjectDetailClient({
         </div>
       </div>
 
+      {importRun ? (
+        <DatasetImportBanner
+          run={importRun}
+          onViewDetails={() => setIsImportOpen(true)}
+          onDismiss={() => dismissDatasetImport(project.id)}
+        />
+      ) : null}
+
       {aiJob ? (
         <AiJobBanner
           job={aiJob}
@@ -601,7 +638,7 @@ export function ProjectDetailClient({
         open={isImportOpen}
         onOpenChange={setIsImportOpen}
         projectId={project.id}
-        onImportComplete={refresh}
+        projectName={project.name}
       />
 
       <BatchAiAnnotateDialog
@@ -623,7 +660,7 @@ export function ProjectDetailClient({
         open={renameTarget !== null}
         onOpenChange={(open) => { if (!open) setRenameTarget(null); }}
         onRenamed={(imageId, fileName) => {
-          const from = serverImages.find((image) => image.id === imageId)?.fileName;
+          const from = projectImages.find((image) => image.id === imageId)?.fileName;
           if (from === undefined) return;
           setRenames((current) => new Map(current).set(imageId, { from, to: fileName }));
         }}
