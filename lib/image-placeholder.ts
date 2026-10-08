@@ -2,6 +2,7 @@ import {
   rgbaToThumbHash,
   thumbHashToAverageRGBA,
   thumbHashToDataURL,
+  thumbHashToRGBA,
 } from "thumbhash";
 
 /**
@@ -29,6 +30,14 @@ export function thumbhashColor(hash: string | null) {
   if (!hash) return undefined;
   const { r, g, b } = thumbHashToAverageRGBA(decode(hash));
   return `rgb(${Math.round(r * 255)} ${Math.round(g * 255)} ${Math.round(b * 255)})`;
+}
+
+/**
+ * Blurred preview as raw pixels (at most 32×32), for drawing into a canvas
+ * in the browser: grids get the preview without a data URL per card.
+ */
+export function thumbhashPixels(hash: string) {
+  return thumbHashToRGBA(decode(hash));
 }
 
 // A decoded preview is a ~4 KB PNG data URL, so keep it to one large image

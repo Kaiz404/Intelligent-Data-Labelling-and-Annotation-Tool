@@ -48,7 +48,7 @@ Image annotation workspace for managing projects and annotating image datasets.
 | Runtime | React 19, TypeScript 5 | Strict mode, `@/*` path alias |
 | Auth + DB | Supabase (`@supabase/ssr`, `@supabase/supabase-js`) | Cookie-based sessions |
 | Annotation canvas | `konva` + `react-konva` | Bounding boxes; canvas is client-only (`dynamic(..., { ssr: false })`) |
-| Image placeholders | `thumbhash` | ~25-byte hash per image (`images.thumbhash`), decoded into a blurred preview or an average colour while S3 bytes load (`lib/image-placeholder.ts`) |
+| Image placeholders | `thumbhash` | ~25-byte hash per image (`images.thumbhash`), decoded into a blurred preview (canvas pixels on cards, a PNG data URL on the canvas) or an average colour while S3 bytes load (`lib/image-placeholder.ts`) |
 | Styling | Tailwind CSS v4 | CSS-first config in `app/globals.css` — **no `tailwind.config.*`** |
 | Components | shadcn/ui (New York style) | Radix primitives, `lucide-react` icons |
 | Theming | `next-themes` | Light / dark / system via `ThemeProvider` in root layout |
@@ -87,7 +87,8 @@ data_annotation_tool/
 │   ├── dashboard/          # Dashboard widgets
 │   ├── projects/           # Project browser, detail, upload, bulk AI dialog + job banner, dataset import (dialog, banner, app-level provider + progress pill), etc.
 │   ├── recent-annotations/ # Cross-project Recent Annotations grid, card, and bulk actions
-│   └── recycle-bin/        # Recycle Bin tabs, project rows, image cards, selection bar, setup notice
+│   ├── recycle-bin/        # Recycle Bin tabs, project rows, image cards, selection bar, setup notice
+│   └── thumbhash-preview.tsx # ThumbhashPreview (canvas-drawn blurred preview) + ThumbhashImage (lazy img fading in over it) for image cards
 ├── hooks/                  # Shared React hooks (use-mobile, use-now, use-upload-queue, use-annotation-job, use-fullscreen, use-serial-queue, use-query-params)
 ├── lib/
 │   ├── actions/            # Server actions ("use server")
@@ -339,7 +340,7 @@ Every page and feature follows these rules. The bar: navigation and interaction 
 - **Parallel, request-deduplicated server loads.** Start independent queries together (`Promise.all`, including the ownership/existence lookup when RLS already scopes the others); share one request's load between layout and page with React `cache()` (`loadAnnotationWorkspace`).
 - **Client reads via GET route handlers**, cached per key and prefetched for the likely next selection (`workspace-cache.ts`). Server actions are for mutations: Next runs them one at a time, so a read queued behind a save waits.
 - **Optimistic, derived client state.** Apply edits locally, then persist in the background through a serial queue (`useSerialQueue`), saving the diff against a mirror of the server copy (`planSave`). When a mutation must finish before the dialog closes (deletes, moves), hide or update the item locally as soon as it succeeds instead of waiting for `router.refresh()`. Derive anything that follows props or the URL (defaults, validity, per-key resets) during render; keep effects for syncing with external systems. Dialog forms live in a component inside `DialogContent`, which mounts on open, so each open starts from props with no reset effects. Load heavy, rarely used libraries (JSZip) with `import()` where they are used.
-- **Images placeholder-first.** Every S3 image sits over its ThumbHash placeholder: `thumbhashColor` for thumbnails, a `thumbhashDataUrl` preview for the single large image a page leads with. Thumbnails use `loading="lazy" decoding="async"`; the leading image gets `preload()`; likely next images are warmed. URLs come from `createImageReadUrl` (hour-stable, so the browser cache works); `fetch` S3 bytes with `cache: "no-store"`, because cached copies come from no-CORS `<img>` loads and lack CORS headers.
+- **Images placeholder-first.** Every S3 image sits over its ThumbHash placeholder. Grid image cards use `ThumbhashImage` (`components/thumbhash-preview.tsx`): the server renders the average colour, the client then draws the blurred preview into a hash-sized `<canvas>` (`thumbhashPixels`), and the image fades in over it once loaded (a failed load leaves the preview). `thumbhashColor` stays for tiny thumbnails (image strip, dialog lists, project rows); a `thumbhashDataUrl` preview, rendered on the server, is only for the single large image a page leads with, because each is a ~4 KB data URL in the HTML. Thumbnails use `loading="lazy" decoding="async"`; the leading image gets `preload()`; likely next images are warmed. URLs come from `createImageReadUrl` (hour-stable, so the browser cache works); `fetch` S3 bytes with `cache: "no-store"`, because cached copies come from no-CORS `<img>` loads and lack CORS headers.
 - **Memoised long lists** (`ImageStrip`) when the parent re-renders on every edit, fed stable callbacks.
 
 ### Styling
