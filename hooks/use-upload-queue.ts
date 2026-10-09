@@ -1,32 +1,9 @@
 "use client";
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
-import { createUploadProvider } from "@/lib/uploads/uploader";
-import { createUploadQueueStore } from "@/lib/uploads/upload-queue";
-import type {
-  UploadProvider,
-  UploadQueueItem,
-  UploadTab,
-} from "@/lib/uploads/types";
-import {
-  UPLOAD_QUEUE_MAX_CONCURRENT_FILES,
-  UPLOAD_QUEUE_MAX_IN_FLIGHT_BYTES,
-} from "@/lib/uploads/types";
+import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import type { UploadQueueStore } from "@/lib/uploads/upload-queue";
+import type { UploadQueueItem, UploadTab } from "@/lib/uploads/types";
 import { toPercent } from "@/lib/format";
-
-type UseUploadQueueOptions = {
-  projectId: string;
-  provider?: UploadProvider;
-  maxConcurrentFiles?: number;
-  onUploadComplete?: (result: { imageId: string; key: string }) => void;
-};
 
 export function matchesUploadTab(item: UploadQueueItem, tab: UploadTab) {
   if (tab === "All") return true;
@@ -40,33 +17,15 @@ export function matchesUploadTab(item: UploadQueueItem, tab: UploadTab) {
   return item.status === tab;
 }
 
-export function useUploadQueue({
-  projectId,
-  provider,
-  maxConcurrentFiles = UPLOAD_QUEUE_MAX_CONCURRENT_FILES,
-  onUploadComplete,
-}: UseUploadQueueOptions) {
-  const projectIdRef = useRef(projectId);
-  const onUploadCompleteRef = useRef(onUploadComplete);
-  projectIdRef.current = projectId;
-  onUploadCompleteRef.current = onUploadComplete;
-
-  const [store] = useState(() =>
-    createUploadQueueStore({
-      provider: provider ?? createUploadProvider(),
-      maxConcurrentFiles,
-      maxInFlightBytes: UPLOAD_QUEUE_MAX_IN_FLIGHT_BYTES,
-      getProjectId: () => projectIdRef.current,
-      onUploadComplete: (result) => onUploadCompleteRef.current?.(result),
-    }),
-  );
-  const { items, counts, totalBytes, progressSum, isRunning } =
+/** The dialog's view of a project's queue; the queue itself outlives it. */
+export function useUploadQueue(store: UploadQueueStore) {
+  const { items, counts, totalBytes, progressSum, isRunning, started } =
     useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
-
-  useEffect(() => () => store.dispose(), [store]);
+  // The queue can be cleared from outside the dialog (banner or pill dismiss).
+  if (items.length === 0 && selectedIds.size > 0) setSelectedIds(new Set());
 
   const summary = useMemo(() => {
     const totalSelected = items.length;
@@ -136,6 +95,7 @@ export function useUploadQueue({
     counts,
     selectedIds,
     isRunning,
+    started,
     summary,
     addEntries: store.add,
     renameItem: store.rename,

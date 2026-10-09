@@ -1,24 +1,17 @@
 "use client";
 
-import Link from "next/link";
-import { usePathname } from "next/navigation";
 import {
   createContext,
-  Suspense,
   useContext,
-  useEffect,
   useState,
   useSyncExternalStore,
 } from "react";
-import { AlertCircle, CheckCircle2, Loader2, X } from "lucide-react";
-import { numberFormatter } from "@/lib/format";
 import {
   createDatasetImportStore,
   isImportActive,
   type DatasetImportRun,
   type DatasetImportStore,
 } from "@/lib/uploads/dataset-import";
-import { cn } from "@/lib/utils";
 
 const DatasetImportContext = createContext<DatasetImportStore | null>(null);
 const noRuns: Readonly<Record<string, DatasetImportRun>> = {};
@@ -32,16 +25,13 @@ function useDatasetImportStore() {
 /**
  * Owns dataset imports for the whole signed-in shell, so a run keeps going
  * after its dialog closes and while the user navigates between pages.
+ * `BackgroundTasks` shows their pills and guards the tab.
  */
 export function DatasetImportProvider({ children }: { children: React.ReactNode }) {
   const [store] = useState(createDatasetImportStore);
   return (
     <DatasetImportContext.Provider value={store}>
       {children}
-      <UnloadGuard />
-      <Suspense fallback={null}>
-        <DatasetImportPills />
-      </Suspense>
     </DatasetImportContext.Provider>
   );
 }
@@ -61,99 +51,16 @@ export function useDatasetImportActions() {
   return { startDatasetImport: store.start, dismissDatasetImport: store.dismiss };
 }
 
-function useDatasetImportRuns() {
+export function useDatasetImportRuns() {
   const store = useDatasetImportStore();
   return useSyncExternalStore(store.subscribe, store.getRuns, () => noRuns);
 }
 
-/** Closing or reloading the tab would abandon the remaining uploads. */
-function UnloadGuard() {
+export function useIsDatasetImporting() {
   const store = useDatasetImportStore();
-  const isImporting = useSyncExternalStore(
+  return useSyncExternalStore(
     store.subscribe,
     () => Object.values(store.getRuns()).some((run) => isImportActive(run.state)),
     () => false,
-  );
-
-  useEffect(() => {
-    if (!isImporting) return;
-    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = "";
-    };
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [isImporting]);
-
-  return null;
-}
-
-const workspacePath = /^\/projects\/[^/]+\/annotate(\/|$)/;
-
-/**
- * A small link back to each import's project. Hidden on that project's page,
- * which shows its own banner, and in the annotation workspace, whose footer
- * occupies the bottom-right corner.
- */
-function DatasetImportPills() {
-  const runs = useDatasetImportRuns();
-  const pathname = usePathname();
-  if (workspacePath.test(pathname)) return null;
-  const shown = Object.values(runs).filter((run) => pathname !== `/projects/${run.projectId}`);
-  if (shown.length === 0) return null;
-
-  return (
-    <div className="fixed bottom-4 right-4 z-40 flex max-w-[calc(100vw-2rem)] flex-col items-end gap-2">
-      {shown.map((run) => <ImportPill key={run.id} run={run} />)}
-    </div>
-  );
-}
-
-function ImportPill({ run }: { run: DatasetImportRun }) {
-  const { dismissDatasetImport } = useDatasetImportActions();
-  const { state } = run;
-  const active = isImportActive(state);
-  const Icon = active ? Loader2 : state.status === "completed" ? CheckCircle2 : AlertCircle;
-  const label = active
-    ? state.status === "resolving_labels"
-      ? "Preparing import"
-      : `Importing ${numberFormatter.format(state.completedImageCount)}/${numberFormatter.format(state.totalImageCount)}`
-    : state.status === "completed"
-      ? "Import complete"
-      : state.status === "completed_with_errors"
-        ? "Import finished with failures"
-        : "Import failed";
-
-  return (
-    <div className="flex max-w-80 items-center rounded-full border bg-background/95 text-sm shadow-lg backdrop-blur">
-      <Link
-        href={`/projects/${run.projectId}`}
-        className="flex min-w-0 items-center gap-2 rounded-full px-3 py-1.5 transition-colors hover:bg-accent"
-      >
-        <Icon
-          className={cn(
-            "size-4 shrink-0",
-            active && "animate-spin text-primary",
-            state.status === "completed" && "text-emerald-600",
-            (state.status === "completed_with_errors" || state.status === "failed") && "text-destructive",
-          )}
-          aria-hidden="true"
-        />
-        <span className="truncate">
-          <span className="font-medium">{label}</span>
-          <span className="text-muted-foreground"> · {run.projectName}</span>
-        </span>
-      </Link>
-      {active ? null : (
-        <button
-          type="button"
-          onClick={() => dismissDatasetImport(run.projectId)}
-          className="mr-1 rounded-full p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          aria-label={`Dismiss import into ${run.projectName}`}
-        >
-          <X className="size-3.5" />
-        </button>
-      )}
-    </div>
   );
 }

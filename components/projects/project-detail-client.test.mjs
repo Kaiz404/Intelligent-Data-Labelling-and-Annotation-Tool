@@ -23,7 +23,11 @@ function importRun(status, importedImages = []) {
 function setup({ query: queryPatch = {} } = {}) {
   let slots = [], effects = [];
   let cursor = 0, refreshCount = 0, transitions = 0, aiOptions, run;
-  const navigations = [], queryWrites = [], aiStarts = [], dismissals = [];
+  const navigations = [], queryWrites = [], aiStarts = [], dismissals = [], uploadQueueRequests = [];
+  const uploadListeners = new Set();
+  const uploadQueue = {
+    onComplete(listener) { uploadListeners.add(listener); return () => uploadListeners.delete(listener); },
+  };
   const query = { q: "cat", filter: "all", status: "annotated", labels: "", sort: "name", dir: "descending", ...queryPatch };
   const router = { refresh() { refreshCount++; }, push(value) { navigations.push(value); }, replace(value) { navigations.push(value); } };
   let props = {
@@ -48,7 +52,11 @@ function setup({ query: queryPatch = {} } = {}) {
       useRef(initial) { const index = cursor++; slots[index] ??= { current: initial }; return slots[index]; },
       useEffect(effect, dependencies) {
         const index = cursor++;
-        if (changed(slots[index], dependencies)) { slots[index] = { dependencies }; effects.push(effect); }
+        const previous = slots[index];
+        if (changed(previous, dependencies)) {
+          const slot = slots[index] = { dependencies };
+          effects.push(() => { previous?.cleanup?.(); slot.cleanup = effect(); });
+        }
       },
       useMemo: memo,
       useCallback: (callback, deps) => memo(() => callback, deps),
@@ -64,6 +72,9 @@ function setup({ query: queryPatch = {} } = {}) {
     "@/components/projects/dataset-import-provider": {
       useDatasetImportRun: (projectId) => (run?.projectId === projectId ? run : undefined),
       useDatasetImportActions: () => ({ dismissDatasetImport: (projectId) => dismissals.push(projectId) }),
+    },
+    "@/components/projects/image-upload-provider": {
+      useProjectUploadQueue(projectId, projectName) { uploadQueueRequests.push([projectId, projectName]); return uploadQueue; },
     },
     "@/lib/image-label-filter": {
       parseLabelFilter: () => [], countImagesByLabel: () => new Map(), matchesLabelFilter: () => true, toggleLabelFilter: () => "",
@@ -88,10 +99,12 @@ function setup({ query: queryPatch = {} } = {}) {
   const click = (label) => find((node) => node.type === "Button" && nodes(node.props.children).includes(label)).props.onClick();
   const cards = () => nodes(render()).filter((node) => node?.type === "ImageCard").map((node) => node.props.image);
   return {
-    render, find, dialog, click, cards, query, queryWrites, navigations, aiStarts, dismissals,
+    render, find, dialog, click, cards, query, queryWrites, navigations, aiStarts, dismissals, uploadQueue, uploadQueueRequests,
     refreshCount: () => refreshCount, transitions: () => transitions, aiOptions: () => aiOptions,
     mergeServerProps: (value) => { props = { ...props, ...value }; },
     setRun: (value) => { run = value; },
+    completeUpload: () => { for (const listener of uploadListeners) listener({ imageId: "img", key: "key" }); },
+    unmount: () => { for (const slot of slots) slot?.cleanup?.(); slots = []; },
     remount: () => { slots = []; },
   };
 }
@@ -169,11 +182,12 @@ test("upload and AI project actions retain their own state and callbacks", async
   ui.click("Upload Images");
   const upload = ui.find((node) => node.type === "UploadImagesDialog");
   assert.equal(upload.props.open, true);
-  assert.equal(upload.props.projectId, "project-id");
+  assert.equal(upload.props.store, ui.uploadQueue);
+  assert.deepEqual(ui.uploadQueueRequests.at(-1), ["project-id", "Project"]);
   assert.equal(ui.dialog().props.open, false);
   t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
-  upload.props.onUploadComplete();
-  upload.props.onUploadComplete();
+  ui.completeUpload();
+  ui.completeUpload();
   assert.equal(ui.refreshCount(), 1, "a burst of uploads refreshes once at first");
   t.mock.timers.tick(15_000);
   assert.equal(ui.refreshCount(), 2, "and once more after the interval");
@@ -187,4 +201,32 @@ test("upload and AI project actions retain their own state and callbacks", async
   assert.equal(ui.dialog().props.open, false);
   ui.click("Import Dataset");
   assert.equal(ui.dialog().props.open, true);
+});
+
+test("upload refreshes stop when the page unmounts and resume when it mounts again mid-upload", (t) => {
+  const ui = setup();
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
+  ui.render();
+  ui.completeUpload();
+  assert.equal(ui.refreshCount(), 1);
+
+  ui.unmount();
+  t.mock.timers.tick(15_000);
+  ui.completeUpload();
+  assert.equal(ui.refreshCount(), 1, "an unmounted page does not refresh");
+
+  ui.render();
+  ui.completeUpload();
+  assert.equal(ui.refreshCount(), 2, "the remounted page refreshes for the next image");
+  ui.completeUpload();
+  t.mock.timers.tick(15_000);
+  assert.equal(ui.refreshCount(), 3, "and once more after the last image");
+});
+
+test("the upload banner reads the project's queue and opens the upload dialog", () => {
+  const ui = setup();
+  const banner = ui.find((node) => node.type === "UploadBanner");
+  assert.equal(banner.props.store, ui.uploadQueue);
+  banner.props.onViewDetails();
+  assert.equal(ui.find((node) => node.type === "UploadImagesDialog").props.open, true);
 });

@@ -14,6 +14,7 @@ import {
   useDatasetImportRun,
 } from "@/components/projects/dataset-import-provider";
 import { ImageCard } from "@/components/projects/image-card";
+import { useProjectUploadQueue } from "@/components/projects/image-upload-provider";
 import { ImageTransferDialog, RenameImageDialog } from "@/components/projects/image-action-dialogs";
 import { ImportDatasetDialog } from "@/components/projects/import-dataset-dialog";
 import { LabelFilterMenu } from "@/components/projects/label-filter-menu";
@@ -22,6 +23,7 @@ import {
   SortOrderButton,
   type SortDirection
 } from "@/components/projects/sort-order-button";
+import { UploadBanner } from "@/components/projects/upload-banner";
 import { UploadImagesDialog } from "@/components/projects/upload-images-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -214,6 +216,10 @@ export function ProjectDetailClient({
   useEffect(() => () => {
     if (uploadRefreshTimer.current !== null) clearTimeout(uploadRefreshTimer.current);
   }, []);
+  // The queue outlives this page; only completions while it is mounted refresh.
+  // Not subscribed to its snapshot: that changes every frame during a batch.
+  const uploadQueue = useProjectUploadQueue(serverProject.id, serverProject.name);
+  useEffect(() => uploadQueue.onComplete(refreshAfterUpload), [uploadQueue, refreshAfterUpload]);
 
   // Refresh once labels are resolved (the Label filter needs any new ones)
   // and once the run ends. Only transitions seen here count, so returning to
@@ -463,6 +469,8 @@ export function ProjectDetailClient({
         />
       ) : null}
 
+      <UploadBanner store={uploadQueue} onViewDetails={() => setIsUploadOpen(true)} />
+
       {aiJob ? (
         <AiJobBanner
           job={aiJob}
@@ -651,8 +659,7 @@ export function ProjectDetailClient({
       <UploadImagesDialog
         open={isUploadOpen}
         onOpenChange={setIsUploadOpen}
-        projectId={project.id}
-        onUploadComplete={refreshAfterUpload}
+        store={uploadQueue}
       />
 
       <ImportDatasetDialog

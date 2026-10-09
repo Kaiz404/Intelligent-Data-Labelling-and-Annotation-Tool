@@ -50,6 +50,16 @@ export function formatBytes(bytes: number) {
   return `${value.toFixed(digits)} ${units[exponent]}`;
 }
 
+/** "less than a minute left", "about 12 min left", "about 2 h 5 min left". */
+export function formatTimeLeft(ms: number) {
+  if (ms < 60_000) return "less than a minute left";
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `about ${minutes} min left`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `about ${hours} h left` : `about ${hours} h ${rest} min left`;
+}
+
 const relativeTimeFormat = new Intl.RelativeTimeFormat("en", {
   numeric: "always",
 });
