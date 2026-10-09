@@ -164,23 +164,26 @@ test("another project's run does not reach this page", () => {
   assert.deepEqual(ui.cards().map((card) => card.id), ["cat-1"]);
 });
 
-test("upload and AI project actions retain their own state and callbacks", async () => {
+test("upload and AI project actions retain their own state and callbacks", async (t) => {
   const ui = setup();
   ui.click("Upload Images");
   const upload = ui.find((node) => node.type === "UploadImagesDialog");
   assert.equal(upload.props.open, true);
   assert.equal(upload.props.projectId, "project-id");
   assert.equal(ui.dialog().props.open, false);
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
   upload.props.onUploadComplete();
-  assert.equal(ui.refreshCount(), 1);
-  assert.equal(upload.props.onUploadComplete, ui.aiOptions().onFinished);
+  upload.props.onUploadComplete();
+  assert.equal(ui.refreshCount(), 1, "a burst of uploads refreshes once at first");
+  t.mock.timers.tick(15_000);
+  assert.equal(ui.refreshCount(), 2, "and once more after the interval");
   ui.click("AI Annotate");
   const ai = ui.find((node) => node.type === "BatchAiAnnotateDialog");
   assert.equal(ai.props.open, true);
   assert.deepEqual(ai.props.imageIds, ["cat-1"]);
   await ai.props.onStart({ labels: ["Cat"] });
   assert.deepEqual(ui.aiStarts, [{ projectId: "project-id", labels: ["Cat"] }]);
-  assert.equal(ui.refreshCount(), 1);
+  assert.equal(ui.refreshCount(), 2);
   assert.equal(ui.dialog().props.open, false);
   ui.click("Import Dataset");
   assert.equal(ui.dialog().props.open, true);

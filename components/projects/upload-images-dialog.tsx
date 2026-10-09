@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -22,9 +23,15 @@ import {
   X,
 } from "lucide-react";
 import { formatBytes } from "@/lib/format";
-import { useUploadQueue } from "@/hooks/use-upload-queue";
-import type { UploadQueueItem, UploadTab } from "@/lib/uploads/types";
-import { extractZipImages } from "@/lib/uploads/zip-extractor";
+import { matchesUploadTab, useUploadQueue } from "@/hooks/use-upload-queue";
+import type {
+  UploadEntry,
+  UploadQueueItem,
+  UploadSource,
+  UploadTab,
+} from "@/lib/uploads/types";
+import { uploadEntryFromFile } from "@/lib/uploads/upload-queue";
+import { listZipImages, openUploadSource } from "@/lib/uploads/zip-source";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -117,6 +124,36 @@ function StatusCell({
   );
 }
 
+/** Opened only while its row is on screen, so a ZIP entry is read on demand. */
+function QueueItemPreview({ source }: { source: UploadSource }) {
+  const [preview, setPreview] = useState<{
+    source: UploadSource;
+    url: string;
+  } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let url: string | null = null;
+    openUploadSource(source)
+      .then((blob) => {
+        if (cancelled) return;
+        url = URL.createObjectURL(blob);
+        setPreview({ source, url });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [source]);
+
+  if (preview?.source !== source) return null;
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={preview.url} alt="" className="size-full object-cover" />
+  );
+}
+
 function EditableFileName({
   item,
   disabled,
@@ -191,10 +228,11 @@ export function UploadImagesDialog({
 
   const {
     items,
+    counts,
     selectedIds,
     isRunning,
     summary,
-    addFiles,
+    addEntries,
     renameItem,
     removeItems,
     pauseItem,
@@ -203,7 +241,6 @@ export function UploadImagesDialog({
     retryItem,
     startUploads,
     getTabCount,
-    matchesTab,
     toggleSelected,
     toggleSelectAll,
   } = useUploadQueue({
@@ -214,11 +251,11 @@ export function UploadImagesDialog({
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return items.filter((item) => {
-      if (!matchesTab(item, activeTab)) return false;
+      if (!matchesUploadTab(item, activeTab)) return false;
       if (!q) return true;
       return item.fileName.toLowerCase().includes(q);
     });
-  }, [activeTab, items, matchesTab, search]);
+  }, [activeTab, items, search]);
 
   const visibleTabs = hasStarted ? uploadTabs : uploadTabs.slice(0, 1);
 
@@ -230,7 +267,7 @@ export function UploadImagesDialog({
   );
   const pageIds = pageItems.map((item) => item.id);
   const allPageSelected =
-    pageIds.length > 0 && pageIds.every((id) => selectedIds.includes(id));
+    pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
 
   // An emptied queue starts over (adjusted during render, not one frame late).
   const isEmpty = items.length === 0;
@@ -264,16 +301,18 @@ export function UploadImagesDialog({
     const rawFiles = files.filter((file) => !isZipFile(file));
     setExtractionError(null);
 
+    const rawEntries = rawFiles.map(uploadEntryFromFile);
+
     if (!zipFiles.length) {
-      addFiles(rawFiles);
+      addEntries(rawEntries);
       return;
     }
 
     setIsExtracting(true);
 
     try {
-      const results = await Promise.allSettled(zipFiles.map(extractZipImages));
-      const extractedImages = results.flatMap((result) =>
+      const results = await Promise.allSettled(zipFiles.map(listZipImages));
+      const zipEntries: UploadEntry[] = results.flatMap((result) =>
         result.status === "fulfilled" ? result.value : [],
       );
       const errors = results.flatMap((result) =>
@@ -286,8 +325,8 @@ export function UploadImagesDialog({
           : [],
       );
 
-      // addFiles remains the single source of truth for image MIME and queue-size validation.
-      addFiles([...rawFiles, ...extractedImages]);
+      // addEntries remains the single source of truth for image MIME and queue-size validation.
+      addEntries([...rawEntries, ...zipEntries]);
       if (errors.length) setExtractionError(errors.join(" "));
     } finally {
       setIsExtracting(false);
@@ -400,7 +439,7 @@ export function UploadImagesDialog({
         </div>
 
         {isExtracting ? (
-          <p className="text-sm text-muted-foreground">Extracting ZIP images…</p>
+          <p className="text-sm text-muted-foreground">Reading ZIP…</p>
         ) : null}
         {extractionError ? (
           <p className="text-sm text-destructive" role="alert">
@@ -446,7 +485,7 @@ export function UploadImagesDialog({
                 variant="outline"
                 className="h-[38px] rounded-[10px] text-muted-foreground shadow-sm"
                 onClick={pauseAll}
-                disabled={!items.some((i) => i.status === "Uploading" || i.status === "Queued")}
+                disabled={counts.Uploading + counts.Queued === 0}
               >
                 <CirclePause className="size-5" />
                 Pause All
@@ -541,7 +580,7 @@ export function UploadImagesDialog({
                     <TableRow key={file.id}>
                       <TableCell className="pl-2.5">
                         <Checkbox
-                          checked={selectedIds.includes(file.id)}
+                          checked={selectedIds.has(file.id)}
                           onCheckedChange={(checked) =>
                             toggleSelected(file.id, checked === true)
                           }
@@ -551,14 +590,7 @@ export function UploadImagesDialog({
                       <TableCell>
                         <div className="flex items-center gap-2.5">
                           <div className="size-10 shrink-0 overflow-hidden rounded-[10px] bg-muted">
-                            {file.previewUrl ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                src={file.previewUrl}
-                                alt=""
-                                className="size-full object-cover"
-                              />
-                            ) : null}
+                            <QueueItemPreview source={file.source} />
                           </div>
                           <div className="min-w-0 flex-1">
                             <EditableFileName
@@ -689,12 +721,12 @@ export function UploadImagesDialog({
 
         <DialogFooter className="flex-row items-center sm:justify-between">
           <div className="mr-auto">
-            {selectedIds.length > 0 ? (
+            {selectedIds.size > 0 ? (
               <Button
                 type="button"
                 variant="outline"
                 className="border-destructive text-destructive hover:text-destructive"
-                onClick={() => void removeItems(selectedIds)}
+                onClick={() => void removeItems([...selectedIds])}
               >
                 <Trash2 className="size-4" />
                 Remove
@@ -718,12 +750,7 @@ export function UploadImagesDialog({
               disabled={
                 isExtracting ||
                 isRunning ||
-                !items.some(
-                  (i) =>
-                    Boolean(i.file) &&
-                    i.status !== "Completed" &&
-                    i.status !== "Uploading",
-                )
+                counts.Queued + counts.Paused + counts.Failed === 0
               }
             >
               {isRunning ? "Uploading…" : "Upload"}

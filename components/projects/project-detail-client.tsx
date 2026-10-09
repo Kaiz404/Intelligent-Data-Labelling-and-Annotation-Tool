@@ -89,6 +89,10 @@ type ImageFilterOption = keyof typeof imageFilterOptions;
  * comma-separated label ids (see `lib/image-label-filter.ts`). Unknown values,
  * such as the retired `status=in-progress`, fall back to their default.
  */
+// Each refresh reloads every image, so a large batch refreshes the page at
+// most this often while it uploads, and once more after the last image.
+const UPLOAD_REFRESH_INTERVAL_MS = 15_000;
+
 const QUERY_DEFAULTS = {
   q: "",
   filter: "all",
@@ -193,6 +197,23 @@ export function ProjectDetailClient({
     // payload into this client boundary.
     startTransition(() => router.refresh());
   }, [router]);
+
+  const lastUploadRefresh = useRef(0);
+  const uploadRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshAfterUpload = useCallback(() => {
+    if (uploadRefreshTimer.current !== null) return;
+    const run = () => {
+      uploadRefreshTimer.current = null;
+      lastUploadRefresh.current = Date.now();
+      refresh();
+    };
+    const delay = lastUploadRefresh.current + UPLOAD_REFRESH_INTERVAL_MS - Date.now();
+    if (delay <= 0) run();
+    else uploadRefreshTimer.current = setTimeout(run, delay);
+  }, [refresh]);
+  useEffect(() => () => {
+    if (uploadRefreshTimer.current !== null) clearTimeout(uploadRefreshTimer.current);
+  }, []);
 
   // Refresh once labels are resolved (the Label filter needs any new ones)
   // and once the run ends. Only transitions seen here count, so returning to
@@ -631,7 +652,7 @@ export function ProjectDetailClient({
         open={isUploadOpen}
         onOpenChange={setIsUploadOpen}
         projectId={project.id}
-        onUploadComplete={refresh}
+        onUploadComplete={refreshAfterUpload}
       />
 
       <ImportDatasetDialog

@@ -1,4 +1,5 @@
 import { createThumbhash } from "@/lib/image-placeholder";
+import { openUploadSource } from "@/lib/uploads/zip-source";
 import {
   resolveChunkSizeForFile,
   sliceChunk,
@@ -81,7 +82,7 @@ async function requestApi<T>(
 
 function progressEvent(
   item: UploadQueueItem,
-  file: File,
+  file: Blob,
   completedParts: Map<number, string>,
   chunksByPart: Map<number, { size: number }>,
   uploadId: string,
@@ -152,7 +153,7 @@ async function uploadPresignedBatch({
 }: {
   chunks: Array<{ index: number; start: number; end: number; size: number }>;
   urls: Map<number, string>;
-  file: File;
+  file: Blob;
   signal: AbortSignal;
   completedParts: Map<number, string>;
   onPartComplete: () => void;
@@ -213,12 +214,13 @@ export function createS3Uploader(options?: {
       item: UploadQueueItem,
       context: UploadStartContext,
     ): Promise<UploadResult> {
-      const file = item.file;
-      if (!file) throw new Error(`Missing File handle for ${item.fileName}.`);
       if (maxConcurrentChunks < 1) {
         throw new Error("maxConcurrentChunks must be at least 1.");
       }
 
+      throwIfAborted(context.signal);
+      // Opened per attempt so a ZIP entry's bytes live only while it uploads.
+      const file = await openUploadSource(item.source);
       throwIfAborted(context.signal);
       // Hashed while the bytes upload; a failure only means no placeholder.
       const thumbhash = createThumbhash(file).catch(() => null);
@@ -230,8 +232,8 @@ export function createS3Uploader(options?: {
           "/api/uploads/create",
           {
             projectId: context.projectId,
-            fileName: file.name,
-            contentType: file.type,
+            fileName: item.fileName,
+            contentType: item.mimeType,
             sizeBytes: file.size,
           },
           context.signal,
@@ -298,8 +300,8 @@ export function createS3Uploader(options?: {
           key,
           uploadId,
           parts,
-          fileName: file.name,
-          contentType: file.type,
+          fileName: item.fileName,
+          contentType: item.mimeType,
           sizeBytes: file.size,
           thumbhash: hash,
         },

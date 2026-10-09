@@ -28,6 +28,28 @@ export type CompletedUploadPart = {
   eTag: string;
 };
 
+/** One entry of a ZIP archive, read from the archive only when it uploads. */
+export type ZipEntrySource = {
+  kind: "zip";
+  archive: File;
+  localHeaderOffset: number;
+  compressedSize: number;
+  uncompressedSize: number;
+  /** Deflated; otherwise stored, and the bytes are a slice of the archive. */
+  compressed: boolean;
+};
+
+/** Where an upload's bytes come from (`openUploadSource` in `zip-source.ts`). */
+export type UploadSource = { kind: "file"; file: File } | ZipEntrySource;
+
+/** An image to add to the queue. */
+export type UploadEntry = {
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  source: UploadSource;
+};
+
 /**
  * Queue item shown in the upload modal.
  *
@@ -45,9 +67,7 @@ export type UploadQueueItem = {
   /** 0–100 overall file progress (sum of completed + in-flight chunks). */
   progress: number;
   error?: string;
-  /** Local File handle — required for chunk reads. Cleared after success optional. */
-  file?: File;
-  previewUrl?: string;
+  source: UploadSource;
   /** S3 multipart upload id (set by provider once CreateMultipartUpload returns). */
   uploadId?: string;
   /** Destination object key (e.g. `projects/{projectId}/images/{uuid}.jpg`). */

@@ -122,7 +122,7 @@ export async function runDatasetImport({ projectId, plan, provider, onChange }: 
           const result = await uploader.upload({
             id: `dataset-upload-${crypto.randomUUID()}`,
             fileName: image.file.name, sizeBytes: image.file.size,
-            mimeType: image.file.type, file: image.file,
+            mimeType: image.file.type, source: { kind: "file", file: image.file },
             status: "Queued", progress: 0,
           }, {
             projectId, signal: new AbortController().signal,
