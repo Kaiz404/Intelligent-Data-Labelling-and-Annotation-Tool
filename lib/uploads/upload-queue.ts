@@ -19,6 +19,8 @@ export type UploadQueueSnapshot = {
 type UploadQueueOptions = {
   provider: UploadProvider;
   maxConcurrentFiles: number;
+  /** Uploads start only while their combined size fits, though one always may. */
+  maxInFlightBytes?: number;
   getProjectId: () => string;
   onUploadComplete?: (result: { imageId: string; key: string }) => void;
   /** Batches change notifications; defaults to one per animation frame. */
@@ -50,6 +52,7 @@ export function uploadEntryFromFile(file: File): UploadEntry {
 export function createUploadQueueStore({
   provider,
   maxConcurrentFiles,
+  maxInFlightBytes = Infinity,
   getProjectId,
   onUploadComplete,
   scheduleNotify = (notify) => requestAnimationFrame(notify),
@@ -63,6 +66,8 @@ export function createUploadQueueStore({
   /** Ids waiting for an upload slot, in the order they were queued. */
   const waiting = new Set<string>();
   const controllers = new Map<string, AbortController>();
+  /** Size of the uploads whose `run` has not settled yet. */
+  let inFlightBytes = 0;
   const listeners = new Set<() => void>();
   let snapshot: UploadQueueSnapshot = {
     items,
@@ -122,6 +127,7 @@ export function createUploadQueueStore({
   async function run(item: UploadQueueItem) {
     const controller = new AbortController();
     controllers.set(item.id, controller);
+    inFlightBytes += item.sizeBytes;
     patch(item.id, { status: "Uploading", error: undefined });
 
     try {
@@ -155,17 +161,21 @@ export function createUploadQueueStore({
       }
     } finally {
       if (controllers.get(item.id) === controller) controllers.delete(item.id);
+      inFlightBytes -= item.sizeBytes;
       pump();
     }
   }
 
-  /** Fills free upload slots from the waiting items. */
+  /** Fills free upload slots from the waiting items, in queue order. */
   function pump() {
     if (!isRunning) return;
     for (const id of waiting) {
       if (controllers.size >= maxConcurrentFiles) break;
       const index = indexById.get(id);
-      if (index !== undefined) void run(items[index]);
+      if (index === undefined) continue;
+      const item = items[index];
+      if (inFlightBytes > 0 && inFlightBytes + item.sizeBytes > maxInFlightBytes) break;
+      void run(item);
     }
     if (controllers.size === 0 && waiting.size === 0) setRunning(false);
   }
@@ -196,10 +206,10 @@ export function createUploadQueueStore({
 
     await Promise.all(
       doomed
-        .filter((item) => item.status !== "Completed" && item.uploadId)
+        .filter((item) => item.status !== "Completed" && item.key)
         .map((item) =>
           // Removing a local queue item should still succeed when the
-          // best-effort server-side multipart cleanup is unavailable.
+          // best-effort server-side cleanup is unavailable.
           provider.abort?.(item).catch(() => {}),
         ),
     );
@@ -219,7 +229,7 @@ export function createUploadQueueStore({
     add(entries: UploadEntry[]) {
       const accepted: UploadQueueItem[] = [];
       for (const entry of entries) {
-        if (!isAcceptedImage(entry)) continue;
+        if (!isAcceptedImage(entry) || entry.sizeBytes === 0) continue;
         if (totalBytes + entry.sizeBytes > MAX_TOTAL_UPLOAD_BYTES) break;
         totalBytes += entry.sizeBytes;
         accepted.push({

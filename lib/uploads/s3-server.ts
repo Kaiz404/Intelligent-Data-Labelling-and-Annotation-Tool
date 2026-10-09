@@ -11,15 +11,25 @@ import {
   S3Client,
   UploadPartCommand,
 } from "@aws-sdk/client-s3";
+import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { isThumbhash } from "@/lib/image-placeholder";
 import { createClient } from "@/lib/supabase/server";
+import { objectKeyFileName } from "@/lib/uploads/object-key";
+import {
+  MAX_COMMIT_IMAGES,
+  SINGLE_REQUEST_UPLOAD_MAX_BYTES,
+} from "@/lib/uploads/types";
 
 const MAX_PART_NUMBER = 10_000;
 const MAX_PRESIGNED_PARTS = 50;
+const UPLOAD_POLICY_SECONDS = 60 * 60;
 const MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024 * 1024;
 const MAX_THUMBNAIL_SIZE_BYTES = 5 * 1024 * 1024;
 const ALLOWED_CONTENT_TYPES = new Set(["image/jpeg", "image/png"]);
+const MAX_FILE_NAME_LENGTH = 255;
+// Keeps each lookup's URL well under the request-line limits in front of PostgREST.
+const KEY_LOOKUP_CHUNK_SIZE = 25;
 
 export class UploadApiError extends Error {
   constructor(
@@ -136,16 +146,177 @@ export function objectKeyBelongsToProject(key: unknown, projectId: string) {
 }
 
 export function createObjectKey(projectId: string, fileName: string) {
-  const sanitizedName = fileName
-    .replace(/[^a-zA-Z0-9._ -]/g, "_")
-    .replace(/\s+/g, " ")
-    .trim();
+  const name = objectKeyFileName(fileName);
 
-  if (!sanitizedName || sanitizedName === "." || sanitizedName === "..") {
+  if (!name) {
     throw new UploadApiError("fileName is invalid.", 400);
   }
 
-  return `projects/${projectId}/images/${crypto.randomUUID()}/${sanitizedName}`;
+  return `projects/${projectId}/images/${crypto.randomUUID()}/${name}`;
+}
+
+/**
+ * One signed S3 POST policy that lets the browser upload any number of small
+ * images straight into the project's image folder for an hour, so an image
+ * costs a single S3 request and no app request of its own. POST with form
+ * data also skips the CORS preflight a presigned PUT needs.
+ */
+export async function createUploadPolicy(input: Record<string, unknown>) {
+  const { projectId } = await requireOwnedProject(input.projectId);
+  const { bucket } = getS3Config();
+  const keyPrefix = `projects/${projectId}/images/`;
+  const { url, fields } = await createPresignedPost(getS3Client(), {
+    Bucket: bucket,
+    Key: `${keyPrefix}\${filename}`,
+    Conditions: [
+      ["starts-with", "$Content-Type", "image/"],
+      ["content-length-range", 1, SINGLE_REQUEST_UPLOAD_MAX_BYTES],
+    ],
+    Expires: UPLOAD_POLICY_SECONDS,
+  });
+
+  return { url, fields, keyPrefix, expiresInSeconds: UPLOAD_POLICY_SECONDS };
+}
+
+type CommitResult = { key: string; imageId: string } | { key: string; error: string };
+
+/**
+ * Saves image rows for objects the browser uploaded with the upload policy.
+ * Size and type come from S3, not the request, and a key that already has a
+ * row returns that row, so a retried request is safe.
+ */
+export async function commitUploadedImages(input: Record<string, unknown>) {
+  const { projectId, supabase } = await requireOwnedProject(input.projectId);
+
+  if (
+    !Array.isArray(input.images) ||
+    !input.images.length ||
+    input.images.length > MAX_COMMIT_IMAGES
+  ) {
+    throw new UploadApiError(
+      `images must list between 1 and ${MAX_COMMIT_IMAGES} uploads.`,
+      400,
+    );
+  }
+
+  const requested = input.images.map((image) => {
+    const record = (image ?? {}) as Record<string, unknown>;
+    if (typeof record.key !== "string") {
+      throw new UploadApiError("Each image needs a key.", 400);
+    }
+    const name = typeof record.fileName === "string" ? record.fileName.trim() : "";
+    return {
+      key: record.key,
+      name,
+      thumbhash: isThumbhash(record.thumbhash) ? record.thumbhash : null,
+      error: !objectKeyBelongsToProject(record.key, projectId)
+        ? "Invalid upload object key."
+        : !name || name.length > MAX_FILE_NAME_LENGTH
+          ? "The file name is invalid."
+          : null,
+    };
+  });
+  const keys = requested.map((image) => image.key);
+  if (new Set(keys).size !== keys.length) {
+    throw new UploadApiError("images must not repeat a key.", 400);
+  }
+
+  const { bucket } = getS3Config();
+  const client = getS3Client();
+  const stored = await Promise.all(
+    requested.map(async (image): Promise<
+      { contentType: string; sizeBytes: number } | { error: string }
+    > => {
+      if (image.error) return { error: image.error };
+      try {
+        const head = await client.send(
+          new HeadObjectCommand({ Bucket: bucket, Key: image.key }),
+        );
+        const error =
+          !head.ContentType || !ALLOWED_CONTENT_TYPES.has(head.ContentType)
+            ? "Only JPEG and PNG files are supported."
+            : !head.ContentLength
+              ? "The uploaded file is empty."
+              : null;
+        if (error) {
+          // Saved images are always JPEG or PNG with bytes, so no row uses this object.
+          await client
+            .send(new DeleteObjectCommand({ Bucket: bucket, Key: image.key }))
+            .catch(() => {});
+          return { error };
+        }
+        return { contentType: head.ContentType!, sizeBytes: head.ContentLength! };
+      } catch (error) {
+        return {
+          error:
+            error instanceof Error && error.name === "NotFound"
+              ? "The uploaded file was not found."
+              : "Could not check the uploaded file.",
+        };
+      }
+    }),
+  );
+
+  const rows = requested.flatMap((image, index) => {
+    const object = stored[index];
+    return "error" in object
+      ? []
+      : [{
+          project_id: projectId,
+          name: image.name,
+          object_key: image.key,
+          content_type: object.contentType,
+          size_bytes: object.sizeBytes,
+          thumbhash: image.thumbhash,
+        }];
+  });
+  const imageIds = new Map<string, string>();
+
+  if (rows.length) {
+    const { data: inserted, error } = await supabase
+      .from("images")
+      .upsert(rows, { onConflict: "object_key", ignoreDuplicates: true })
+      .select("id, object_key");
+    if (error) {
+      throw new UploadApiError("The uploaded images could not be saved.", 500);
+    }
+    for (const row of inserted ?? []) imageIds.set(row.object_key, row.id);
+
+    // Rows a previous attempt of this request already saved.
+    const existingKeys = rows
+      .map((row) => row.object_key)
+      .filter((key) => !imageIds.has(key));
+    const lookups: string[][] = [];
+    for (let start = 0; start < existingKeys.length; start += KEY_LOOKUP_CHUNK_SIZE) {
+      lookups.push(existingKeys.slice(start, start + KEY_LOOKUP_CHUNK_SIZE));
+    }
+    const found = await Promise.all(
+      lookups.map((chunk) =>
+        supabase
+          .from("images")
+          .select("id, object_key")
+          .eq("project_id", projectId)
+          .in("object_key", chunk),
+      ),
+    );
+    for (const { data: existing, error: existingError } of found) {
+      if (existingError) {
+        throw new UploadApiError("The uploaded images could not be saved.", 500);
+      }
+      for (const row of existing ?? []) imageIds.set(row.object_key, row.id);
+    }
+  }
+
+  const images: CommitResult[] = requested.map((image, index) => {
+    const object = stored[index];
+    if ("error" in object) return { key: image.key, error: object.error };
+    const imageId = imageIds.get(image.key);
+    return imageId
+      ? { key: image.key, imageId }
+      : { key: image.key, error: "The uploaded image could not be saved." };
+  });
+
+  return { projectId, images };
 }
 
 export async function createMultipartUpload(input: Record<string, unknown>) {
@@ -538,6 +709,26 @@ export async function abortMultipartUpload(input: Record<string, unknown>) {
       UploadId: uploadId,
     }),
   );
+}
+
+/**
+ * Deletes an object the browser POSTed but never asked to save, such as a
+ * removed or cancelled upload. A key that has a row is a saved image and stays.
+ */
+export async function discardUploadedObject(input: Record<string, unknown>) {
+  const { key, projectId } = projectIdFromObjectKey(input.key);
+  const { supabase } = await requireOwnedProject(projectId);
+  const { data, error } = await supabase
+    .from("images")
+    .select("id")
+    .eq("object_key", key)
+    .limit(1);
+
+  if (error) {
+    throw new UploadApiError("Could not check the upload.", 500);
+  }
+  if (data.length) return;
+  await deleteImageObject(key);
 }
 
 export function errorResponse(error: unknown) {

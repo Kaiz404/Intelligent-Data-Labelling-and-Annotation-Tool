@@ -15,7 +15,10 @@ import type {
   UploadQueueItem,
   UploadTab,
 } from "@/lib/uploads/types";
-import { DEFAULT_MAX_CONCURRENT_FILES } from "@/lib/uploads/types";
+import {
+  UPLOAD_QUEUE_MAX_CONCURRENT_FILES,
+  UPLOAD_QUEUE_MAX_IN_FLIGHT_BYTES,
+} from "@/lib/uploads/types";
 import { toPercent } from "@/lib/format";
 
 type UseUploadQueueOptions = {
@@ -40,7 +43,7 @@ export function matchesUploadTab(item: UploadQueueItem, tab: UploadTab) {
 export function useUploadQueue({
   projectId,
   provider,
-  maxConcurrentFiles = DEFAULT_MAX_CONCURRENT_FILES,
+  maxConcurrentFiles = UPLOAD_QUEUE_MAX_CONCURRENT_FILES,
   onUploadComplete,
 }: UseUploadQueueOptions) {
   const projectIdRef = useRef(projectId);
@@ -52,6 +55,7 @@ export function useUploadQueue({
     createUploadQueueStore({
       provider: provider ?? createUploadProvider(),
       maxConcurrentFiles,
+      maxInFlightBytes: UPLOAD_QUEUE_MAX_IN_FLIGHT_BYTES,
       getProjectId: () => projectIdRef.current,
       onUploadComplete: (result) => onUploadCompleteRef.current?.(result),
     }),

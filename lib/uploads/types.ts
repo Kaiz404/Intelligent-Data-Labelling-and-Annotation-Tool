@@ -108,8 +108,8 @@ export type UploadStartContext = {
 /**
  * Pluggable upload backend.
  *
- * Implementations must upload in chunks (see `lib/uploads/chunk.ts`) so large
- * batches (multi-GB) stay memory-safe and resumable.
+ * Implementations must upload large files in chunks (see `lib/uploads/chunk.ts`)
+ * so multi-GB files stay memory-safe and resumable.
  */
 export type UploadProvider = {
   /**
@@ -128,5 +128,16 @@ export type UploadProvider = {
 export const DEFAULT_CHUNK_SIZE_BYTES = 8 * 1024 * 1024; // 8 MiB — typical S3 part size
 export const DEFAULT_MAX_CONCURRENT_FILES = 3;
 export const DEFAULT_MAX_CONCURRENT_CHUNKS = 4;
+/**
+ * The upload dialog keeps many small images in flight, because each one spends
+ * most of its time waiting on a batched save rather than sending bytes. The
+ * byte budget holds large files to a few at a time.
+ */
+export const UPLOAD_QUEUE_MAX_CONCURRENT_FILES = 64;
+export const UPLOAD_QUEUE_MAX_IN_FLIGHT_BYTES = 256 * 1024 * 1024;
+/** Files up to this size upload in one S3 POST; larger ones use multipart. */
+export const SINGLE_REQUEST_UPLOAD_MAX_BYTES = DEFAULT_CHUNK_SIZE_BYTES;
+/** Image rows saved per `/api/uploads/commit` request. */
+export const MAX_COMMIT_IMAGES = 100;
 export const MAX_TOTAL_UPLOAD_BYTES = 15 * 1024 * 1024 * 1024; // 15 GB (matches UI copy)
 export const ACCEPTED_IMAGE_TYPES = ["image/jpeg", "image/png"] as const;

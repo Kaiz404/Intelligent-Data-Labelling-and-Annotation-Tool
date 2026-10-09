@@ -1,4 +1,5 @@
 import { createThumbhash } from "@/lib/image-placeholder";
+import { objectKeyFileName } from "@/lib/uploads/object-key";
 import { openUploadSource } from "@/lib/uploads/zip-source";
 import {
   resolveChunkSizeForFile,
@@ -16,14 +17,40 @@ import type {
 import {
   DEFAULT_CHUNK_SIZE_BYTES,
   DEFAULT_MAX_CONCURRENT_CHUNKS,
+  MAX_COMMIT_IMAGES,
+  SINGLE_REQUEST_UPLOAD_MAX_BYTES,
 } from "@/lib/uploads/types";
 
 const PRESIGN_BATCH_SIZE = 50;
 const MAX_PUT_ATTEMPTS = 3;
+const MAX_COMMIT_ATTEMPTS = 3;
+/** How long a save waits for more finished images to share its request. */
+const COMMIT_BATCH_WAIT_MS = 250;
+/** A policy this close to expiry is replaced before use. */
+const POLICY_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+/** Decoding is the costly part of hashing, so few images decode at once. */
+const MAX_CONCURRENT_THUMBHASHES = 4;
 
 type CreateResponse = { uploadId: string; key: string };
 type PresignResponse = { parts: Array<{ partNumber: number; url: string }> };
 type CompleteResponse = { key: string; imageId: string };
+type UploadPolicy = {
+  url: string;
+  fields: Record<string, string>;
+  keyPrefix: string;
+  expiresInSeconds: number;
+};
+type CommitRequest = { key: string; fileName: string; thumbhash: string | null };
+type CommitResult = { key: string; imageId?: string; error?: string };
+
+class UploadRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
 
 function abortError() {
   return new DOMException("Aborted", "AbortError");
@@ -73,7 +100,7 @@ async function requestApi<T>(
       typeof payload.error === "string"
         ? payload.error
         : `Upload API request failed (${response.status}).`;
-    throw new Error(message);
+    throw new UploadRequestError(message, response.status);
   }
 
   if (response.status === 204) return undefined as T;
@@ -196,9 +223,125 @@ async function uploadPresignedBatch({
   if (failure) throw failure;
 }
 
+/** Runs at most `limit` calls of `task` at once. */
+function limitConcurrency<In, Out>(
+  limit: number,
+  task: (input: In) => Promise<Out>,
+) {
+  let active = 0;
+  const queue: Array<() => void> = [];
+  return async (input: In) => {
+    if (active >= limit) {
+      await new Promise<void>((resolve) => queue.push(resolve));
+    }
+    active += 1;
+    try {
+      return await task(input);
+    } finally {
+      active -= 1;
+      queue.shift()?.();
+    }
+  };
+}
+
 /**
- * Browser-side S3 multipart uploader. File bytes never pass through Next.js:
- * the app API authorizes each lifecycle operation and S3 receives direct PUTs.
+ * Collects calls into one `send` of up to `maxSize` inputs, sent when full or
+ * `waitMs` after the first. A call aborted before its batch is sent leaves the
+ * batch; once sent, its result is returned regardless.
+ */
+function createBatcher<In, Out>(
+  send: (inputs: In[]) => Promise<Out[]>,
+  maxSize: number,
+  waitMs: number,
+) {
+  type Entry = {
+    input: In;
+    resolve: (output: Out) => void;
+    reject: (error: unknown) => void;
+    detach: () => void;
+  };
+  let pending: Entry[] = [];
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  function flush() {
+    clearTimeout(timer);
+    timer = undefined;
+    const batch = pending;
+    pending = [];
+    if (!batch.length) return;
+    for (const entry of batch) entry.detach();
+    send(batch.map((entry) => entry.input)).then(
+      (outputs) => batch.forEach((entry, index) => entry.resolve(outputs[index])),
+      (error) => batch.forEach((entry) => entry.reject(error)),
+    );
+  }
+
+  return (input: In, signal: AbortSignal) =>
+    new Promise<Out>((resolve, reject) => {
+      if (signal.aborted) {
+        reject(abortError());
+        return;
+      }
+      const onAbort = () => {
+        pending = pending.filter((other) => other !== entry);
+        reject(abortError());
+      };
+      const entry: Entry = {
+        input,
+        resolve,
+        reject,
+        detach: () => signal.removeEventListener("abort", onAbort),
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      pending.push(entry);
+      if (pending.length >= maxSize) flush();
+      else timer ??= setTimeout(flush, waitMs);
+    });
+}
+
+/** Retries a request that failed on the network or with a server error. */
+async function withRequestRetry<T>(request: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await request();
+    } catch (error) {
+      const retryable =
+        !(error instanceof UploadRequestError) || error.status >= 500;
+      if (!retryable || attempt >= MAX_COMMIT_ATTEMPTS) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 500 * 2 ** (attempt - 1)));
+    }
+  }
+}
+
+async function postObject(
+  policy: UploadPolicy,
+  key: string,
+  file: Blob,
+  contentType: string,
+  signal: AbortSignal,
+) {
+  const form = new FormData();
+  for (const [name, value] of Object.entries(policy.fields)) {
+    form.append(name, value);
+  }
+  form.set("key", key);
+  form.append("Content-Type", contentType);
+  // S3 ignores every field after the file.
+  form.append("file", file);
+  const response = await fetch(policy.url, { method: "POST", body: form, signal });
+  if (!response.ok) {
+    throw new UploadRequestError(
+      `S3 upload failed (${response.status}).`,
+      response.status,
+    );
+  }
+}
+
+/**
+ * Browser-side S3 uploader. File bytes never pass through Next.js: files up to
+ * SINGLE_REQUEST_UPLOAD_MAX_BYTES go in one POST under a shared upload policy
+ * and are saved in batches; larger files use multipart PUTs, each step
+ * authorized by the app API.
  */
 export function createS3Uploader(options?: {
   chunkSizeBytes?: number;
@@ -208,6 +351,124 @@ export function createS3Uploader(options?: {
     options?.chunkSizeBytes ?? DEFAULT_CHUNK_SIZE_BYTES;
   const maxConcurrentChunks =
     options?.maxConcurrentChunks ?? DEFAULT_MAX_CONCURRENT_CHUNKS;
+  const hashImage = limitConcurrency(MAX_CONCURRENT_THUMBHASHES, createThumbhash);
+  const policies = new Map<
+    string,
+    { policy: Promise<UploadPolicy>; expiresAt: number }
+  >();
+  const commitBatchers = new Map<
+    string,
+    (input: CommitRequest, signal: AbortSignal) => Promise<CommitResult>
+  >();
+  /** Keys whose save was sent, so their image may exist even if never confirmed. */
+  const sentKeys = new Set<string>();
+
+  function uploadPolicy(projectId: string) {
+    const cached = policies.get(projectId);
+    if (cached && cached.expiresAt - Date.now() > POLICY_REFRESH_MARGIN_MS) {
+      return cached.policy;
+    }
+    const requestedAt = Date.now();
+    const entry = {
+      policy: requestApi<UploadPolicy>("/api/uploads/policy", { projectId }),
+      expiresAt: Infinity,
+    };
+    policies.set(projectId, entry);
+    entry.policy.then(
+      (policy) => {
+        entry.expiresAt = requestedAt + policy.expiresInSeconds * 1000;
+      },
+      () => {
+        if (policies.get(projectId) === entry) policies.delete(projectId);
+      },
+    );
+    return entry.policy;
+  }
+
+  function commitImage(
+    projectId: string,
+    input: CommitRequest,
+    signal: AbortSignal,
+  ) {
+    let commit = commitBatchers.get(projectId);
+    if (!commit) {
+      commit = createBatcher<CommitRequest, CommitResult>(
+        async (images) => {
+          for (const image of images) sentKeys.add(image.key);
+          const { images: results } = await withRequestRetry(() =>
+            requestApi<{ images: CommitResult[] }>("/api/uploads/commit", {
+              projectId,
+              images,
+            }),
+          );
+          return results;
+        },
+        MAX_COMMIT_IMAGES,
+        COMMIT_BATCH_WAIT_MS,
+      );
+      commitBatchers.set(projectId, commit);
+    }
+    return commit(input, signal);
+  }
+
+  /** Small files: one S3 POST, then a save batched with other images. */
+  async function uploadSingle(
+    item: UploadQueueItem,
+    file: Blob,
+    context: UploadStartContext,
+  ): Promise<UploadResult> {
+    const thumbhash = hashImage(file).catch(() => null);
+    // A key without an uploadId means an earlier attempt already stored the bytes.
+    let key = item.key;
+    if (!key) {
+      const name = objectKeyFileName(item.fileName);
+      if (!name) throw new Error("The file name is invalid.");
+      let policy = await uploadPolicy(context.projectId);
+      throwIfAborted(context.signal);
+      key = `${policy.keyPrefix}${crypto.randomUUID()}/${name}`;
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          await postObject(policy, key, file, item.mimeType, context.signal);
+          break;
+        } catch (error) {
+          if (context.signal.aborted) throw abortError();
+          if (attempt >= MAX_PUT_ATTEMPTS) throw error;
+          // An expired or rejected policy answers 403; a fresh one may work.
+          if (error instanceof UploadRequestError && error.status === 403) {
+            policies.delete(context.projectId);
+          }
+          await wait(250 * 2 ** (attempt - 1), context.signal);
+          policy = await uploadPolicy(context.projectId);
+        }
+      }
+      context.onProgress({
+        fileId: item.id,
+        bytesUploaded: file.size,
+        totalBytes: file.size,
+        progress: 100,
+        key,
+      });
+    }
+
+    const hash = await thumbhash;
+    const committed = await commitImage(
+      context.projectId,
+      { key, fileName: item.fileName, thumbhash: hash },
+      context.signal,
+    );
+    if (!committed.imageId) {
+      // The server refused these bytes, so a retry uploads them again.
+      context.onProgress({
+        fileId: item.id,
+        bytesUploaded: 0,
+        totalBytes: file.size,
+        progress: 0,
+        key: undefined,
+      });
+      throw new Error(committed.error ?? "The uploaded image could not be saved.");
+    }
+    return { fileId: item.id, key, imageId: committed.imageId, thumbhash: hash };
+  }
 
   return {
     async upload(
@@ -222,8 +483,11 @@ export function createS3Uploader(options?: {
       // Opened per attempt so a ZIP entry's bytes live only while it uploads.
       const file = await openUploadSource(item.source);
       throwIfAborted(context.signal);
+      if (!item.uploadId && file.size <= SINGLE_REQUEST_UPLOAD_MAX_BYTES) {
+        return uploadSingle(item, file, context);
+      }
       // Hashed while the bytes upload; a failure only means no placeholder.
-      const thumbhash = createThumbhash(file).catch(() => null);
+      const thumbhash = hashImage(file).catch(() => null);
       let uploadId = item.uploadId;
       let key = item.key;
 
@@ -318,7 +582,13 @@ export function createS3Uploader(options?: {
     },
 
     async abort(item: UploadQueueItem) {
-      if (!item.uploadId || !item.key) return;
+      if (!item.key) return;
+      if (!item.uploadId) {
+        // Without a sent save, the POSTed object would stay in S3 with no row.
+        if (sentKeys.has(item.key)) return;
+        await requestApi<undefined>("/api/uploads/abort", { key: item.key });
+        return;
+      }
       await requestApi<undefined>("/api/uploads/abort", {
         key: item.key,
         uploadId: item.uploadId,
