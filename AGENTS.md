@@ -54,7 +54,7 @@ Image annotation workspace for managing projects and annotating image datasets.
 | Theming | `next-themes` | Light / dark / system via `ThemeProvider` in root layout |
 | Linting | ESLint 9 flat config | `eslint.config.mjs` |
 
-**Origin:** Forked from the [Next.js + Supabase starter](https://github.com/vercel/next.js/tree/canary/examples/with-supabase). `README.md` is still the upstream starter template and is **not** the source of truth for this app.
+**Origin:** Forked from the [Next.js + Supabase starter](https://github.com/vercel/next.js/tree/canary/examples/with-supabase). `README.md` is the human-facing overview, setup and deployment guide (screenshots in `docs/screenshots/`); this file stays the detailed reference.
 
 ---
 
@@ -107,7 +107,8 @@ data_annotation_tool/
 │   ├── projects.ts         # Project loaders: summaries + thumbnails/card covers for list pages, export data (server-only)
 │   ├── recycle-bin.ts      # Recycle Bin listing, lazy purge, permanent deletion (server-only)
 │   └── utils.ts            # cn() — clsx + tailwind-merge
-├── supabase/               # Local Supabase CLI config + migrations (GITIGNORED — see below)
+├── docs/                   # README images: dark-mode logo variant, app screenshots
+├── supabase/               # Supabase CLI config.toml + migrations/ (baseline schema, then incremental changes — see Database)
 ├── proxy.ts                # Auth session proxy entry (replaces middleware.ts)
 ├── components.json         # shadcn/ui config
 └── AGENTS.md               # This file
@@ -201,7 +202,7 @@ Request → proxy.ts → lib/supabase/proxy.ts (updateSession)
 
 ## Database
 
-### Schema (inferred from app code + local migrations)
+### Schema (`supabase/migrations/`)
 
 **`projects` table:**
 - `id` UUID (PK)
@@ -210,18 +211,18 @@ Request → proxy.ts → lib/supabase/proxy.ts (updateSession)
 - `starred` boolean (default false)
 - `created_at`, `updated_at` timestamptz
 - `user_id` UUID (NOT NULL) → `auth.users(id)` — canonical ownership field
-- Legacy `owner_id` remains populated on older rows but is not used by app queries or RLS.
+- Legacy `owner_id` remains populated on older rows, and a `modified_at` column exists; neither is used by app queries or RLS.
 
 **`images` table:**
 - `id` UUID (PK)
-- `project_id` UUID → `projects(id)` (ON DELETE CASCADE)
+- `project_id` UUID → `projects(id)` (ON DELETE CASCADE); its `gen_random_uuid()` default is a dashboard leftover, so inserts must always set it
 - `name` text (NOT NULL)
 - `object_key` text (NOT NULL, UNIQUE) — private S3 key, never an expiring URL
 - `content_type` text (`image/jpeg` or `image/png`)
 - `size_bytes` bigint (> 0)
 - `created_at`, `modified_at` timestamptz — `saveImageAnnotations` sets `modified_at`, so it is the "last annotated" time on `/annotate` and the workspace's "Last saved" for images that already have saved boxes (`ProjectImage.modifiedAt`); app inserts (upload, copy/move) leave the column default. `fetchImageStats` takes the latest of both per project as its activity time
 - `annotation` jsonb (durable bounding-box array; sessionStorage remains a client draft backup)
-- `thumbhash` text (nullable): base64 ThumbHash placeholder. The browser uploader computes it from the local file and sends it with `/api/uploads/complete`; copies and moves carry it over; the workspace backfills older images (`saveImageThumbhash`). Migration `20261004150000_add_image_thumbhash.sql`
+- `thumbhash` text (nullable): base64 ThumbHash placeholder. The browser uploader computes it from the local file and sends it with `/api/uploads/complete`; copies and moves carry it over; the workspace backfills older images (`saveImageThumbhash`)
 - Legacy nullable `notes` and `url` columns remain but are not used by the app.
 
 **`project_labels` table:**
@@ -244,7 +245,7 @@ Request → proxy.ts → lib/supabase/proxy.ts (updateSession)
 - `suggestions` jsonb — pending AI boxes (`BoundingBox` + `confidence`) awaiting review; shrinks as the user accepts/rejects; `suggestion_count` is a generated column. Accepted boxes move into `images.annotation`.
 - A newer successful run clears older unreviewed suggestions for the same image.
 
-**`recycle_bin_items` table** (one deleted project or image; migration `20261004120000_add_recycle_bin.sql`. On a database without it, the bin page shows a setup notice and deletes fail without changing anything):
+**`recycle_bin_items` table** (one deleted project or image; part of the baseline migration. On a database without it, the bin page shows a setup notice and deletes fail without changing anything):
 - `id`, `user_id` (default `auth.uid()`, → `auth.users` CASCADE), `kind`: `project` | `image`
 - `project_id` (original id, no FK), `image_id` (kind = image only), `name`, `project_name`, `description`, `image_count`, `size_bytes`
 - `object_keys` text[]: S3 keys removed on permanent deletion (kind = project: every image key, oldest first); `cover_object_key` is generated (first key, used as the list thumbnail)
@@ -262,12 +263,12 @@ Request → proxy.ts → lib/supabase/proxy.ts (updateSession)
 
 Manual types in `lib/types/projects.ts`, `lib/types/annotations.ts` (`BoundingBox`, `AnnotationLabel` — the latter also shapes `project_labels` rows), and `lib/types/recycle-bin.ts`. **No Supabase codegen** (`database.types.ts` does not exist). When schema stabilizes, consider adding `supabase gen types`.
 
-### Supabase folder is gitignored
+### Migrations
 
-`/supabase` is listed in `.gitignore`. Migrations and `config.toml` exist locally for `supabase` CLI dev but are **not committed**. When adding migrations:
-1. Create migration locally via Supabase CLI
-2. Document schema changes here in the [Database](#database) section
-3. Coordinate with team on how migrations are shared (not currently in repo)
+`supabase/migrations/` is committed (`supabase/.gitignore` keeps the CLI's `.temp/` link state out). `20261018000000_baseline_schema.sql` is a `db dump` of the production `public` schema that replaced ten earlier migrations, which could not build an empty database; it was verified by replaying it on an empty local database and diffing the dump against production (identical). Its header holds the Recycle Bin design notes and the `RB001`–`RB009` error contract. It leaves out Supabase's platform-managed `rls_auto_enable()`, and it re-adds the `recycle_bin_items` revoke that pg_dump drops.
+
+- **New database:** `npx supabase link --project-ref <ref>` then `npx supabase db push`.
+- **Schema change:** `npx supabase migration new <name>`, never edit the baseline. `npx supabase db start` (Docker) replays all migrations locally; `npx supabase db push --dry-run` shows what is pending. Pushing to the hosted project is the user's step (agents are blocked from it). Document the change in the [Database](#database) section.
 
 ---
 
@@ -479,11 +480,11 @@ Copy `.env.example` → `.env` for local development. Never commit `.env`.
 
 ### Add a Supabase table
 
-1. Create migration locally: `npx supabase migration new <name>`
+1. Create migration: `npx supabase migration new <name>` (see [Migrations](#migrations))
 2. Add RLS policies (follow `projects` pattern: `auth.uid() = user_id`)
 3. Add types to `lib/types/<domain>.ts`
 4. Update [Database](#database) and [Mocked vs real matrix](#mocked-vs-real-matrix) in this file
-5. Coordinate migration sharing (folder is gitignored)
+5. Ask the user to run `npx supabase db push` once the migration is committed
 
 ### Wire mock data to real backend
 
@@ -520,4 +521,4 @@ node --test lib/annotations/coco-import.test.mjs lib/annotations/yolo-import.tes
 - Do not put feature logic in `components/ui/` — that's for shadcn primitives only
 - Do not create global Supabase clients — always use `lib/supabase/client.ts` or `server.ts`
 - Do not skip updating this file when making structural changes (see [Agent Maintenance Rules](#agent-maintenance-rules))
-- Do not assume `supabase/migrations/` is in git — it is gitignored
+- Do not edit `supabase/migrations/20261018000000_baseline_schema.sql` — add a new migration
