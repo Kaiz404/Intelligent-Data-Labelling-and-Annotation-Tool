@@ -31,7 +31,7 @@ type ImportDatasetDialogProps = {
 
 type Selection =
   | { status: "validating"; filename: string }
-  | { status: "error"; filename?: string; error: string }
+  | { status: "error"; filename?: string; error: string; showStructure?: boolean }
   | { status: "ready"; filename: string; plan: ValidatedDatasetImportPlan };
 
 type DatasetFormat = "coco" | "yolo" | "voc";
@@ -40,6 +40,60 @@ const profileNames = {
   "app-native": "App-native",
   "one-based-inclusive": "Standard Pascal VOC (1-based inclusive)",
 } as const;
+
+const datasetStructures: Record<DatasetFormat, {
+  examples: Array<{ label: string; tree: string }>;
+  note: string;
+}> = {
+  coco: {
+    examples: [{
+      label: "COCO",
+      tree: "dataset.zip\n├── annotations.json\n└── images/\n    ├── image1.jpg\n    └── image2.png",
+    }],
+    note: "The JSON filename may differ, but it must contain COCO images, categories, and annotations arrays and reference every included image.",
+  },
+  yolo: {
+    examples: [
+      {
+        label: "classes.txt layout",
+        tree: "dataset.zip\n├── classes.txt\n├── images/\n│   ├── image1.jpg\n│   └── image2.png\n└── labels/\n    ├── image1.txt\n    └── image2.txt",
+      },
+      {
+        label: "data.yaml split layout",
+        tree: "dataset.zip\n├── data.yaml\n├── train/\n│   ├── images/\n│   └── labels/\n└── valid/\n    ├── images/\n    └── labels/",
+      },
+    ],
+    note: "data.yaml may also use images/train with labels/train. Label files are optional for unannotated images and must match their image stems.",
+  },
+  voc: {
+    examples: [{
+      label: "Pascal VOC",
+      tree: "dataset.zip\n├── images/                 (or JPEGImages/)\n│   ├── image1.jpg\n│   └── image2.png\n└── annotations/            (or Annotations/)\n    ├── image1.xml\n    └── image2.xml",
+    }],
+    note: "Every image needs a matching XML file. XML files containing zero objects are valid.",
+  },
+};
+
+function DatasetStructureGuide({ format }: { format: DatasetFormat }) {
+  const guide = datasetStructures[format];
+  return (
+    <details className="mt-3 rounded-md border border-border bg-background text-foreground">
+      <summary className="cursor-pointer px-3 py-2 font-medium">
+        View correct {formatNames[format]} ZIP structure
+      </summary>
+      <div className="space-y-3 border-t px-3 py-3">
+        {guide.examples.map((example) => (
+          <div key={example.label} className="space-y-1">
+            {guide.examples.length > 1 ? <p className="text-xs font-medium">{example.label}</p> : null}
+            <pre className="overflow-x-auto whitespace-pre text-xs leading-5">{example.tree}</pre>
+          </div>
+        ))}
+        <p className="text-xs text-muted-foreground">{guide.note}</p>
+        <p className="text-xs text-muted-foreground">The dataset may be at the ZIP root or inside one enclosing folder.</p>
+      </div>
+    </details>
+  );
+}
 
 /**
  * Picks and validates a dataset, then hands it to the app-level import, which
@@ -150,7 +204,7 @@ function DatasetSelection({ onClose, onStart }: {
     }
     const file = files[0];
     if (!file.name.toLowerCase().endsWith(".zip")) {
-      setSelection({ status: "error", filename: file.name, error: `Choose a .zip file containing your ${formatName} dataset.` });
+      setSelection({ status: "error", filename: file.name, error: `Choose a .zip file containing your ${formatName} dataset.`, showStructure: true });
       return;
     }
     setSelection({ status: "validating", filename: file.name });
@@ -161,7 +215,7 @@ function DatasetSelection({ onClose, onStart }: {
           : readVocDatasetZip(file, { coordinateProfile: profileRef.current }));
       if (version !== validationVersion.current) return;
       if (plan.images.length === 0) {
-        setSelection({ status: "error", filename: file.name, error: "The dataset contains no images. Choose a ZIP with at least one referenced image." });
+        setSelection({ status: "error", filename: file.name, error: "The dataset contains no images. Choose a ZIP with at least one referenced image.", showStructure: true });
         return;
       }
       setSelection({ status: "ready", filename: file.name, plan });
@@ -170,6 +224,7 @@ function DatasetSelection({ onClose, onStart }: {
       setSelection({
         status: "error", filename: file.name,
         error: error instanceof Error ? error.message : `Could not validate this dataset. Choose another ${formatName} ZIP.`,
+        showStructure: true,
       });
     }
   }
@@ -273,9 +328,12 @@ function DatasetSelection({ onClose, onStart }: {
         ) : null}
 
         {selection?.status === "error" ? (
-          <div role="alert" className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-            <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-            <p>{selection.error}</p>
+          <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+              <p>{selection.error}</p>
+            </div>
+            {selection.showStructure ? <DatasetStructureGuide format={format} /> : null}
           </div>
         ) : null}
 
