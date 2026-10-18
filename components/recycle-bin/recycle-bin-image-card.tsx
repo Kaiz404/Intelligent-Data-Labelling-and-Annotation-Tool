@@ -14,6 +14,7 @@ import {
   daysLeftLabel,
   deletedLabel,
 } from "@/components/recycle-bin/recycle-bin-time";
+import { ThumbhashImage } from "@/components/thumbhash-preview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -29,7 +30,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { thumbhashColor } from "@/lib/image-placeholder";
 import type {
   RecycleBinImage,
   RecycleBinProjectState,
@@ -121,19 +121,13 @@ export const RecycleBinImageCard = memo(function RecycleBinImageCard({
         isSelected && "border-primary/50 bg-primary/5 ring-1 ring-primary/20",
       )}
     >
-      <div
-        className="aspect-[16/10] overflow-hidden rounded-lg bg-muted"
-        style={{ backgroundColor: thumbhashColor(image.thumbhash) }}
-      >
+      <div className="aspect-[16/10] overflow-hidden rounded-lg bg-muted">
         {image.thumbnailUrl ? (
-          // Signed S3 URLs are not configured for next/image optimisation.
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
+          <ThumbhashImage
             src={image.thumbnailUrl}
             alt=""
-            loading="lazy"
-            decoding="async"
-            className="size-full object-cover"
+            thumbhash={image.thumbhash}
+            className="size-full"
           />
         ) : (
           <div className="flex size-full items-center justify-center text-xs text-muted-foreground">

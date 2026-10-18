@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -22,9 +23,19 @@ import {
   X,
 } from "lucide-react";
 import { formatBytes } from "@/lib/format";
-import { useUploadQueue } from "@/hooks/use-upload-queue";
-import type { UploadQueueItem, UploadTab } from "@/lib/uploads/types";
-import { extractZipImages } from "@/lib/uploads/zip-extractor";
+import { matchesUploadTab, useUploadQueue } from "@/hooks/use-upload-queue";
+import type {
+  UploadEntry,
+  UploadQueueItem,
+  UploadSource,
+  UploadTab,
+} from "@/lib/uploads/types";
+import {
+  uploadEntryFromFile,
+  type UploadQueueStore,
+} from "@/lib/uploads/upload-queue";
+import { useUploadTimeLeft } from "@/hooks/use-upload-time-left";
+import { listZipImages, openUploadSource } from "@/lib/uploads/zip-source";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -61,8 +72,8 @@ function isZipFile(file: File) {
 type UploadImagesDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  projectId: string;
-  onUploadComplete?: () => void;
+  /** The project's app-level queue, so closing the dialog never stops it. */
+  store: UploadQueueStore;
 };
 
 function statusLabel(status: UploadQueueItem["status"], hasStarted: boolean) {
@@ -114,6 +125,36 @@ function StatusCell({
       )}
       {label}
     </span>
+  );
+}
+
+/** Opened only while its row is on screen, so a ZIP entry is read on demand. */
+function QueueItemPreview({ source }: { source: UploadSource }) {
+  const [preview, setPreview] = useState<{
+    source: UploadSource;
+    url: string;
+  } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let url: string | null = null;
+    openUploadSource(source)
+      .then((blob) => {
+        if (cancelled) return;
+        url = URL.createObjectURL(blob);
+        setPreview({ source, url });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [source]);
+
+  if (preview?.source !== source) return null;
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={preview.url} alt="" className="size-full object-cover" />
   );
 }
 
@@ -177,24 +218,44 @@ function EditableFileName({
 export function UploadImagesDialog({
   open,
   onOpenChange,
-  projectId,
-  onUploadComplete,
+  store,
 }: UploadImagesDialogProps) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[90vh] w-full max-w-[960px] flex-col gap-6 overflow-hidden sm:max-w-[960px]">
+        <UploadQueuePanel store={store} onClose={() => onOpenChange(false)} />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Mounted only while the dialog is open, so a closed dialog does not
+ * re-render with every progress frame of a running batch.
+ */
+function UploadQueuePanel({
+  store,
+  onClose,
+}: {
+  store: UploadQueueStore;
+  onClose: () => void;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [activeTab, setActiveTab] = useState<UploadTab>("All");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [isDragging, setIsDragging] = useState(false);
-  const [hasStarted, setHasStarted] = useState(false);
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractionError, setExtractionError] = useState<string | null>(null);
 
   const {
     items,
+    counts,
     selectedIds,
     isRunning,
+    started: hasStarted,
     summary,
-    addFiles,
+    addEntries,
     renameItem,
     removeItems,
     pauseItem,
@@ -203,22 +264,19 @@ export function UploadImagesDialog({
     retryItem,
     startUploads,
     getTabCount,
-    matchesTab,
     toggleSelected,
     toggleSelectAll,
-  } = useUploadQueue({
-    projectId,
-    onUploadComplete,
-  });
+  } = useUploadQueue(store);
+  const timeLeft = useUploadTimeLeft(store, isRunning);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return items.filter((item) => {
-      if (!matchesTab(item, activeTab)) return false;
+      if (!matchesUploadTab(item, activeTab)) return false;
       if (!q) return true;
       return item.fileName.toLowerCase().includes(q);
     });
-  }, [activeTab, items, matchesTab, search]);
+  }, [activeTab, items, search]);
 
   const visibleTabs = hasStarted ? uploadTabs : uploadTabs.slice(0, 1);
 
@@ -230,7 +288,7 @@ export function UploadImagesDialog({
   );
   const pageIds = pageItems.map((item) => item.id);
   const allPageSelected =
-    pageIds.length > 0 && pageIds.every((id) => selectedIds.includes(id));
+    pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
 
   // An emptied queue starts over (adjusted during render, not one frame late).
   const isEmpty = items.length === 0;
@@ -238,22 +296,10 @@ export function UploadImagesDialog({
   if (isEmpty !== wasEmpty) {
     setWasEmpty(isEmpty);
     if (isEmpty) {
-      setHasStarted(false);
       setActiveTab("All");
       setSearch("");
       setPage(1);
     }
-  }
-
-  function handleOpenChange(nextOpen: boolean) {
-    if (!nextOpen) {
-      void cancelAll();
-      setHasStarted(false);
-      setActiveTab("All");
-      setSearch("");
-      setPage(1);
-    }
-    onOpenChange(nextOpen);
   }
 
   async function handleSelectedFiles(fileList: FileList | File[] | null) {
@@ -264,16 +310,18 @@ export function UploadImagesDialog({
     const rawFiles = files.filter((file) => !isZipFile(file));
     setExtractionError(null);
 
+    const rawEntries = rawFiles.map(uploadEntryFromFile);
+
     if (!zipFiles.length) {
-      addFiles(rawFiles);
+      addEntries(rawEntries);
       return;
     }
 
     setIsExtracting(true);
 
     try {
-      const results = await Promise.allSettled(zipFiles.map(extractZipImages));
-      const extractedImages = results.flatMap((result) =>
+      const results = await Promise.allSettled(zipFiles.map(listZipImages));
+      const zipEntries: UploadEntry[] = results.flatMap((result) =>
         result.status === "fulfilled" ? result.value : [],
       );
       const errors = results.flatMap((result) =>
@@ -286,8 +334,8 @@ export function UploadImagesDialog({
           : [],
       );
 
-      // addFiles remains the single source of truth for image MIME and queue-size validation.
-      addFiles([...rawFiles, ...extractedImages]);
+      // addEntries remains the single source of truth for image MIME and queue-size validation.
+      addEntries([...rawEntries, ...zipEntries]);
       if (errors.length) setExtractionError(errors.join(" "));
     } finally {
       setIsExtracting(false);
@@ -316,421 +364,408 @@ export function UploadImagesDialog({
   }, [safePage, totalPages]);
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="flex max-h-[90vh] w-full max-w-[960px] flex-col gap-6 overflow-hidden sm:max-w-[960px]">
-        <DialogHeader className="gap-1.5 text-left">
-          <DialogTitle className="text-lg font-normal">
-            Upload Image(s)
-          </DialogTitle>
-          <DialogDescription>
-            Drag and drop files to upload images.
-          </DialogDescription>
-        </DialogHeader>
+    <>
+      <DialogHeader className="gap-1.5 text-left">
+        <DialogTitle className="text-lg font-normal">
+          Upload Image(s)
+        </DialogTitle>
+        <DialogDescription>
+          Drag and drop files to upload images. Uploads keep going when you
+          close this window.
+        </DialogDescription>
+      </DialogHeader>
 
-        <div
-          onDragEnter={(event) => {
-            event.preventDefault();
-            setIsDragging(true);
-          }}
-          onDragOver={(event) => event.preventDefault()}
-          onDragLeave={(event) => {
-            if (event.currentTarget.contains(event.relatedTarget as Node)) {
-              return;
-            }
-            setIsDragging(false);
-          }}
-          onDrop={handleDrop}
+      <div
+        onDragEnter={(event) => {
+          event.preventDefault();
+          setIsDragging(true);
+        }}
+        onDragOver={(event) => event.preventDefault()}
+        onDragLeave={(event) => {
+          if (event.currentTarget.contains(event.relatedTarget as Node)) {
+            return;
+          }
+          setIsDragging(false);
+        }}
+        onDrop={handleDrop}
+        className={cn(
+          "flex rounded-[10px] border border-dashed border-muted-foreground p-4 transition-colors",
+          items.length === 0
+            ? "min-h-40 flex-col items-center justify-center gap-6 text-center"
+            : "items-center gap-4 text-left",
+          isDragging && "border-primary bg-primary/5",
+        )}
+      >
+        <CloudUpload
           className={cn(
-            "flex rounded-[10px] border border-dashed border-muted-foreground p-4 transition-colors",
+            "shrink-0 text-muted-foreground",
+            items.length === 0 ? "size-[50px]" : "size-10",
+          )}
+          strokeWidth={1.5}
+        />
+        <div
+          className={cn(
+            "flex min-w-0 flex-1",
             items.length === 0
-              ? "min-h-40 flex-col items-center justify-center gap-6 text-center"
-              : "items-center gap-4 text-left",
-            isDragging && "border-primary bg-primary/5",
+              ? "flex-col items-center gap-6"
+              : "items-center justify-between gap-4",
           )}
         >
-          <CloudUpload
-            className={cn(
-              "shrink-0 text-muted-foreground",
-              items.length === 0 ? "size-[50px]" : "size-10",
-            )}
-            strokeWidth={1.5}
-          />
           <div
             className={cn(
-              "flex min-w-0 flex-1",
-              items.length === 0
-                ? "flex-col items-center gap-6"
-                : "items-center justify-between gap-4",
+              "flex flex-col gap-1",
+              items.length === 0 && "items-center gap-3",
             )}
           >
-            <div
-              className={cn(
-                "flex flex-col gap-1",
-                items.length === 0 && "items-center gap-3",
-              )}
-            >
-              <p className="text-[13px] text-foreground">
-                Drag & Drop or Choose file to upload
-              </p>
-              <p className="flex items-center gap-1 text-xs text-muted-foreground">
-                <span>JPG, PNG, or ZIP</span>
-                <span aria-hidden>·</span>
-                <span>Up to 15 GB</span>
-              </p>
+            <p className="text-[13px] text-foreground">
+              Drag & Drop or Choose file to upload
+            </p>
+            <p className="flex items-center gap-1 text-xs text-muted-foreground">
+              <span>JPG, PNG, or ZIP</span>
+              <span aria-hidden>·</span>
+              <span>Up to 15 GB</span>
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            className="h-9 border-primary text-primary shadow-sm hover:bg-primary/5 hover:text-primary"
+            onClick={() => inputRef.current?.click()}
+            disabled={isExtracting}
+          >
+            Browse files
+          </Button>
+          <input
+            ref={inputRef}
+            className="hidden"
+            multiple
+            onChange={handleFileInput}
+            type="file"
+            accept="image/png,image/jpeg,application/zip,.jpg,.jpeg,.png,.zip"
+            disabled={isExtracting}
+          />
+        </div>
+      </div>
+
+      {isExtracting ? (
+        <p className="text-sm text-muted-foreground">Reading ZIP…</p>
+      ) : null}
+      {extractionError ? (
+        <p className="text-sm text-destructive" role="alert">
+          {extractionError}
+        </p>
+      ) : null}
+
+      {items.length > 0 ? (
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">
+        <div className="flex flex-wrap items-center justify-between gap-4 p-2.5 pt-2.5">
+          <div className="flex flex-wrap items-center gap-6">
+            <div className="flex items-center gap-2.5">
+              <ImageIcon className="size-10 text-primary" strokeWidth={1.5} />
+              <div className="text-sm font-medium leading-5">
+                <p>{summary.totalSelected} files selected</p>
+                <p className="text-[#808080]">
+                  Total size: {formatBytes(summary.totalSizeBytes)}
+                </p>
+              </div>
             </div>
+            {hasStarted ? (
+            <div className="w-full min-w-[200px] space-y-1 sm:w-[300px]">
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>Progress</span>
+                <span>
+                  {summary.uploaded} / {summary.totalSelected} uploaded (
+                  {summary.progress}%)
+                </span>
+              </div>
+              <Progress value={summary.progress} className="h-2" />
+              {timeLeft ? (
+                <p className="text-xs text-muted-foreground">{timeLeft}</p>
+              ) : null}
+            </div>
+            ) : (
+              <span className="flex items-center gap-2 text-sm">
+                <span className="size-2 rounded-full bg-emerald-500" />
+                Ready to upload
+              </span>
+            )}
+          </div>
+          {hasStarted ? (
+          <div className="flex gap-2.5">
             <Button
               type="button"
               variant="outline"
-              className="h-9 border-primary text-primary shadow-sm hover:bg-primary/5 hover:text-primary"
-              onClick={() => inputRef.current?.click()}
-              disabled={isExtracting}
+              className="h-[38px] rounded-[10px] text-muted-foreground shadow-sm"
+              onClick={pauseAll}
+              disabled={counts.Uploading + counts.Queued === 0}
             >
-              Browse files
+              <CirclePause className="size-5" />
+              Pause All
             </Button>
-            <input
-              ref={inputRef}
-              className="hidden"
-              multiple
-              onChange={handleFileInput}
-              type="file"
-              accept="image/png,image/jpeg,application/zip,.jpg,.jpeg,.png,.zip"
-              disabled={isExtracting}
+            <Button
+              type="button"
+              variant="outline"
+              className="h-[38px] rounded-[10px] text-destructive shadow-sm hover:text-destructive"
+              onClick={() => void cancelAll()}
+              disabled={items.length === 0}
+            >
+              <CircleX className="size-5" />
+              Cancel All
+            </Button>
+          </div>
+          ) : null}
+        </div>
+
+        <div className="flex flex-col gap-3 p-2.5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap gap-2.5">
+            {visibleTabs.map((tab) => {
+              const active = activeTab === tab;
+              return (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => {
+                    if (tab === activeTab) return;
+                    setActiveTab(tab);
+                    setPage(1);
+                  }}
+                  className={cn(
+                    "rounded-full border border-border px-[15px] py-2 text-sm font-medium transition-colors",
+                    active
+                      ? "border-border bg-[#d8e9ff] text-primary"
+                      : "bg-background text-foreground hover:bg-muted/60",
+                  )}
+                >
+                  {tab} ({getTabCount(tab)})
+                </button>
+              );
+            })}
+          </div>
+          <div className="relative w-full sm:w-[300px]">
+            <Search className="absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(1);
+              }}
+              placeholder="Search files..."
+              className="h-[38px] pl-8"
+              type="search"
             />
           </div>
         </div>
 
-        {isExtracting ? (
-          <p className="text-sm text-muted-foreground">Extracting ZIP images…</p>
-        ) : null}
-        {extractionError ? (
-          <p className="text-sm text-destructive" role="alert">
-            {extractionError}
-          </p>
-        ) : null}
-
-        {items.length > 0 ? (
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">
-          <div className="flex flex-wrap items-center justify-between gap-4 p-2.5 pt-2.5">
-            <div className="flex flex-wrap items-center gap-6">
-              <div className="flex items-center gap-2.5">
-                <ImageIcon className="size-10 text-primary" strokeWidth={1.5} />
-                <div className="text-sm font-medium leading-5">
-                  <p>{summary.totalSelected} files selected</p>
-                  <p className="text-[#808080]">
-                    Total size: {formatBytes(summary.totalSizeBytes)}
-                  </p>
-                </div>
-              </div>
-              {hasStarted ? (
-              <div className="w-full min-w-[200px] space-y-1 sm:w-[300px]">
-                <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>Progress</span>
-                  <span>
-                    {summary.uploaded} / {summary.totalSelected} uploaded (
-                    {summary.progress}%)
-                  </span>
-                </div>
-                <Progress value={summary.progress} className="h-2" />
-              </div>
-              ) : (
-                <span className="flex items-center gap-2 text-sm">
-                  <span className="size-2 rounded-full bg-emerald-500" />
-                  Ready to upload
-                </span>
-              )}
-            </div>
-            {hasStarted ? (
-            <div className="flex gap-2.5">
-              <Button
-                type="button"
-                variant="outline"
-                className="h-[38px] rounded-[10px] text-muted-foreground shadow-sm"
-                onClick={pauseAll}
-                disabled={!items.some((i) => i.status === "Uploading" || i.status === "Queued")}
-              >
-                <CirclePause className="size-5" />
-                Pause All
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="h-[38px] rounded-[10px] text-destructive shadow-sm hover:text-destructive"
-                onClick={() => void cancelAll()}
-                disabled={items.length === 0}
-              >
-                <CircleX className="size-5" />
-                Cancel All
-              </Button>
-            </div>
-            ) : null}
-          </div>
-
-          <div className="flex flex-col gap-3 p-2.5 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex flex-wrap gap-2.5">
-              {visibleTabs.map((tab) => {
-                const active = activeTab === tab;
-                return (
-                  <button
-                    key={tab}
-                    type="button"
-                    onClick={() => {
-                      if (tab === activeTab) return;
-                      setActiveTab(tab);
-                      setPage(1);
-                    }}
-                    className={cn(
-                      "rounded-full border border-border px-[15px] py-2 text-sm font-medium transition-colors",
-                      active
-                        ? "border-border bg-[#d8e9ff] text-primary"
-                        : "bg-background text-foreground hover:bg-muted/60",
-                    )}
+        <div className="min-h-0 flex-1 overflow-auto">
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted hover:bg-muted">
+                <TableHead className="w-10 pl-2.5">
+                  <Checkbox
+                    checked={allPageSelected}
+                    onCheckedChange={(checked) =>
+                      toggleSelectAll(pageIds, checked === true)
+                    }
+                    aria-label="Select all on page"
+                  />
+                </TableHead>
+                <TableHead>File Name</TableHead>
+                <TableHead className="w-[120px]">Status</TableHead>
+                {hasStarted ? (
+                  <TableHead className="w-[200px]">Progress</TableHead>
+                ) : null}
+                <TableHead className="w-[84px] text-center">Action</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {pageItems.length === 0 ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={5}
+                    className="h-24 text-center text-muted-foreground"
                   >
-                    {tab} ({getTabCount(tab)})
-                  </button>
-                );
-              })}
-            </div>
-            <div className="relative w-full sm:w-[300px]">
-              <Search className="absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={search}
-                onChange={(e) => {
-                  setSearch(e.target.value);
-                  setPage(1);
-                }}
-                placeholder="Search files..."
-                className="h-[38px] pl-8"
-                type="search"
-              />
-            </div>
-          </div>
-
-          <div className="min-h-0 flex-1 overflow-auto">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-muted hover:bg-muted">
-                  <TableHead className="w-10 pl-2.5">
-                    <Checkbox
-                      checked={allPageSelected}
-                      onCheckedChange={(checked) =>
-                        toggleSelectAll(pageIds, checked === true)
-                      }
-                      aria-label="Select all on page"
-                    />
-                  </TableHead>
-                  <TableHead>File Name</TableHead>
-                  <TableHead className="w-[120px]">Status</TableHead>
-                  {hasStarted ? (
-                    <TableHead className="w-[200px]">Progress</TableHead>
-                  ) : null}
-                  <TableHead className="w-[84px] text-center">Action</TableHead>
+                    No files in this view. Browse or drop images to begin.
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {pageItems.length === 0 ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={5}
-                      className="h-24 text-center text-muted-foreground"
-                    >
-                      No files in this view. Browse or drop images to begin.
+              ) : (
+                pageItems.map((file) => (
+                  <TableRow key={file.id}>
+                    <TableCell className="pl-2.5">
+                      <Checkbox
+                        checked={selectedIds.has(file.id)}
+                        onCheckedChange={(checked) =>
+                          toggleSelected(file.id, checked === true)
+                        }
+                        aria-label={`Select ${file.fileName}`}
+                      />
                     </TableCell>
-                  </TableRow>
-                ) : (
-                  pageItems.map((file) => (
-                    <TableRow key={file.id}>
-                      <TableCell className="pl-2.5">
-                        <Checkbox
-                          checked={selectedIds.includes(file.id)}
-                          onCheckedChange={(checked) =>
-                            toggleSelected(file.id, checked === true)
-                          }
-                          aria-label={`Select ${file.fileName}`}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2.5">
-                          <div className="size-10 shrink-0 overflow-hidden rounded-[10px] bg-muted">
-                            {file.previewUrl ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                src={file.previewUrl}
-                                alt=""
-                                className="size-full object-cover"
-                              />
-                            ) : null}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <EditableFileName
-                              item={file}
-                              disabled={hasStarted}
-                              onRename={(fileName) => renameItem(file.id, fileName)}
-                            />
-                            <p className="text-sm font-medium text-muted-foreground">
-                              {formatBytes(file.sizeBytes)}
-                            </p>
-                          </div>
+                    <TableCell>
+                      <div className="flex items-center gap-2.5">
+                        <div className="size-10 shrink-0 overflow-hidden rounded-[10px] bg-muted">
+                          <QueueItemPreview source={file.source} />
                         </div>
-                      </TableCell>
-                      <TableCell>
-                        <StatusCell item={file} hasStarted={hasStarted} />
-                      </TableCell>
-                      {hasStarted ? (
-                      <TableCell>
-                        <div className="flex items-center gap-1.5">
-                          <Progress
-                            value={file.progress}
-                            className={cn(
-                              "h-2 w-36",
-                              file.status === "Failed" &&
-                                "[&_[data-slot=progress-indicator]]:bg-destructive",
-                            )}
+                        <div className="min-w-0 flex-1">
+                          <EditableFileName
+                            item={file}
+                            disabled={hasStarted}
+                            onRename={(fileName) => renameItem(file.id, fileName)}
                           />
-                          <span className="w-10 text-xs text-muted-foreground">
-                            {file.status === "Failed"
-                              ? "Failed"
-                              : `${file.progress}%`}
-                          </span>
+                          <p className="text-sm font-medium text-muted-foreground">
+                            {formatBytes(file.sizeBytes)}
+                          </p>
                         </div>
-                      </TableCell>
-                      ) : null}
-                      <TableCell>
-                        <div className="flex items-center justify-end gap-3 px-1">
-                          {hasStarted &&
-                          (file.status === "Uploading" ||
-                            file.status === "Queued") ? (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="size-8"
-                              onClick={() => pauseItem(file.id)}
-                              aria-label={`Pause ${file.fileName}`}
-                            >
-                              <Pause className="size-4" />
-                            </Button>
-                          ) : null}
-                          {file.status === "Failed" ||
-                          file.status === "Paused" ? (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="size-8"
-                              onClick={() => retryItem(file.id)}
-                              aria-label={`Retry ${file.fileName}`}
-                            >
-                              <RefreshCw className="size-4" />
-                            </Button>
-                          ) : null}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <StatusCell item={file} hasStarted={hasStarted} />
+                    </TableCell>
+                    {hasStarted ? (
+                    <TableCell>
+                      <div className="flex items-center gap-1.5">
+                        <Progress
+                          value={file.progress}
+                          className={cn(
+                            "h-2 w-36",
+                            file.status === "Failed" &&
+                              "[&_[data-slot=progress-indicator]]:bg-destructive",
+                          )}
+                        />
+                        <span className="w-10 text-xs text-muted-foreground">
+                          {file.status === "Failed"
+                            ? "Failed"
+                            : `${file.progress}%`}
+                        </span>
+                      </div>
+                    </TableCell>
+                    ) : null}
+                    <TableCell>
+                      <div className="flex items-center justify-end gap-3 px-1">
+                        {hasStarted &&
+                        (file.status === "Uploading" ||
+                          file.status === "Queued") ? (
                           <Button
                             type="button"
                             variant="ghost"
                             size="icon"
                             className="size-8"
-                            onClick={() => void removeItems([file.id])}
-                            aria-label={`Remove ${file.fileName}`}
+                            onClick={() => pauseItem(file.id)}
+                            aria-label={`Pause ${file.fileName}`}
                           >
-                            <X className="size-4" />
+                            <Pause className="size-4" />
                           </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </div>
-
-          {filtered.length > PAGE_SIZE ? (
-            <div className="flex items-center justify-end gap-1 border-t p-2 text-sm">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={safePage <= 1}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-              >
-                Previous
-              </Button>
-              {pageNumbers.map((p, index) => {
-                const prev = pageNumbers[index - 1];
-                const showEllipsis = prev != null && p - prev > 1;
-                return (
-                  <span key={p} className="contents">
-                    {showEllipsis ? (
-                      <span className="px-1 text-muted-foreground">…</span>
-                    ) : null}
-                    <Button
-                      type="button"
-                      variant={safePage === p ? "default" : "ghost"}
-                      size="sm"
-                      className="size-8"
-                      onClick={() => setPage(p)}
-                    >
-                      {p}
-                    </Button>
-                  </span>
-                );
-              })}
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={safePage >= totalPages}
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              >
-                Next
-              </Button>
-            </div>
-          ) : null}
+                        ) : null}
+                        {file.status === "Failed" ||
+                        file.status === "Paused" ? (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="size-8"
+                            onClick={() => retryItem(file.id)}
+                            aria-label={`Retry ${file.fileName}`}
+                          >
+                            <RefreshCw className="size-4" />
+                          </Button>
+                        ) : null}
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-8"
+                          onClick={() => void removeItems([file.id])}
+                          aria-label={`Remove ${file.fileName}`}
+                        >
+                          <X className="size-4" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
         </div>
-        ) : null}
 
-        <DialogFooter className="flex-row items-center sm:justify-between">
-          <div className="mr-auto">
-            {selectedIds.length > 0 ? (
-              <Button
-                type="button"
-                variant="outline"
-                className="border-destructive text-destructive hover:text-destructive"
-                onClick={() => void removeItems(selectedIds)}
-              >
-                <Trash2 className="size-4" />
-                Remove
-              </Button>
-            ) : null}
+        {filtered.length > PAGE_SIZE ? (
+          <div className="flex items-center justify-end gap-1 border-t p-2 text-sm">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={safePage <= 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+            >
+              Previous
+            </Button>
+            {pageNumbers.map((p, index) => {
+              const prev = pageNumbers[index - 1];
+              const showEllipsis = prev != null && p - prev > 1;
+              return (
+                <span key={p} className="contents">
+                  {showEllipsis ? (
+                    <span className="px-1 text-muted-foreground">…</span>
+                  ) : null}
+                  <Button
+                    type="button"
+                    variant={safePage === p ? "default" : "ghost"}
+                    size="sm"
+                    className="size-8"
+                    onClick={() => setPage(p)}
+                  >
+                    {p}
+                  </Button>
+                </span>
+              );
+            })}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={safePage >= totalPages}
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            >
+              Next
+            </Button>
           </div>
-          <div className="flex gap-2">
+        ) : null}
+      </div>
+      ) : null}
+
+      <DialogFooter className="flex-row items-center sm:justify-between">
+        <div className="mr-auto">
+          {selectedIds.size > 0 ? (
             <Button
               type="button"
               variant="outline"
-              onClick={() => handleOpenChange(false)}
+              className="border-destructive text-destructive hover:text-destructive"
+              onClick={() => void removeItems([...selectedIds])}
             >
-              Cancel
+              <Trash2 className="size-4" />
+              Remove
             </Button>
-            <Button
-              type="button"
-              onClick={() => {
-                setHasStarted(true);
-                startUploads();
-              }}
-              disabled={
-                isExtracting ||
-                isRunning ||
-                !items.some(
-                  (i) =>
-                    Boolean(i.file) &&
-                    i.status !== "Completed" &&
-                    i.status !== "Uploading",
-                )
-              }
-            >
-              {isRunning ? "Uploading…" : "Upload"}
-            </Button>
-          </div>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          ) : null}
+        </div>
+        <div className="flex gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onClose}
+          >
+            Close
+          </Button>
+          <Button
+            type="button"
+            onClick={startUploads}
+            disabled={
+              isExtracting ||
+              isRunning ||
+              counts.Queued + counts.Paused + counts.Failed === 0
+            }
+          >
+            {isRunning ? "Uploading…" : "Upload"}
+          </Button>
+        </div>
+      </DialogFooter>
+    </>
   );
 }

@@ -7,13 +7,14 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useDatasetImport, type DatasetImportState } from "@/hooks/use-dataset-import";
+import { useDatasetImportActions, useDatasetImportRun } from "@/components/projects/dataset-import-provider";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter,
   DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { formatBytes, numberFormatter } from "@/lib/format";
 import type { ValidatedDatasetImportPlan } from "@/lib/types/dataset-import";
+import { isImportActive, type DatasetImportRun, type DatasetImportState } from "@/lib/uploads/dataset-import";
 import { readCocoDatasetZip } from "@/lib/uploads/dataset-zip";
 import { readYoloDatasetZip } from "@/lib/uploads/yolo-dataset-zip";
 import { readVocDatasetZip } from "@/lib/uploads/voc-dataset-zip";
@@ -22,15 +23,14 @@ import { cn } from "@/lib/utils";
 
 type ImportDatasetDialogProps = {
   projectId: string;
+  /** Shown on the progress pill while the user is on other pages. */
+  projectName: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Called once for every finished run, including partial and fatal failures. */
-  onImportComplete?: (outcome: DatasetImportState) => void;
 };
 
 type Selection =
   | { status: "validating"; filename: string }
-  | { status: "error"; filename?: string; error: string; showStructure?: boolean }
   | { status: "error"; filename?: string; error: string; showStructure?: boolean }
   | { status: "ready"; filename: string; plan: ValidatedDatasetImportPlan };
 
@@ -41,110 +41,121 @@ const profileNames = {
   "one-based-inclusive": "Standard Pascal VOC (1-based inclusive)",
 } as const;
 
-const datasetStructures: Record<DatasetFormat, { tree: string; note: string }> = {
+const datasetStructures: Record<DatasetFormat, {
+  examples: Array<{ label: string; tree: string }>;
+  note: string;
+}> = {
   coco: {
-    tree: "dataset.zip\n├── annotations.json\n└── images/\n    ├── image1.jpg\n    └── image2.png",
-    note: "The JSON filename may differ, but it must contain COCO images, categories, and annotations arrays and reference every image.",
+    examples: [{
+      label: "COCO",
+      tree: "dataset.zip\n├── annotations.json\n└── images/\n    ├── image1.jpg\n    └── image2.png",
+    }],
+    note: "The JSON filename may differ, but it must contain COCO images, categories, and annotations arrays and reference every included image.",
   },
   yolo: {
-    tree: "dataset.zip\n├── classes.txt\n├── images/\n│   ├── image1.jpg\n│   └── image2.png\n└── labels/\n    ├── image1.txt\n    └── image2.txt",
-    note: "labels/ is optional for unannotated images. Label filenames must match their image filenames. data.yaml-only datasets are not supported.",
+    examples: [
+      {
+        label: "classes.txt layout",
+        tree: "dataset.zip\n├── classes.txt\n├── images/\n│   ├── image1.jpg\n│   └── image2.png\n└── labels/\n    ├── image1.txt\n    └── image2.txt",
+      },
+      {
+        label: "data.yaml split layout",
+        tree: "dataset.zip\n├── data.yaml\n├── train/\n│   ├── images/\n│   └── labels/\n└── valid/\n    ├── images/\n    └── labels/",
+      },
+    ],
+    note: "data.yaml may also use images/train with labels/train. Label files are optional for unannotated images and must match their image stems.",
   },
   voc: {
-    tree: "dataset.zip\n├── images/                 (or JPEGImages/)\n│   ├── image1.jpg\n│   └── image2.png\n└── annotations/            (or Annotations/)\n    ├── image1.xml\n    └── image2.xml",
-    note: "Every image needs a matching XML file. XML files with zero objects are valid.",
+    examples: [{
+      label: "Pascal VOC",
+      tree: "dataset.zip\n├── images/                 (or JPEGImages/)\n│   ├── image1.jpg\n│   └── image2.png\n└── annotations/            (or Annotations/)\n    ├── image1.xml\n    └── image2.xml",
+    }],
+    note: "Every image needs a matching XML file. XML files containing zero objects are valid.",
   },
 };
 
 function DatasetStructureGuide({ format }: { format: DatasetFormat }) {
   const guide = datasetStructures[format];
   return (
-    <div className="mt-3 space-y-2 rounded-md border border-border bg-background p-3 text-foreground">
-      <p className="font-medium">Correct {formatNames[format]} ZIP structure</p>
-      <pre className="overflow-x-auto whitespace-pre text-xs leading-5">{guide.tree}</pre>
-      <p className="text-xs text-muted-foreground">{guide.note}</p>
-      <p className="text-xs text-muted-foreground">The folders may be at the ZIP root or inside one enclosing folder.</p>
-    </div>
+    <details className="mt-3 rounded-md border border-border bg-background text-foreground">
+      <summary className="cursor-pointer px-3 py-2 font-medium">
+        View correct {formatNames[format]} ZIP structure
+      </summary>
+      <div className="space-y-3 border-t px-3 py-3">
+        {guide.examples.map((example) => (
+          <div key={example.label} className="space-y-1">
+            {guide.examples.length > 1 ? <p className="text-xs font-medium">{example.label}</p> : null}
+            <pre className="overflow-x-auto whitespace-pre text-xs leading-5">{example.tree}</pre>
+          </div>
+        ))}
+        <p className="text-xs text-muted-foreground">{guide.note}</p>
+        <p className="text-xs text-muted-foreground">The dataset may be at the ZIP root or inside one enclosing folder.</p>
+      </div>
+    </details>
   );
 }
 
-export function ImportDatasetDialog({ projectId, open, onOpenChange, onImportComplete }: ImportDatasetDialogProps) {
-  // Owned outside Radix's conditionally mounted content for the entire run.
-  const importer = useDatasetImport({ projectId });
-  const running = useRef(false);
-  const consumedPlan = useRef<ValidatedDatasetImportPlan | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [outcome, setOutcome] = useState<DatasetImportState | null>(null);
-  const active = busy || importer.isImporting;
-
-  function changeOpen(nextOpen: boolean) {
-    if (!nextOpen && (running.current || importer.isImporting)) return;
-    onOpenChange(nextOpen);
-  }
-
-  function start(plan: ValidatedDatasetImportPlan): boolean {
-    if (running.current || importer.isImporting || consumedPlan.current === plan) return false;
-    running.current = true;
-    consumedPlan.current = plan;
-    setBusy(true);
-    setOutcome(null);
-    void finish(plan);
-    return true;
-  }
-
-  async function finish(plan: ValidatedDatasetImportPlan) {
-    let result: DatasetImportState;
-    try {
-      result = await importer.startImport(plan);
-    } catch (error) {
-      // The hook normally returns failures; also release the UI if starting rejects.
-      result = {
-        status: "failed", totalImageCount: plan.images.length,
-        completedImageCount: 0, successfulImageCount: 0, failedImageCount: 0,
-        uploadProgress: 0, images: [], labelResolutionFailed: false,
-        error: error instanceof Error ? error.message : "Could not start the dataset import.",
-      };
-    }
-    setOutcome(result);
-    running.current = false;
-    setBusy(false);
-    onImportComplete?.(result);
-  }
-
-  function preventDismiss(event: { preventDefault: () => void }) {
-    if (running.current || importer.isImporting) event.preventDefault();
-  }
+/**
+ * Picks and validates a dataset, then hands it to the app-level import, which
+ * keeps running after this dialog closes. While the project has a run, the
+ * dialog shows its progress or outcome instead of the picker.
+ */
+export function ImportDatasetDialog({ projectId, projectName, open, onOpenChange }: ImportDatasetDialogProps) {
+  const run = useDatasetImportRun(projectId);
+  const { startDatasetImport, dismissDatasetImport } = useDatasetImportActions();
 
   return (
-    <Dialog open={open || active} onOpenChange={changeOpen}>
-      <DialogContent
-        className="flex max-h-[90vh] flex-col gap-6 overflow-hidden sm:max-w-[720px]"
-        showCloseButton={!active}
-        onEscapeKeyDown={preventDismiss}
-        onInteractOutside={preventDismiss}
-      >
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[90vh] flex-col gap-6 overflow-hidden sm:max-w-[720px]">
         <DialogHeader className="gap-1.5 text-left">
           <DialogTitle className="text-lg font-normal">Import dataset</DialogTitle>
-          <DialogDescription>
-            Choose a format and ZIP. Validate and preview your dataset, then import it into this project.
+          <DialogDescription className="break-all">
+            {run
+              ? isImportActive(run.state)
+                ? `Importing ${run.fileName} into this project.`
+                : `Finished importing ${run.fileName}.`
+              : "Choose a format and ZIP. Validate and preview your dataset, then import it into this project."}
           </DialogDescription>
         </DialogHeader>
-        {open || active ? <DatasetSelection
-          onClose={() => changeOpen(false)} onStart={start}
-          canChange={() => !running.current && !importer.isImporting}
-          active={active} importState={outcome ?? importer}
-        /> : null}
+        {run ? (
+          <ImportRunDetails
+            run={run}
+            onClose={() => onOpenChange(false)}
+            onImportAnother={() => dismissDatasetImport(projectId)}
+          />
+        ) : (
+          <DatasetSelection
+            onClose={() => onOpenChange(false)}
+            onStart={(plan, fileName) => startDatasetImport({ projectId, projectName, fileName, plan })}
+          />
+        )}
       </DialogContent>
     </Dialog>
   );
 }
 
-function DatasetSelection({ onClose, onStart, canChange, active, importState }: {
+function ImportRunDetails({ run, onClose, onImportAnother }: {
+  run: DatasetImportRun;
   onClose: () => void;
-  onStart: (plan: ValidatedDatasetImportPlan) => boolean;
-  canChange: () => boolean;
-  active: boolean;
-  importState: DatasetImportState;
+  onImportAnother: () => void;
+}) {
+  const active = isImportActive(run.state);
+  return (
+    <>
+      <div className="min-h-0 overflow-y-auto">
+        <ImportOutcome state={run.state} />
+      </div>
+      <DialogFooter>
+        {active ? null : <Button type="button" variant="outline" onClick={onImportAnother}>Import another dataset</Button>}
+        <Button type="button" onClick={onClose}>Close</Button>
+      </DialogFooter>
+    </>
+  );
+}
+
+function DatasetSelection({ onClose, onStart }: {
+  onClose: () => void;
+  onStart: (plan: ValidatedDatasetImportPlan, fileName: string) => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const validationVersion = useRef(0);
@@ -155,21 +166,18 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
   const [coordinateProfile, setCoordinateProfile] = useState<VocCoordinateProfile>("app-native");
   const [selection, setSelection] = useState<Selection | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [hasStarted, setHasStarted] = useState(false);
 
   // Invalidates pending work on unmount (including closing the dialog).
   useEffect(() => () => { validationVersion.current += 1; }, []);
 
   function removeSelection() {
-    if (!canChange()) return;
     validationVersion.current += 1;
     setSelection(null);
-    setHasStarted(false);
     if (inputRef.current) inputRef.current.value = "";
   }
 
   function changeFormat(value: string) {
-    if (!canChange() || (value !== "coco" && value !== "yolo" && value !== "voc") || value === formatRef.current) return;
+    if ((value !== "coco" && value !== "yolo" && value !== "voc") || value === formatRef.current) return;
     formatRef.current = value;
     setFormat(value);
     removeSelection();
@@ -177,7 +185,7 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
   }
 
   function changeProfile(value: string) {
-    if (!canChange() || formatRef.current !== "voc" ||
+    if (formatRef.current !== "voc" ||
         (value !== "app-native" && value !== "one-based-inclusive") || value === profileRef.current) return;
     profileRef.current = value;
     setCoordinateProfile(value);
@@ -186,8 +194,7 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
   }
 
   async function selectFiles(files: File[]) {
-    if (!canChange() || files.length === 0) return;
-    setHasStarted(false);
+    if (files.length === 0) return;
     const version = ++validationVersion.current;
     const selectedFormat = formatRef.current;
     const formatName = formatNames[selectedFormat];
@@ -197,7 +204,6 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
     }
     const file = files[0];
     if (!file.name.toLowerCase().endsWith(".zip")) {
-      setSelection({ status: "error", filename: file.name, error: `Choose a .zip file containing your ${formatName} dataset.`, showStructure: true });
       setSelection({ status: "error", filename: file.name, error: `Choose a .zip file containing your ${formatName} dataset.`, showStructure: true });
       return;
     }
@@ -210,7 +216,6 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
       if (version !== validationVersion.current) return;
       if (plan.images.length === 0) {
         setSelection({ status: "error", filename: file.name, error: "The dataset contains no images. Choose a ZIP with at least one referenced image.", showStructure: true });
-        setSelection({ status: "error", filename: file.name, error: "The dataset contains no images. Choose a ZIP with at least one referenced image.", showStructure: true });
         return;
       }
       setSelection({ status: "ready", filename: file.name, plan });
@@ -219,7 +224,6 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
       setSelection({
         status: "error", filename: file.name,
         error: error instanceof Error ? error.message : `Could not validate this dataset. Choose another ${formatName} ZIP.`,
-        showStructure: true,
         showStructure: true,
       });
     }
@@ -237,7 +241,8 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
     void selectFiles(Array.from(event.dataTransfer.files));
   }
 
-  const plan = selection?.status === "ready" ? selection.plan : null;
+  const ready = selection?.status === "ready" ? selection : null;
+  const plan = ready?.plan ?? null;
   const boxCount = plan?.images.reduce((total, image) => total + image.boxes.length, 0) ?? 0;
   const imageBytes = plan?.images.reduce((total, image) => total + image.file.size, 0) ?? 0;
   const renderedVersion = validationVersion.current;
@@ -247,7 +252,7 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
       <div className="min-h-0 space-y-4 overflow-y-auto">
         <div className="space-y-2">
           <label htmlFor="dataset-format" className="text-sm font-medium">Dataset format</label>
-          <Select value={format} onValueChange={changeFormat} disabled={active}>
+          <Select value={format} onValueChange={changeFormat}>
             <SelectTrigger id="dataset-format" aria-label="Dataset format" className="w-full"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="coco">COCO</SelectItem>
@@ -259,13 +264,13 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
             {format === "coco"
               ? "Expected ZIP: one COCO annotation JSON and its referenced JPEG/PNG images."
               : format === "yolo"
-                ? "Expected ZIP: classes.txt, images/, and labels/. YOLO data.yaml-only datasets are not currently supported."
+                ? "Supports classes.txt with images/labels, or data.yaml datasets with train/val/valid/test image and label folders. JPEG/PNG object detection only. Dataset splits are combined into this project."
                 : "Expected ZIP: images/ and annotations/, or JPEGImages/ and Annotations/. Each image must have an XML annotation file; XML files with zero objects are valid. pose/truncated/difficult metadata is not preserved."}
           </p>
         </div>
         {format === "voc" ? <div className="space-y-2">
           <label htmlFor="voc-coordinate-profile" className="text-sm font-medium">Coordinate profile</label>
-          <Select value={coordinateProfile} onValueChange={changeProfile} disabled={active}>
+          <Select value={coordinateProfile} onValueChange={changeProfile}>
             <SelectTrigger id="voc-coordinate-profile" aria-label="Coordinate profile" className="w-full"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="app-native">{profileNames["app-native"]}</SelectItem>
@@ -279,7 +284,7 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
           </p>
         </div> : null}
         <div
-          onDragEnter={(event) => { event.preventDefault(); if (canChange()) setIsDragging(true); }}
+          onDragEnter={(event) => { event.preventDefault(); setIsDragging(true); }}
           onDragOver={(event) => event.preventDefault()}
           onDragLeave={(event) => {
             if (!event.currentTarget.contains(event.relatedTarget as Node)) setIsDragging(false);
@@ -299,19 +304,18 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
             type="button" variant="outline"
             className="h-9 border-primary text-primary shadow-sm hover:bg-primary/5 hover:text-primary"
             onClick={() => inputRef.current?.click()}
-            disabled={active}
           >
             {selection ? "Replace ZIP" : "Browse files"}
           </Button>
           <input ref={inputRef} type="file" accept=".zip,application/zip,application/x-zip-compressed"
-            className="hidden" aria-label={`Choose ${formatNames[format]} ZIP`} onChange={handleFileInput} disabled={active} />
+            className="hidden" aria-label={`Choose ${formatNames[format]} ZIP`} onChange={handleFileInput} />
         </div>
 
         {selection ? (
           <div className="flex items-center gap-3 rounded-lg border p-3">
             <FileArchive className="size-8 shrink-0 text-primary" />
             <p className="min-w-0 flex-1 break-all text-sm font-medium">{selection.filename ?? "No ZIP selected"}</p>
-            <Button type="button" variant="ghost" size="icon" disabled={active} onClick={removeSelection} aria-label="Remove selected ZIP">
+            <Button type="button" variant="ghost" size="icon" onClick={removeSelection} aria-label="Remove selected ZIP">
               <X className="size-4" />
             </Button>
           </div>
@@ -324,12 +328,6 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
         ) : null}
 
         {selection?.status === "error" ? (
-          <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-            <div className="flex items-start gap-2">
-              <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-              <p>{selection.error}</p>
-            </div>
-            {selection.showStructure ? <DatasetStructureGuide format={format} /> : null}
           <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
             <div className="flex items-start gap-2">
               <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
@@ -370,20 +368,19 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
                 </div>
               ) : <p className="text-sm text-muted-foreground">No categories in this dataset.</p>}
             </div>
-            {!hasStarted ? <div className="space-y-3">
+            <div className="space-y-3">
               <p className="text-xs text-muted-foreground">No images, labels, or annotations have been imported yet.</p>
-              <Button type="button" disabled={active} onClick={() => {
+              <Button type="button" onClick={() => {
                 // Reject a click retained from an older preview, even before a re-render.
-                if (renderedVersion !== validationVersion.current || !canChange()) return;
-                if (onStart(plan)) setHasStarted(true);
+                if (renderedVersion !== validationVersion.current || !ready) return;
+                onStart(ready.plan, ready.filename);
               }}>Import</Button>
-            </div> : null}
+            </div>
           </section>
         ) : null}
-        {hasStarted ? <ImportOutcome state={importState} active={active} /> : null}
       </div>
       <DialogFooter>
-        <Button type="button" variant="outline" disabled={active} onClick={onClose}>Close</Button>
+        <Button type="button" variant="outline" onClick={onClose}>Close</Button>
       </DialogFooter>
     </>
   );
@@ -394,7 +391,8 @@ const imageStatusLabels = {
   succeeded: "Success", failed: "Failed",
 } as const;
 
-function ImportOutcome({ state, active }: { state: DatasetImportState; active: boolean }) {
+function ImportOutcome({ state }: { state: DatasetImportState }) {
+  const active = isImportActive(state);
   const status = active
     ? state.status === "resolving_labels" ? "Preparing labels..." : "Import is still running..."
     : state.status === "completed" ? "Import complete"
@@ -414,7 +412,9 @@ function ImportOutcome({ state, active }: { state: DatasetImportState; active: b
         <Progress value={state.uploadProgress} aria-label="Byte-weighted upload progress" />
         <p className="text-xs text-muted-foreground">100% uploaded does not mean the import is complete. Images succeed only after their annotations are saved.</p>
       </div>
-      {active ? <p className="text-sm text-muted-foreground">Keep this dialog and page open until the import finishes.</p> : null}
+      {active ? <p className="text-sm text-muted-foreground">
+        The import keeps running in the background and images appear in the project as they finish. You can close this dialog and keep working; keep this tab open until it finishes.
+      </p> : null}
       {state.status === "failed" ? <div role="alert" className="space-y-1 text-sm text-destructive">
         {state.labelResolutionFailed ? <p>Label preparation failed. No image uploads were started; some labels may already have been created.</p> : null}
         <p>{state.error ?? "An unexpected import error occurred."}</p>
@@ -427,8 +427,10 @@ function ImportOutcome({ state, active }: { state: DatasetImportState; active: b
         <TableBody>{state.images.map((image) => <TableRow key={image.sourceImageId}>
           <TableCell className="max-w-[300px] whitespace-normal break-all">
             {image.path}
-            {image.failureStage === "annotations" ? <p className="mt-1 text-xs text-destructive">Image uploaded, but its annotations were not imported.</p> : null}
-            {image.error ? <p className="mt-1 text-xs text-destructive">{image.error}</p> : null}
+            {image.status === "failed" ? <>
+              {image.failureStage === "annotations" ? <p className="mt-1 text-xs text-destructive">Image uploaded, but its annotations were not imported.</p> : null}
+              <p className="mt-1 text-xs text-destructive">{image.error}</p>
+            </> : null}
           </TableCell>
           <TableCell><Badge variant={image.status === "failed" ? "destructive" : "secondary"}>{imageStatusLabels[image.status]}</Badge></TableCell>
           <TableCell>{Math.round(image.uploadProgress)}%</TableCell>

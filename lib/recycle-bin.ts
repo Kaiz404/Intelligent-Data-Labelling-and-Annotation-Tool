@@ -21,7 +21,7 @@ import type {
 
 /*
  * Recycle bin data access. Moving to / restoring from the bin happens in SQL
- * (supabase/migrations/20261004120000_add_recycle_bin.sql); permanent
+ * (supabase/migrations/20261018000000_baseline_schema.sql); permanent
  * deletion lives here because it must remove S3 objects. It first claims rows
  * by setting `purge_started_at`, which makes them unrestorable, and only then
  * touches S3, so a partly deleted item can never be restored.
@@ -49,7 +49,7 @@ export const RECYCLE_BIN_SQLSTATE = {
   itemExpired: "RB009",
 } as const;
 
-export const RECYCLE_BIN_MIGRATION = "20261004120000_add_recycle_bin.sql";
+export const RECYCLE_BIN_MIGRATION = "20261018000000_baseline_schema.sql";
 
 export const RECYCLE_BIN_SETUP_MESSAGE = `The Recycle Bin isn't set up yet, so nothing was changed. Apply the database migration ${RECYCLE_BIN_MIGRATION} (npx supabase db push) and try again.`;
 

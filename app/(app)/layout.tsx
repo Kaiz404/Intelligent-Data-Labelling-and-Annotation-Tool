@@ -9,6 +9,9 @@ import {
   StorageUsageSkeleton,
   StorageUsageWidget,
 } from "@/components/app-shell/storage-usage-widget";
+import { BackgroundTasks } from "@/components/projects/background-tasks";
+import { DatasetImportProvider } from "@/components/projects/dataset-import-provider";
+import { ImageUploadProvider } from "@/components/projects/image-upload-provider";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { createClient } from "@/lib/supabase/server";
@@ -28,21 +31,26 @@ export default function AppLayout({
 }) {
   return (
     <TooltipProvider>
-      <SidebarProvider>
-        <AppSidebar
-          storageSlot={
-            <Suspense fallback={<StorageUsageSkeleton />}>
-              <StorageUsageWidget />
-            </Suspense>
-          }
-          accountSlot={
-            <Suspense fallback={<SidebarAccountSkeleton />}>
-              <SignedInAccount />
-            </Suspense>
-          }
-        />
-        <SidebarInset className="flex flex-col">{children}</SidebarInset>
-      </SidebarProvider>
+      <DatasetImportProvider>
+        <ImageUploadProvider>
+          <SidebarProvider>
+            <AppSidebar
+              storageSlot={
+                <Suspense fallback={<StorageUsageSkeleton />}>
+                  <StorageUsageWidget />
+                </Suspense>
+              }
+              accountSlot={
+                <Suspense fallback={<SidebarAccountSkeleton />}>
+                  <SignedInAccount />
+                </Suspense>
+              }
+            />
+            <SidebarInset className="flex flex-col">{children}</SidebarInset>
+          </SidebarProvider>
+          <BackgroundTasks />
+        </ImageUploadProvider>
+      </DatasetImportProvider>
     </TooltipProvider>
   );
 }

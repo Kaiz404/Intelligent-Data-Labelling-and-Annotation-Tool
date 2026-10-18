@@ -28,7 +28,7 @@ async function DashboardContent() {
   const [{ projects, stats }, thumbnails] = loaded;
   const recentProjects = projects
     .slice(0, RECENT_PROJECT_COUNT)
-    .map((project) => ({ ...project, thumbnailUrl: thumbnails.get(project.id) }));
+    .map((project) => ({ ...project, ...thumbnails.get(project.id) }));
 
   return (
     <div className="space-y-6">

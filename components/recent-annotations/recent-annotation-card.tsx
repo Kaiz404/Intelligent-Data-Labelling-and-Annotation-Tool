@@ -12,6 +12,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { memo, useState } from "react";
+import { ThumbhashImage } from "@/components/thumbhash-preview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -23,7 +24,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { formatRelativeTime } from "@/lib/format";
-import { thumbhashColor } from "@/lib/image-placeholder";
 import type { RecentAnnotatedImage } from "@/lib/types/recent-annotations";
 import { cn } from "@/lib/utils";
 
@@ -63,19 +63,13 @@ export const RecentAnnotationCard = memo(function RecentAnnotationCard({
         isSelected && "border-primary/50 bg-primary/5 ring-1 ring-primary/20",
       )}
     >
-      <div
-        className="aspect-[16/10] overflow-hidden rounded-lg bg-muted"
-        style={{ backgroundColor: thumbhashColor(image.thumbhash) }}
-      >
+      <div className="aspect-[16/10] overflow-hidden rounded-lg bg-muted">
         {image.url ? (
-          // Signed S3 URLs are not configured for next/image optimisation.
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
+          <ThumbhashImage
             src={image.url}
             alt=""
-            loading="lazy"
-            decoding="async"
-            className="size-full object-cover"
+            thumbhash={image.thumbhash}
+            className="size-full"
           />
         ) : (
           <div className="flex size-full items-center justify-center text-xs text-muted-foreground">

@@ -14,9 +14,9 @@ import {
 } from "lucide-react";
 import { memo, useState } from "react";
 import { formatBytes } from "@/lib/format";
-import { thumbhashColor } from "@/lib/image-placeholder";
 import type { ImageAiState } from "@/lib/types/annotations";
 import type { ImageStatus, ProjectImage } from "@/lib/types/projects";
+import { ThumbhashImage } from "@/components/thumbhash-preview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -88,11 +88,10 @@ export const ImageCard = memo(function ImageCard({
 
   return (
     <Card className={cn("group overflow-hidden shadow-sm", isSelected && "border-primary ring-1 ring-primary/20")}>
-      <div className="relative aspect-[4/3] bg-muted" style={{ backgroundColor: thumbhashColor(image.thumbhash) }}>
+      <div className="relative aspect-[4/3] bg-muted">
         <Link href={annotateHref} className="absolute inset-0 z-0" aria-label={`Annotate ${image.fileName}`}>
           {image.url ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={image.url} alt={image.fileName} loading="lazy" decoding="async" className="size-full object-cover" />
+            <ThumbhashImage src={image.url} alt={image.fileName} thumbhash={image.thumbhash} className="size-full" />
           ) : (
             <div className="flex size-full items-center justify-center text-xs text-muted-foreground">Preview unavailable</div>
           )}

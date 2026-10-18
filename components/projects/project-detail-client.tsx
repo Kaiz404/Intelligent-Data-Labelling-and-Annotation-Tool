@@ -2,13 +2,19 @@
 
 import { CopyPlus, Download, FileArchive, FolderInput, Pencil, Search, Trash2, Upload, WandSparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { startTransition, useCallback, useMemo, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { moveImagesToRecycleBin } from "@/lib/actions/recycle-bin";
 import { AnnotationExportSheet } from "@/components/annotate/annotation-export-sheet";
 import { EditProjectDialog } from "@/components/dashboard/project-action-dialogs";
 import { AiJobBanner } from "@/components/projects/ai-job-banner";
 import { BatchAiAnnotateDialog } from "@/components/projects/batch-ai-annotate-dialog";
+import { DatasetImportBanner } from "@/components/projects/dataset-import-banner";
+import {
+  useDatasetImportActions,
+  useDatasetImportRun,
+} from "@/components/projects/dataset-import-provider";
 import { ImageCard } from "@/components/projects/image-card";
+import { useProjectUploadQueue } from "@/components/projects/image-upload-provider";
 import { ImageTransferDialog, RenameImageDialog } from "@/components/projects/image-action-dialogs";
 import { ImportDatasetDialog } from "@/components/projects/import-dataset-dialog";
 import { LabelFilterMenu } from "@/components/projects/label-filter-menu";
@@ -17,6 +23,7 @@ import {
   SortOrderButton,
   type SortDirection
 } from "@/components/projects/sort-order-button";
+import { UploadBanner } from "@/components/projects/upload-banner";
 import { UploadImagesDialog } from "@/components/projects/upload-images-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -84,6 +91,10 @@ type ImageFilterOption = keyof typeof imageFilterOptions;
  * comma-separated label ids (see `lib/image-label-filter.ts`). Unknown values,
  * such as the retired `status=in-progress`, fall back to their default.
  */
+// Each refresh reloads every image, so a large batch refreshes the page at
+// most this often while it uploads, and once more after the last image.
+const UPLOAD_REFRESH_INTERVAL_MS = 15_000;
+
 const QUERY_DEFAULTS = {
   q: "",
   filter: "all",
@@ -159,9 +170,20 @@ export function ProjectDetailClient({
     ReadonlyMap<string, { from: string; to: string }>
   >(() => new Map());
 
+  const importRun = useDatasetImportRun(serverProject.id);
+  const { dismissDatasetImport } = useDatasetImportActions();
+  const importedImages = importRun?.importedImages;
+  // Images a running import created show at once, after the server's, until
+  // a refresh brings their server copies.
+  const projectImages = useMemo(() => {
+    if (!importedImages?.length) return serverImages;
+    const serverIds = new Set(serverImages.map((image) => image.id));
+    return [...serverImages, ...importedImages.filter((image) => !serverIds.has(image.id))];
+  }, [importedImages, serverImages]);
+
   const images = useMemo(
     () =>
-      serverImages.flatMap((image) => {
+      projectImages.flatMap((image) => {
         if (removedIds.has(image.id)) return [];
         const rename = renames.get(image.id);
         // Only until the server copy changes: then it is the source of truth.
@@ -169,7 +191,7 @@ export function ProjectDetailClient({
           ? [{ ...image, fileName: rename.to }]
           : [image];
       }),
-    [removedIds, renames, serverImages],
+    [projectImages, removedIds, renames],
   );
 
   const refresh = useCallback(() => {
@@ -177,6 +199,40 @@ export function ProjectDetailClient({
     // payload into this client boundary.
     startTransition(() => router.refresh());
   }, [router]);
+
+  const lastUploadRefresh = useRef(0);
+  const uploadRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshAfterUpload = useCallback(() => {
+    if (uploadRefreshTimer.current !== null) return;
+    const run = () => {
+      uploadRefreshTimer.current = null;
+      lastUploadRefresh.current = Date.now();
+      refresh();
+    };
+    const delay = lastUploadRefresh.current + UPLOAD_REFRESH_INTERVAL_MS - Date.now();
+    if (delay <= 0) run();
+    else uploadRefreshTimer.current = setTimeout(run, delay);
+  }, [refresh]);
+  useEffect(() => () => {
+    if (uploadRefreshTimer.current !== null) clearTimeout(uploadRefreshTimer.current);
+  }, []);
+  // The queue outlives this page; only completions while it is mounted refresh.
+  // Not subscribed to its snapshot: that changes every frame during a batch.
+  const uploadQueue = useProjectUploadQueue(serverProject.id, serverProject.name);
+  useEffect(() => uploadQueue.onComplete(refreshAfterUpload), [uploadQueue, refreshAfterUpload]);
+
+  // Refresh once labels are resolved (the Label filter needs any new ones)
+  // and once the run ends. Only transitions seen here count, so returning to
+  // the page after a run does not refresh again.
+  const importStatus = importRun?.state.status;
+  const seenImportStatus = useRef(importStatus);
+  useEffect(() => {
+    const previous = seenImportStatus.current;
+    seenImportStatus.current = importStatus;
+    if ((previous === "resolving_labels" || previous === "importing") && importStatus !== previous) {
+      refresh();
+    }
+  }, [importStatus, refresh]);
 
   const {
     job: aiJob,
@@ -405,6 +461,16 @@ export function ProjectDetailClient({
         </div>
       </div>
 
+      {importRun ? (
+        <DatasetImportBanner
+          run={importRun}
+          onViewDetails={() => setIsImportOpen(true)}
+          onDismiss={() => dismissDatasetImport(project.id)}
+        />
+      ) : null}
+
+      <UploadBanner store={uploadQueue} onViewDetails={() => setIsUploadOpen(true)} />
+
       {aiJob ? (
         <AiJobBanner
           job={aiJob}
@@ -593,15 +659,14 @@ export function ProjectDetailClient({
       <UploadImagesDialog
         open={isUploadOpen}
         onOpenChange={setIsUploadOpen}
-        projectId={project.id}
-        onUploadComplete={refresh}
+        store={uploadQueue}
       />
 
       <ImportDatasetDialog
         open={isImportOpen}
         onOpenChange={setIsImportOpen}
         projectId={project.id}
-        onImportComplete={refresh}
+        projectName={project.name}
       />
 
       <BatchAiAnnotateDialog
@@ -623,7 +688,7 @@ export function ProjectDetailClient({
         open={renameTarget !== null}
         onOpenChange={(open) => { if (!open) setRenameTarget(null); }}
         onRenamed={(imageId, fileName) => {
-          const from = serverImages.find((image) => image.id === imageId)?.fileName;
+          const from = projectImages.find((image) => image.id === imageId)?.fileName;
           if (from === undefined) return;
           setRenames((current) => new Map(current).set(imageId, { from, to: fileName }));
         }}
