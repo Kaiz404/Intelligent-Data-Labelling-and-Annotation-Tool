@@ -31,6 +31,7 @@ type ImportDatasetDialogProps = {
 type Selection =
   | { status: "validating"; filename: string }
   | { status: "error"; filename?: string; error: string; showStructure?: boolean }
+  | { status: "error"; filename?: string; error: string; showStructure?: boolean }
   | { status: "ready"; filename: string; plan: ValidatedDatasetImportPlan };
 
 type DatasetFormat = "coco" | "yolo" | "voc";
@@ -197,6 +198,7 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
     const file = files[0];
     if (!file.name.toLowerCase().endsWith(".zip")) {
       setSelection({ status: "error", filename: file.name, error: `Choose a .zip file containing your ${formatName} dataset.`, showStructure: true });
+      setSelection({ status: "error", filename: file.name, error: `Choose a .zip file containing your ${formatName} dataset.`, showStructure: true });
       return;
     }
     setSelection({ status: "validating", filename: file.name });
@@ -208,6 +210,7 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
       if (version !== validationVersion.current) return;
       if (plan.images.length === 0) {
         setSelection({ status: "error", filename: file.name, error: "The dataset contains no images. Choose a ZIP with at least one referenced image.", showStructure: true });
+        setSelection({ status: "error", filename: file.name, error: "The dataset contains no images. Choose a ZIP with at least one referenced image.", showStructure: true });
         return;
       }
       setSelection({ status: "ready", filename: file.name, plan });
@@ -216,6 +219,7 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
       setSelection({
         status: "error", filename: file.name,
         error: error instanceof Error ? error.message : `Could not validate this dataset. Choose another ${formatName} ZIP.`,
+        showStructure: true,
         showStructure: true,
       });
     }
@@ -320,6 +324,12 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
         ) : null}
 
         {selection?.status === "error" ? (
+          <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+              <p>{selection.error}</p>
+            </div>
+            {selection.showStructure ? <DatasetStructureGuide format={format} /> : null}
           <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
             <div className="flex items-start gap-2">
               <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
