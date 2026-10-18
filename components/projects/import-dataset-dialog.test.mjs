@@ -179,6 +179,23 @@ test("validator errors and empty datasets show validation errors", async () => {
   assert.ok(nodes(ui.render()).some((node) => typeof node === "string" && node.includes("contains no images")));
 });
 
+test("validation errors show the selected format's correct ZIP structure", async () => {
+  const reject = async () => { throw new Error("Wrong dataset structure"); };
+  const ui = setup(reject, undefined, reject, reject);
+
+  ui.select([zip("coco.zip")]); await tick();
+  let guidance = nodes(ui.find((node) => node.props.role === "alert")).filter((node) => typeof node === "string").join(" ");
+  for (const value of ["Correct", "COCO", "ZIP structure", "annotations.json", "images/", "one enclosing folder"]) assert.ok(guidance.includes(value));
+
+  ui.changeFormat("yolo"); ui.select([zip("yolo.zip")]); await tick();
+  guidance = nodes(ui.find((node) => node.props.role === "alert")).filter((node) => typeof node === "string").join(" ");
+  for (const value of ["Correct", "YOLO", "ZIP structure", "classes.txt", "images/", "labels/", "data.yaml-only"]) assert.ok(guidance.includes(value));
+
+  ui.changeFormat("voc"); ui.select([zip("voc.zip")]); await tick();
+  guidance = nodes(ui.find((node) => node.props.role === "alert")).filter((node) => typeof node === "string").join(" ");
+  for (const value of ["Correct", "Pascal VOC", "ZIP structure", "JPEGImages/", "Annotations/", "matching XML"]) assert.ok(guidance.includes(value));
+});
+
 test("replacement ignores older successful and failed validation results", async () => {
   for (const oldFails of [false, true]) {
     const older = deferred(), newer = deferred();

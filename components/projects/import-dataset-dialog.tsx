@@ -30,7 +30,7 @@ type ImportDatasetDialogProps = {
 
 type Selection =
   | { status: "validating"; filename: string }
-  | { status: "error"; filename?: string; error: string }
+  | { status: "error"; filename?: string; error: string; showStructure?: boolean }
   | { status: "ready"; filename: string; plan: ValidatedDatasetImportPlan };
 
 type DatasetFormat = "coco" | "yolo" | "voc";
@@ -39,6 +39,33 @@ const profileNames = {
   "app-native": "App-native",
   "one-based-inclusive": "Standard Pascal VOC (1-based inclusive)",
 } as const;
+
+const datasetStructures: Record<DatasetFormat, { tree: string; note: string }> = {
+  coco: {
+    tree: "dataset.zip\n├── annotations.json\n└── images/\n    ├── image1.jpg\n    └── image2.png",
+    note: "The JSON filename may differ, but it must contain COCO images, categories, and annotations arrays and reference every image.",
+  },
+  yolo: {
+    tree: "dataset.zip\n├── classes.txt\n├── images/\n│   ├── image1.jpg\n│   └── image2.png\n└── labels/\n    ├── image1.txt\n    └── image2.txt",
+    note: "labels/ is optional for unannotated images. Label filenames must match their image filenames. data.yaml-only datasets are not supported.",
+  },
+  voc: {
+    tree: "dataset.zip\n├── images/                 (or JPEGImages/)\n│   ├── image1.jpg\n│   └── image2.png\n└── annotations/            (or Annotations/)\n    ├── image1.xml\n    └── image2.xml",
+    note: "Every image needs a matching XML file. XML files with zero objects are valid.",
+  },
+};
+
+function DatasetStructureGuide({ format }: { format: DatasetFormat }) {
+  const guide = datasetStructures[format];
+  return (
+    <div className="mt-3 space-y-2 rounded-md border border-border bg-background p-3 text-foreground">
+      <p className="font-medium">Correct {formatNames[format]} ZIP structure</p>
+      <pre className="overflow-x-auto whitespace-pre text-xs leading-5">{guide.tree}</pre>
+      <p className="text-xs text-muted-foreground">{guide.note}</p>
+      <p className="text-xs text-muted-foreground">The folders may be at the ZIP root or inside one enclosing folder.</p>
+    </div>
+  );
+}
 
 export function ImportDatasetDialog({ projectId, open, onOpenChange, onImportComplete }: ImportDatasetDialogProps) {
   // Owned outside Radix's conditionally mounted content for the entire run.
@@ -169,7 +196,7 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
     }
     const file = files[0];
     if (!file.name.toLowerCase().endsWith(".zip")) {
-      setSelection({ status: "error", filename: file.name, error: `Choose a .zip file containing your ${formatName} dataset.` });
+      setSelection({ status: "error", filename: file.name, error: `Choose a .zip file containing your ${formatName} dataset.`, showStructure: true });
       return;
     }
     setSelection({ status: "validating", filename: file.name });
@@ -180,7 +207,7 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
           : readVocDatasetZip(file, { coordinateProfile: profileRef.current }));
       if (version !== validationVersion.current) return;
       if (plan.images.length === 0) {
-        setSelection({ status: "error", filename: file.name, error: "The dataset contains no images. Choose a ZIP with at least one referenced image." });
+        setSelection({ status: "error", filename: file.name, error: "The dataset contains no images. Choose a ZIP with at least one referenced image.", showStructure: true });
         return;
       }
       setSelection({ status: "ready", filename: file.name, plan });
@@ -189,6 +216,7 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
       setSelection({
         status: "error", filename: file.name,
         error: error instanceof Error ? error.message : `Could not validate this dataset. Choose another ${formatName} ZIP.`,
+        showStructure: true,
       });
     }
   }
@@ -292,9 +320,12 @@ function DatasetSelection({ onClose, onStart, canChange, active, importState }: 
         ) : null}
 
         {selection?.status === "error" ? (
-          <div role="alert" className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-            <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-            <p>{selection.error}</p>
+          <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+              <p>{selection.error}</p>
+            </div>
+            {selection.showStructure ? <DatasetStructureGuide format={format} /> : null}
           </div>
         ) : null}
 
