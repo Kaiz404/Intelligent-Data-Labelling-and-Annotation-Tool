@@ -9,16 +9,16 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState,
+  useState
 } from "react";
 import {
   reverseSortDirection,
   SortOrderButton,
-  type SortDirection,
+  type SortDirection
 } from "@/components/projects/sort-order-button";
 import {
   RecycleBinImageCard,
-  restoreBlockedReason,
+  restoreBlockedReason
 } from "@/components/recycle-bin/recycle-bin-image-card";
 import { RecycleBinProjectRow } from "@/components/recycle-bin/recycle-bin-project-row";
 import { Button } from "@/components/ui/button";
@@ -29,7 +29,7 @@ import {
   DialogDescription,
   DialogFooter,
   DialogHeader,
-  DialogTitle,
+  DialogTitle
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
@@ -37,20 +37,20 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
+  SelectValue
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Tooltip,
   TooltipContent,
-  TooltipTrigger,
+  TooltipTrigger
 } from "@/components/ui/tooltip";
 import { useNow } from "@/hooks/use-now";
 import { useQueryParams } from "@/hooks/use-query-params";
 import {
   deleteRecycleBinItemsPermanently,
-  restoreRecycleBinItems,
+  restoreRecycleBinItems
 } from "@/lib/actions/recycle-bin";
 import { numberFormatter } from "@/lib/format";
 import type { RecycleBinContents } from "@/lib/types/recycle-bin";
@@ -62,8 +62,11 @@ const ALL_PROJECTS = "all";
 
 const sortOptions = {
   deletedAt: { label: "Deleted Date", defaultDirection: "descending" },
-  name: { label: "Name", defaultDirection: "ascending" },
-} as const satisfies Record<string, { label: string; defaultDirection: SortDirection }>;
+  name: { label: "Name", defaultDirection: "ascending" }
+} as const satisfies Record<
+  string,
+  { label: string; defaultDirection: SortDirection }
+>;
 
 type SortOption = keyof typeof sortOptions;
 type SortState = { by: SortOption; direction: SortDirection };
@@ -81,7 +84,7 @@ const QUERY_DEFAULTS = {
   iq: "",
   project: ALL_PROJECTS,
   isort: "deletedAt",
-  idir: "",
+  idir: ""
 };
 
 function sortFromQuery(by: string, dir: string): SortState {
@@ -93,12 +96,14 @@ function sortFromQuery(by: string, dir: string): SortState {
     direction:
       dir === "ascending" || dir === "descending"
         ? dir
-        : sortOptions[sortBy].defaultDirection,
+        : sortOptions[sortBy].defaultDirection
   };
 }
 
 function directionQuery(sort: SortState) {
-  return sort.direction === sortOptions[sort.by].defaultDirection ? "" : sort.direction;
+  return sort.direction === sortOptions[sort.by].defaultDirection
+    ? ""
+    : sort.direction;
 }
 
 type Notice = {
@@ -120,15 +125,16 @@ function errorMessage(cause: unknown, fallback: string) {
 function sortItems<T extends { deletedAt: string }>(
   items: T[],
   sort: SortState,
-  nameOf: (item: T) => string,
+  nameOf: (item: T) => string
 ) {
-  const byDeletedAt = (a: T, b: T) => Date.parse(a.deletedAt) - Date.parse(b.deletedAt);
+  const byDeletedAt = (a: T, b: T) =>
+    Date.parse(a.deletedAt) - Date.parse(b.deletedAt);
   return [...items].sort((a, b) => {
     let comparison =
       sort.by === "name"
         ? nameOf(a).localeCompare(nameOf(b), undefined, {
             numeric: true,
-            sensitivity: "base",
+            sensitivity: "base"
           })
         : byDeletedAt(a, b);
     if (sort.direction === "descending") comparison = -comparison;
@@ -140,7 +146,9 @@ function sortItems<T extends { deletedAt: string }>(
 function countLabel(projectCount: number, imageCount: number) {
   const parts: string[] = [];
   if (projectCount > 0) {
-    parts.push(`${projectCount} ${projectCount === 1 ? "project" : "projects"}`);
+    parts.push(
+      `${projectCount} ${projectCount === 1 ? "project" : "projects"}`
+    );
   }
   if (imageCount > 0) {
     parts.push(`${imageCount} ${imageCount === 1 ? "image" : "images"}`);
@@ -151,7 +159,7 @@ function countLabel(projectCount: number, imageCount: number) {
 function SortControls({
   sort,
   label,
-  onChange,
+  onChange
 }: {
   sort: SortState;
   label: string;
@@ -194,7 +202,7 @@ function SortControls({
 function SearchInput({
   value,
   placeholder,
-  onChange,
+  onChange
 }: {
   value: string;
   placeholder: string;
@@ -215,7 +223,13 @@ function SearchInput({
   );
 }
 
-function EmptyState({ title, description }: { title: string; description: string }) {
+function EmptyState({
+  title,
+  description
+}: {
+  title: string;
+  description: string;
+}) {
   return (
     <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed px-6 py-16 text-center">
       <div className="flex size-11 items-center justify-center rounded-full bg-primary/10 text-primary">
@@ -248,16 +262,19 @@ export function RecycleBinClient({
   projects: serverProjects,
   images: serverImages,
   serverNow,
-  retentionDays,
+  retentionDays
 }: RecycleBinClientProps) {
   const router = useRouter();
   const now = useNow(Date.parse(serverNow));
   const [query, setQuery] = useQueryParams(QUERY_DEFAULTS);
   // Until the user picks a tab, the one chosen on arrival stays put.
   const [arrivalTab] = useState<Tab>(
-    serverProjects.length === 0 && serverImages.length > 0 ? "images" : "projects",
+    serverProjects.length === 0 && serverImages.length > 0
+      ? "images"
+      : "projects"
   );
-  const tab: Tab = query.tab === "projects" || query.tab === "images" ? query.tab : arrivalTab;
+  const tab: Tab =
+    query.tab === "projects" || query.tab === "images" ? query.tab : arrivalTab;
   // Typed text updates at once; the URL only keeps it for revisits.
   const [projectSearch, setProjectSearch] = useState(query.q);
   const projectSort = sortFromQuery(query.sort, query.dir);
@@ -265,21 +282,29 @@ export function RecycleBinClient({
   const imageProjectFilter = query.project;
   const imageSort = sortFromQuery(query.isort, query.idir);
   // Restored or deleted items leave at once; the refresh then confirms it.
-  const [removedIds, setRemovedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [removedIds, setRemovedIds] = useState<ReadonlySet<string>>(
+    () => new Set()
+  );
   const projects = useMemo(
     () => serverProjects.filter((project) => !removedIds.has(project.id)),
-    [removedIds, serverProjects],
+    [removedIds, serverProjects]
   );
   const images = useMemo(
     () => serverImages.filter((image) => !removedIds.has(image.id)),
-    [removedIds, serverImages],
+    [removedIds, serverImages]
   );
   const [selectedIds, setSelectedIds] = useState<Record<Tab, string[]>>({
     projects: [],
-    images: [],
+    images: []
   });
-  const selectedProjectIds = useMemo(() => new Set(selectedIds.projects), [selectedIds.projects]);
-  const selectedImageIds = useMemo(() => new Set(selectedIds.images), [selectedIds.images]);
+  const selectedProjectIds = useMemo(
+    () => new Set(selectedIds.projects),
+    [selectedIds.projects]
+  );
+  const selectedImageIds = useMemo(
+    () => new Set(selectedIds.images),
+    [selectedIds.images]
+  );
   const [itemErrors, setItemErrors] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState<Notice | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
@@ -293,11 +318,11 @@ export function RecycleBinClient({
   // Server lists, so items stay nameable in notices after they leave.
   const projectsById = useMemo(
     () => new Map(serverProjects.map((project) => [project.id, project])),
-    [serverProjects],
+    [serverProjects]
   );
   const imagesById = useMemo(
     () => new Map(serverImages.map((image) => [image.id, image])),
-    [serverImages],
+    [serverImages]
   );
 
   const visibleProjects = useMemo(() => {
@@ -307,10 +332,10 @@ export function RecycleBinClient({
         (project) =>
           !query ||
           project.name.toLowerCase().includes(query) ||
-          (project.description ?? "").toLowerCase().includes(query),
+          (project.description ?? "").toLowerCase().includes(query)
       ),
       projectSort,
-      (project) => project.name,
+      (project) => project.name
     );
   }, [projectSearch, projectSort, projects]);
 
@@ -323,7 +348,7 @@ export function RecycleBinClient({
   }, [images]);
   // The filtered project can disappear after a restore/delete; fall back to all.
   const activeImageProjectFilter = imageProjectOptions.some(
-    (option) => option.projectId === imageProjectFilter,
+    (option) => option.projectId === imageProjectFilter
   )
     ? imageProjectFilter
     : ALL_PROJECTS;
@@ -336,16 +361,20 @@ export function RecycleBinClient({
         .filter(
           (image) =>
             activeImageProjectFilter === ALL_PROJECTS ||
-            image.projectId === activeImageProjectFilter,
+            image.projectId === activeImageProjectFilter
         ),
       imageSort,
-      (image) => image.fileName,
+      (image) => image.fileName
     );
   }, [activeImageProjectFilter, imageSearch, imageSort, images]);
 
   // Derived from the current props, so items that vanished after a refresh drop out.
-  const selectedProjects = projects.filter((project) => selectedProjectIds.has(project.id));
-  const selectedImages = images.filter((image) => selectedImageIds.has(image.id));
+  const selectedProjects = projects.filter((project) =>
+    selectedProjectIds.has(project.id)
+  );
+  const selectedImages = images.filter((image) =>
+    selectedImageIds.has(image.id)
+  );
   const tabSelectionIds =
     tab === "projects"
       ? selectedProjects.map((project) => project.id)
@@ -354,49 +383,88 @@ export function RecycleBinClient({
     tab === "images"
       ? selectedImages.flatMap((image) => restoreBlockedReason(image) ?? [])
       : selectedProjects.flatMap((project) =>
-          project.deletionPending ? ["Deletion didn't finish"] : [],
-        ),
+          project.deletionPending ? ["Deletion didn't finish"] : []
+        )
   );
   const canRestoreSelection =
     tab === "projects"
       ? selectedProjects.some((project) => !project.deletionPending)
       : selectedImages.some((image) => restoreBlockedReason(image) === null);
+  const visibleSelectionIds =
+    tab === "projects"
+      ? visibleProjects.map((project) => project.id)
+      : visibleImages.map((image) => image.id);
+  const selectedVisibleCount = visibleSelectionIds.reduce(
+    (count, id) => count + (selectedIds[tab].includes(id) ? 1 : 0),
+    0
+  );
+  const allVisibleSelected =
+    visibleSelectionIds.length > 0 &&
+    selectedVisibleCount === visibleSelectionIds.length;
 
-  const toggleSelection = useCallback((target: Tab, id: string, isSelected: boolean) => {
-    setSelectedIds((current) => {
-      const ids = current[target];
-      return {
-        ...current,
-        [target]: isSelected
-          ? ids.includes(id) ? ids : [...ids, id]
-          : ids.filter((candidate) => candidate !== id),
-      };
-    });
-  }, []);
+  const toggleSelection = useCallback(
+    (target: Tab, id: string, isSelected: boolean) => {
+      setSelectedIds((current) => {
+        const ids = current[target];
+        return {
+          ...current,
+          [target]: isSelected
+            ? ids.includes(id)
+              ? ids
+              : [...ids, id]
+            : ids.filter((candidate) => candidate !== id)
+        };
+      });
+    },
+    []
+  );
   const toggleProject = useCallback(
-    (id: string, isSelected: boolean) => toggleSelection("projects", id, isSelected),
-    [toggleSelection],
+    (id: string, isSelected: boolean) =>
+      toggleSelection("projects", id, isSelected),
+    [toggleSelection]
   );
   const toggleImage = useCallback(
-    (id: string, isSelected: boolean) => toggleSelection("images", id, isSelected),
-    [toggleSelection],
+    (id: string, isSelected: boolean) =>
+      toggleSelection("images", id, isSelected),
+    [toggleSelection]
   );
 
   function clearSelection(target?: Tab) {
     setSelectedIds((current) =>
-      target ? { ...current, [target]: [] } : { projects: [], images: [] },
+      target ? { ...current, [target]: [] } : { projects: [], images: [] }
     );
   }
 
-  function hide(ids: string[]) {
-    if (ids.length > 0) setRemovedIds((current) => new Set([...current, ...ids]));
+  function selectVisible() {
+    setSelectedIds((current) => ({
+      ...current,
+      [tab]: [...new Set([...current[tab], ...visibleSelectionIds])]
+    }));
   }
 
-  function setErrorsFor(ids: string[], failures: Array<{ id: string; error?: string }>, fallback: string) {
+  function deselectVisible() {
+    const visibleIds = new Set(visibleSelectionIds);
+    setSelectedIds((current) => ({
+      ...current,
+      [tab]: current[tab].filter((id) => !visibleIds.has(id))
+    }));
+  }
+
+  function hide(ids: string[]) {
+    if (ids.length > 0)
+      setRemovedIds((current) => new Set([...current, ...ids]));
+  }
+
+  function setErrorsFor(
+    ids: string[],
+    failures: Array<{ id: string; error?: string }>,
+    fallback: string
+  ) {
     setItemErrors((current) => {
       const next = { ...current };
       for (const id of ids) delete next[id];
-      for (const failure of failures) next[failure.id] = failure.error ?? fallback;
+      for (const failure of failures)
+        next[failure.id] = failure.error ?? fallback;
       return next;
     });
   }
@@ -411,7 +479,7 @@ export function RecycleBinClient({
   function countItems(ids: string[]) {
     return countLabel(
       ids.filter((id) => projectsById.has(id)).length,
-      ids.filter((id) => imagesById.has(id)).length,
+      ids.filter((id) => imagesById.has(id)).length
     );
   }
 
@@ -427,7 +495,9 @@ export function RecycleBinClient({
       hide(restored.map((result) => result.id));
 
       if (failures.length === 0) {
-        const projectIds = new Set(restored.flatMap((result) => result.projectId ?? []));
+        const projectIds = new Set(
+          restored.flatMap((result) => result.projectId ?? [])
+        );
         const [onlyProjectId] = projectIds;
         const subject = ids.length === 1 ? itemName(ids[0]) : countItems(ids);
         setNotice({
@@ -436,13 +506,13 @@ export function RecycleBinClient({
           link:
             projectIds.size === 1 && onlyProjectId
               ? { href: `/projects/${onlyProjectId}`, label: "Open project" }
-              : undefined,
+              : undefined
         });
       } else if (ids.length > 1) {
         // A single failure is already explained inline on its row/card.
         setNotice({
           tone: "error",
-          text: `Restored ${restored.length} of ${results.length} items. ${failures.length} couldn't be restored; see the message on each item.`,
+          text: `Restored ${restored.length} of ${results.length} items. ${failures.length} couldn't be restored; see the message on each item.`
         });
       }
       clearSelection();
@@ -450,7 +520,7 @@ export function RecycleBinClient({
     } catch (cause) {
       setNotice({
         tone: "error",
-        text: errorMessage(cause, "Could not restore the selected items."),
+        text: errorMessage(cause, "Could not restore the selected items.")
       });
     } finally {
       setPending(null);
@@ -477,51 +547,60 @@ export function RecycleBinClient({
       const deletedIds = ids.filter((id) => !unfinished.has(id));
       // Gone from the bin, along with the binned images of deleted projects.
       const deletedProjectIds = new Set(
-        deletedIds.flatMap((id) => projectsById.get(id)?.projectId ?? []),
+        deletedIds.flatMap((id) => projectsById.get(id)?.projectId ?? [])
       );
       hide([
         ...ids.filter((id) => !failedIds.has(id)),
         ...images
           .filter((image) => deletedProjectIds.has(image.projectId))
-          .map((image) => image.id),
+          .map((image) => image.id)
       ]);
 
       const parts: string[] = [];
       if (deletedIds.length > 0) {
         parts.push(
           `Permanently deleted ${
-            deletedIds.length === 1 ? itemName(deletedIds[0]) : countItems(deletedIds)
-          }.`,
+            deletedIds.length === 1
+              ? itemName(deletedIds[0])
+              : countItems(deletedIds)
+          }.`
         );
       }
       if (skipped.length > 0) {
         parts.push(
           `${skipped.length} ${
             skipped.length === 1 ? "item was" : "items were"
-          } no longer in the Recycle Bin.`,
+          } no longer in the Recycle Bin.`
         );
       }
       if (failed.length > 0) {
         parts.push(
-          `${failed.length} couldn't be fully deleted: ${failed[0].error}`,
+          `${failed.length} couldn't be fully deleted: ${failed[0].error}`
         );
       }
       setNotice({
-        tone: failed.length > 0 || deletedIds.length === 0 ? "error" : "success",
-        text: parts.join(" "),
+        tone:
+          failed.length > 0 || deletedIds.length === 0 ? "error" : "success",
+        text: parts.join(" ")
       });
       setDeleteIds(null);
       clearSelection();
       refresh();
     } catch (cause) {
-      setDeleteError(errorMessage(cause, "Could not delete the selected items."));
+      setDeleteError(
+        errorMessage(cause, "Could not delete the selected items.")
+      );
     } finally {
       setPending(null);
     }
   }
 
-  const deleteProjects = (deleteIds ?? []).flatMap((id) => projectsById.get(id) ?? []);
-  const deleteImages = (deleteIds ?? []).flatMap((id) => imagesById.get(id) ?? []);
+  const deleteProjects = (deleteIds ?? []).flatMap(
+    (id) => projectsById.get(id) ?? []
+  );
+  const deleteImages = (deleteIds ?? []).flatMap(
+    (id) => imagesById.get(id) ?? []
+  );
   const deleteCount = deleteProjects.length + deleteImages.length;
   let deleteTitle = `Delete ${countLabel(deleteProjects.length, deleteImages.length)} permanently?`;
   let deleteDescription = `These ${countLabel(deleteProjects.length, deleteImages.length)} will be deleted permanently and their files removed from storage.${
@@ -551,15 +630,17 @@ export function RecycleBinClient({
   });
   const restoreItem = useCallback(
     (item: { id: string }) => void actionsRef.current.restore([item.id]),
-    [],
+    []
   );
   const deleteItem = useCallback(
     (item: { id: string }) => actionsRef.current.requestDelete([item.id]),
-    [],
+    []
   );
 
   return (
-    <div className={tabSelectionIds.length > 0 ? "space-y-4 pb-20" : "space-y-4"}>
+    <div
+      className={tabSelectionIds.length > 0 ? "space-y-4 pb-20" : "space-y-4"}
+    >
       {notice ? (
         <div
           role="status"
@@ -567,7 +648,7 @@ export function RecycleBinClient({
             "flex items-start justify-between gap-3 rounded-md px-3 py-2 text-sm",
             notice.tone === "error"
               ? "bg-destructive/10 text-destructive"
-              : "bg-primary/10 text-primary",
+              : "bg-primary/10 text-primary"
           )}
         >
           <p>
@@ -595,7 +676,11 @@ export function RecycleBinClient({
         </div>
       ) : null}
 
-      <Tabs value={tab} onValueChange={(value) => setQuery({ tab: value })} className="gap-5">
+      <Tabs
+        value={tab}
+        onValueChange={(value) => setQuery({ tab: value })}
+        className="gap-5"
+      >
         <TabsList
           variant="line"
           className="w-full justify-start gap-0 border-b p-0 group-data-[orientation=horizontal]/tabs:h-auto"
@@ -629,7 +714,9 @@ export function RecycleBinClient({
                   <SortControls
                     sort={projectSort}
                     label="projects"
-                    onChange={(sort) => setQuery({ sort: sort.by, dir: directionQuery(sort) })}
+                    onChange={(sort) =>
+                      setQuery({ sort: sort.by, dir: directionQuery(sort) })
+                    }
                   />
                 </div>
               </div>
@@ -643,22 +730,42 @@ export function RecycleBinClient({
                   }}
                 />
               ) : (
-                <div className="space-y-3">
-                  {visibleProjects.map((project) => (
-                    <RecycleBinProjectRow
-                      key={project.id}
-                      project={project}
-                      now={now}
-                      isSelected={selectedProjectIds.has(project.id)}
-                      disabled={isBusy}
-                      pendingAction={pendingFor(project.id)}
-                      error={itemErrors[project.id]}
-                      onSelectionChange={toggleProject}
-                      onRestore={restoreItem}
-                      onDelete={deleteItem}
-                    />
-                  ))}
-                </div>
+                <>
+                  <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
+                    <label className="flex cursor-pointer items-center gap-2">
+                      <Checkbox
+                        checked={allVisibleSelected}
+                        onCheckedChange={(checked) => {
+                          if (checked === true) selectVisible();
+                          else deselectVisible();
+                        }}
+                        aria-label="Select all shown projects"
+                      />
+                      Select all
+                    </label>
+                    <span>
+                      {visibleProjects.length === projects.length
+                        ? `${numberFormatter.format(projects.length)} projects`
+                        : `${numberFormatter.format(visibleProjects.length)} of ${numberFormatter.format(projects.length)} projects`}
+                    </span>
+                  </div>
+                  <div className="space-y-3">
+                    {visibleProjects.map((project) => (
+                      <RecycleBinProjectRow
+                        key={project.id}
+                        project={project}
+                        now={now}
+                        isSelected={selectedProjectIds.has(project.id)}
+                        disabled={isBusy}
+                        pendingAction={pendingFor(project.id)}
+                        error={itemErrors[project.id]}
+                        onSelectionChange={toggleProject}
+                        onRestore={restoreItem}
+                        onDelete={deleteItem}
+                      />
+                    ))}
+                  </div>
+                </>
               )}
             </>
           )}
@@ -688,13 +795,19 @@ export function RecycleBinClient({
                       if (value) setQuery({ project: value });
                     }}
                   >
-                    <SelectTrigger className="w-[180px]" aria-label="Filter by project">
+                    <SelectTrigger
+                      className="w-[180px]"
+                      aria-label="Filter by project"
+                    >
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value={ALL_PROJECTS}>All Projects</SelectItem>
                       {imageProjectOptions.map((option) => (
-                        <SelectItem key={option.projectId} value={option.projectId}>
+                        <SelectItem
+                          key={option.projectId}
+                          value={option.projectId}
+                        >
                           {option.projectName}
                         </SelectItem>
                       ))}
@@ -703,7 +816,9 @@ export function RecycleBinClient({
                   <SortControls
                     sort={imageSort}
                     label="images"
-                    onChange={(sort) => setQuery({ isort: sort.by, idir: directionQuery(sort) })}
+                    onChange={(sort) =>
+                      setQuery({ isort: sort.by, idir: directionQuery(sort) })
+                    }
                   />
                 </div>
               </div>
@@ -717,22 +832,42 @@ export function RecycleBinClient({
                   }}
                 />
               ) : (
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                  {visibleImages.map((image) => (
-                    <RecycleBinImageCard
-                      key={image.id}
-                      image={image}
-                      now={now}
-                      isSelected={selectedImageIds.has(image.id)}
-                      disabled={isBusy}
-                      pendingAction={pendingFor(image.id)}
-                      error={itemErrors[image.id]}
-                      onSelectionChange={toggleImage}
-                      onRestore={restoreItem}
-                      onDelete={deleteItem}
-                    />
-                  ))}
-                </div>
+                <>
+                  <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
+                    <label className="flex cursor-pointer items-center gap-2">
+                      <Checkbox
+                        checked={allVisibleSelected}
+                        onCheckedChange={(checked) => {
+                          if (checked === true) selectVisible();
+                          else deselectVisible();
+                        }}
+                        aria-label="Select all shown images"
+                      />
+                      Select all
+                    </label>
+                    <span>
+                      {visibleImages.length === images.length
+                        ? `${numberFormatter.format(images.length)} images`
+                        : `${numberFormatter.format(visibleImages.length)} of ${numberFormatter.format(images.length)} images`}
+                    </span>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                    {visibleImages.map((image) => (
+                      <RecycleBinImageCard
+                        key={image.id}
+                        image={image}
+                        now={now}
+                        isSelected={selectedImageIds.has(image.id)}
+                        disabled={isBusy}
+                        pendingAction={pendingFor(image.id)}
+                        error={itemErrors[image.id]}
+                        onSelectionChange={toggleImage}
+                        onRestore={restoreItem}
+                        onDelete={deleteItem}
+                      />
+                    ))}
+                  </div>
+                </>
               )}
             </>
           )}
@@ -755,6 +890,25 @@ export function RecycleBinClient({
             orientation="vertical"
             className="hidden data-[orientation=vertical]:h-6 sm:block"
           />
+          {allVisibleSelected || visibleSelectionIds.length === 0 ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => clearSelection(tab)}
+            >
+              Clear
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={selectVisible}
+            >
+              Select all {numberFormatter.format(visibleSelectionIds.length)}
+            </Button>
+          )}
           {canRestoreSelection ? (
             <Button
               type="button"
@@ -810,7 +964,9 @@ export function RecycleBinClient({
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="break-words">{deleteTitle}</DialogTitle>
-            <DialogDescription className="break-words">{deleteDescription}</DialogDescription>
+            <DialogDescription className="break-words">
+              {deleteDescription}
+            </DialogDescription>
           </DialogHeader>
 
           {deleteError ? (
@@ -838,7 +994,9 @@ export function RecycleBinClient({
               onClick={() => void confirmDelete()}
             >
               <Trash2 className="size-4" />
-              {pending?.kind === "delete" ? "Deleting..." : "Delete Permanently"}
+              {pending?.kind === "delete"
+                ? "Deleting..."
+                : "Delete Permanently"}
             </Button>
           </DialogFooter>
         </DialogContent>

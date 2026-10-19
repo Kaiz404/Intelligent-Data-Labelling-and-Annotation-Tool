@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createProject } from "@/lib/actions/projects";
 import { Button } from "@/components/ui/button";
 import {
@@ -9,11 +9,12 @@ import {
   DialogDescription,
   DialogFooter,
   DialogHeader,
-  DialogTitle,
+  DialogTitle
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { usePathname } from "next/navigation";
 
 type CreateProjectDialogProps = {
   open: boolean;
@@ -22,9 +23,17 @@ type CreateProjectDialogProps = {
 
 export function CreateProjectDialog({
   open,
-  onOpenChange,
+  onOpenChange
 }: CreateProjectDialogProps) {
+  const pathname = usePathname();
+  const formRef = useRef<HTMLFormElement>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    formRef.current?.reset();
+    setIsSubmitting(false);
+    onOpenChange(false);
+  }, [onOpenChange, pathname]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -48,7 +57,7 @@ export function CreateProjectDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form ref={formRef} onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="project-name">
               Project Name <span className="text-destructive">*</span>

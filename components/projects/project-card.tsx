@@ -10,7 +10,7 @@ import {
   Images,
   MoreVertical,
   Star,
-  Trash2,
+  Trash2
 } from "lucide-react";
 import { numberFormatter, relativeTimeFromDate, toPercent } from "@/lib/format";
 import type { Project } from "@/lib/types/projects";
@@ -22,7 +22,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
+  DropdownMenuTrigger
 } from "@/components/ui/dropdown-menu";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
@@ -42,7 +42,7 @@ export function ProjectCard({
   exporting = false,
   onAction,
   onExport,
-  onToggleStar,
+  onToggleStar
 }: ProjectCardProps) {
   const imageCount = project.image_count ?? 0;
   const annotatedCount = project.annotated_count ?? 0;
@@ -75,24 +75,62 @@ export function ProjectCard({
               className="size-8"
               aria-pressed={project.starred}
               aria-label={`Favourite ${project.name}`}
-              title={project.starred ? "Remove from favourites" : "Add to favourites"}
+              title={
+                project.starred ? "Remove from favourites" : "Add to favourites"
+              }
               onClick={() => onToggleStar(project)}
             >
-              <Star className={cn("size-4", project.starred ? "fill-primary text-primary" : "text-muted-foreground")} />
+              <Star
+                className={cn(
+                  "size-4",
+                  project.starred
+                    ? "fill-primary text-primary"
+                    : "text-muted-foreground"
+                )}
+              />
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button type="button" variant="ghost" size="icon" className="size-8" aria-label={`Actions for ${project.name}`}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-8"
+                  aria-label={`Actions for ${project.name}`}
+                >
                   <MoreVertical className="size-4" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-52">
-                <DropdownMenuItem onSelect={() => onAction(project, "edit")}><Edit3 />Edit Project</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => onAction(project, "duplicate")}><Copy />Duplicate Project</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => onAction(project, "copy")}><Images />Copy Images to Project</DropdownMenuItem>
-                <DropdownMenuItem disabled={exporting} onSelect={() => onExport(project)}><Download />{exporting ? "Preparing Export..." : "Export"}</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => onAction(project, "edit")}>
+                  <Edit3 />
+                  Edit Project
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() => onAction(project, "duplicate")}
+                >
+                  <Copy />
+                  Duplicate Project
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => onAction(project, "copy")}>
+                  <Images />
+                  Copy Images to Project
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={exporting}
+                  onSelect={() => onExport(project)}
+                >
+                  <Download />
+                  {exporting ? "Preparing Export..." : "Export"}
+                </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => onAction(project, "delete")}><Trash2 />Delete</DropdownMenuItem>
+                <DropdownMenuItem
+                  className="text-destructive focus:text-destructive"
+                  onSelect={() => onAction(project, "delete")}
+                >
+                  <Trash2 />
+                  Delete
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -100,18 +138,30 @@ export function ProjectCard({
 
         <Link href={`/projects/${project.id}`} className="mt-3 block space-y-1">
           <h3 className="font-semibold hover:text-primary">{project.name}</h3>
-          <p className="line-clamp-2 min-h-10 text-xs leading-relaxed text-muted-foreground">
+          <p className="line-clamp-2 min-h-10 text-sm leading-relaxed text-muted-foreground">
             {project.description || "No project description."}
           </p>
         </Link>
 
         <div className="mt-auto border-t pt-3">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1"><ImageIcon className="size-3.5" />{numberFormatter.format(imageCount)} images</span>
-            <span className="flex items-center gap-1"><Clock className="size-3.5" />Edited {relativeTimeFromDate(project.last_activity_at ?? project.updated_at)}</span>
+            <span className="flex items-center gap-1">
+              <ImageIcon className="size-3.5" />
+              {numberFormatter.format(imageCount)} images
+            </span>
+            <span className="flex items-center gap-1">
+              <Clock className="size-3.5" />
+              Edited{" "}
+              {relativeTimeFromDate(
+                project.last_activity_at ?? project.updated_at
+              )}
+            </span>
           </div>
           <div className="mt-3 space-y-1">
-            <div className="flex items-center justify-between text-xs"><span>Progress</span><span>{progress}%</span></div>
+            <div className="flex items-center justify-between text-xs">
+              <span>Progress</span>
+              <span>{progress}%</span>
+            </div>
             <Progress value={progress} className="h-2" />
           </div>
         </div>

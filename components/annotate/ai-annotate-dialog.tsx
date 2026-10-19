@@ -8,7 +8,7 @@ import {
   Info,
   Loader2,
   Plus,
-  ScanSearch,
+  ScanSearch
 } from "lucide-react";
 import { DEFAULT_AI_CONFIDENCE } from "@/components/annotate/ai-label-options";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,7 @@ import {
   DialogDescription,
   DialogFooter,
   DialogHeader,
-  DialogTitle,
+  DialogTitle
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -27,13 +27,13 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
+  SelectValue
 } from "@/components/ui/select";
 import { MAX_JOB_IMAGES } from "@/lib/annotations/job-config";
 import { thumbhashColor } from "@/lib/image-placeholder";
 import type {
   AnnotationLabel,
-  AnnotationSuggestion,
+  AnnotationSuggestion
 } from "@/lib/types/annotations";
 import type { ProjectImage } from "@/lib/types/projects";
 import { cn } from "@/lib/utils";
@@ -68,13 +68,13 @@ const SCOPE_OPTIONS: Array<{ value: Scope; title: string; hint: string }> = [
   {
     value: "current",
     title: "Annotate the current image",
-    hint: "Run AI on the image you're currently viewing",
+    hint: "Run AI on the image you're currently viewing"
   },
   {
     value: "range",
     title: "Annotate a range of images",
-    hint: "Run AI on multiple images in this project",
-  },
+    hint: "Run AI on multiple images in this project"
+  }
 ];
 
 function formatConfidence(value: number) {
@@ -111,19 +111,19 @@ export function AiAnnotateDialog({
   initialScope = "current",
   onCreateLabel,
   onDetected,
-  onStartJob,
+  onStartJob
 }: AiAnnotateDialogProps) {
   const [scope, setScope] = useState<Scope>(initialScope);
   const [selectedImageIds, setSelectedImageIds] = useState<Set<string>>(
-    () => new Set([currentImageId]),
+    () => new Set([currentImageId])
   );
   const [anchorIndex, setAnchorIndex] = useState<number | null>(null);
   const [selectedLabelIds, setSelectedLabelIds] = useState<Set<string>>(
-    () => new Set(labels.map((label) => label.id)),
+    () => new Set(labels.map((label) => label.id))
   );
   const [confidence, setConfidence] = useState(DEFAULT_AI_CONFIDENCE);
   const [confidenceDraft, setConfidenceDraft] = useState(
-    formatConfidence(DEFAULT_AI_CONFIDENCE),
+    formatConfidence(DEFAULT_AI_CONFIDENCE)
   );
   const [isAddingClass, setIsAddingClass] = useState(false);
   const [newClassName, setNewClassName] = useState("");
@@ -161,7 +161,7 @@ export function AiAnnotateDialog({
     const frame = window.requestAnimationFrame(() => {
       const strip = stripRef.current;
       const thumb = strip?.querySelector<HTMLElement>(
-        `[data-image-id="${CSS.escape(currentImageId)}"]`,
+        `[data-image-id="${CSS.escape(currentImageId)}"]`
       );
       if (strip && thumb) {
         strip.scrollLeft =
@@ -178,7 +178,7 @@ export function AiAnnotateDialog({
     labels.length > 0 && labelIds.length === labels.length;
 
   const selectedIndices = images.flatMap((image, index) =>
-    selectedImageIds.has(image.id) ? [index] : [],
+    selectedImageIds.has(image.id) ? [index] : []
   );
   const rangeImageIds = selectedIndices.map((index) => images[index].id);
   const rangeCount = rangeImageIds.length;
@@ -230,7 +230,7 @@ export function AiAnnotateDialog({
     if (strip) {
       strip.scrollBy({
         left: direction * strip.clientWidth * 0.8,
-        behavior: "smooth",
+        behavior: "smooth"
       });
     }
   }
@@ -267,7 +267,7 @@ export function AiAnnotateDialog({
     }
 
     const existing = labels.find(
-      (label) => label.name.trim().toLowerCase() === name.toLowerCase(),
+      (label) => label.name.trim().toLowerCase() === name.toLowerCase()
     );
     if (existing) {
       setSelectedLabelIds((current) => new Set(current).add(existing.id));
@@ -282,7 +282,9 @@ export function AiAnnotateDialog({
       setSelectedLabelIds((current) => new Set(current).add(label.id));
       cancelAddClass();
     } catch (err) {
-      setClassError(err instanceof Error ? err.message : "Could not add the class.");
+      setClassError(
+        err instanceof Error ? err.message : "Could not add the class."
+      );
     } finally {
       setIsCreatingClass(false);
     }
@@ -296,13 +298,14 @@ export function AiAnnotateDialog({
         projectId,
         imageId: currentImageId,
         labelIds,
-        confidence,
-      }),
+        confidence
+      })
     });
 
-    const body = (await response.json().catch(() => null)) as
-      | { boxes?: AnnotationSuggestion[]; error?: string }
-      | null;
+    const body = (await response.json().catch(() => null)) as {
+      boxes?: AnnotationSuggestion[];
+      error?: string;
+    } | null;
 
     if (!response.ok || !body) {
       throw new Error(body?.error ?? "AI annotation failed.");
@@ -312,7 +315,7 @@ export function AiAnnotateDialog({
     if (boxes.length === 0) {
       setNotice(
         `No objects found above ${Math.round(confidence * 100)}% confidence. ` +
-          "Try a lower threshold or different label names.",
+          "Try a lower threshold or different label names."
       );
       return;
     }
@@ -351,7 +354,7 @@ export function AiAnnotateDialog({
           ? err.message
           : scope === "current"
             ? "AI annotation failed."
-            : "Could not start the AI run.",
+            : "Could not start the AI run."
       );
     } finally {
       setIsRunning(false);
@@ -387,7 +390,7 @@ export function AiAnnotateDialog({
         </DialogHeader>
 
         <div className="min-w-0 space-y-5">
-          <div className="flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-300">
+          <div className="flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-primary dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-300">
             <Info className="mt-px size-3.5 shrink-0" aria-hidden />
             <p>
               AI will suggest labels. Please review and adjust the results
@@ -411,14 +414,16 @@ export function AiAnnotateDialog({
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
-              Zero-shot detector: it looks for objects matching the names of
-              the labels selected below, so no training is needed. Clear,
-              specific label names work best.
+              Zero-shot detector: it looks for objects matching the names of the
+              labels selected below, so no training is needed. Clear, specific
+              label names work best.
             </p>
           </div>
 
           <fieldset className="space-y-3" disabled={isRunning}>
-            <legend className="mb-3 text-sm font-medium">What to annotate?</legend>
+            <legend className="mb-3 text-sm font-medium">
+              What to annotate?
+            </legend>
             {SCOPE_OPTIONS.map((option) => (
               <label
                 key={option.value}
@@ -434,7 +439,15 @@ export function AiAnnotateDialog({
                     setError(null);
                     setNotice(null);
                   }}
-                  className="mt-0.5 size-4 shrink-0 cursor-pointer accent-primary"
+                  className="mt-0.5 size-4 shrink-0 cursor-pointer appearance-none rounded-full border border-[#E4E4E7] bg-white checked:bg-primary checked:shadow-[inset_0_0_0_4px_#2563eb] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                  style={{
+                    backgroundImage:
+                      scope === option.value
+                        ? "radial-gradient(circle, white 0 2px, transparent 4px)"
+                        : "none",
+                    backgroundPosition: "center",
+                    backgroundRepeat: "no-repeat"
+                  }}
                 />
                 <span className="min-w-0">
                   <span className="block text-sm leading-tight">
@@ -449,7 +462,7 @@ export function AiAnnotateDialog({
           </fieldset>
 
           {scope === "range" ? (
-            <div className="space-y-3 rounded-lg border bg-muted/40 p-3">
+            <div className="space-y-3 rounded-lg border border-[#D8E9FF] bg-[#F7FAFF] p-3">
               <div className="flex items-center justify-between gap-2 text-sm">
                 <span className="font-medium">Select images</span>
                 <span
@@ -498,9 +511,11 @@ export function AiAnnotateDialog({
                             "relative block h-14 overflow-hidden rounded-md border bg-muted transition",
                             checked
                               ? "border-primary ring-2 ring-primary/25"
-                              : "group-hover:border-primary/50",
+                              : "group-hover:border-primary/50"
                           )}
-                          style={{ backgroundColor: thumbhashColor(image.thumbhash) }}
+                          style={{
+                            backgroundColor: thumbhashColor(image.thumbhash)
+                          }}
                         >
                           {image.url ? (
                             // eslint-disable-next-line @next/next/no-img-element
@@ -515,7 +530,7 @@ export function AiAnnotateDialog({
                             className={cn(
                               "absolute top-1 left-1 flex size-4 items-center justify-center rounded-full border bg-background shadow-sm",
                               checked &&
-                                "border-primary bg-primary text-primary-foreground",
+                                "border-primary bg-primary text-primary-foreground"
                             )}
                             aria-hidden
                           >
@@ -556,7 +571,9 @@ export function AiAnnotateDialog({
                     className="text-primary hover:underline disabled:opacity-50"
                     disabled={isRunning || rangeCount === images.length}
                     onClick={() =>
-                      setSelectedImageIds(new Set(images.map((image) => image.id)))
+                      setSelectedImageIds(
+                        new Set(images.map((image) => image.id))
+                      )
                     }
                   >
                     Select all
@@ -610,7 +627,14 @@ export function AiAnnotateDialog({
                   setConfidence(value);
                   setConfidenceDraft(formatConfidence(value));
                 }}
-                className="h-2 min-w-0 flex-1 cursor-pointer accent-primary disabled:cursor-not-allowed"
+                className="h-2 min-w-0 flex-1 cursor-pointer appearance-none rounded-full [&::-webkit-slider-thumb]:size-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border [&::-webkit-slider-thumb]:border-primary [&::-webkit-slider-thumb]:bg-white [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border [&::-moz-range-thumb]:border-primary [&::-moz-range-thumb]:bg-white disabled:cursor-not-allowed"
+                style={{
+                  background: `linear-gradient(to right, 
+                    #2563eb 0%, 
+                    #2563eb ${confidence * 100}%, 
+                    #e5e7eb ${confidence * 100}%, 
+                    #e5e7eb 100%)`
+                }}
               />
               <Input
                 id="ai-annotate-confidence"
@@ -647,7 +671,7 @@ export function AiAnnotateDialog({
                     setSelectedLabelIds(
                       allLabelsSelected
                         ? new Set()
-                        : new Set(labels.map((label) => label.id)),
+                        : new Set(labels.map((label) => label.id))
                     )
                   }
                 >
@@ -669,7 +693,7 @@ export function AiAnnotateDialog({
                       "inline-flex h-7 max-w-full items-center rounded-md border px-2.5 text-xs font-medium transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50",
                       active
                         ? "border-primary/30 bg-primary/10 text-primary"
-                        : "border-transparent bg-muted text-muted-foreground hover:text-foreground",
+                        : "border-transparent bg-muted text-muted-foreground hover:text-foreground"
                     )}
                   >
                     <span className="truncate">{label.name}</span>
@@ -763,8 +787,14 @@ export function AiAnnotateDialog({
           >
             Cancel
           </Button>
-          <Button type="button" onClick={() => void handleRun()} disabled={!canRun}>
-            {isRunning ? <Loader2 className="animate-spin" aria-hidden /> : null}
+          <Button
+            type="button"
+            onClick={() => void handleRun()}
+            disabled={!canRun}
+          >
+            {isRunning ? (
+              <Loader2 className="animate-spin" aria-hidden />
+            ) : null}
             {isRunning
               ? scope === "current"
                 ? "Detecting..."

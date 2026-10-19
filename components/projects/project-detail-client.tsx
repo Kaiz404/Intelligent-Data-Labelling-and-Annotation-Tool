@@ -1,8 +1,25 @@
 "use client";
 
-import { CopyPlus, Download, FileArchive, FolderInput, Pencil, Search, Trash2, Upload, WandSparkles } from "lucide-react";
+import {
+  CopyPlus,
+  Download,
+  FileArchive,
+  FolderInput,
+  Pencil,
+  Search,
+  Trash2,
+  Upload,
+  WandSparkles
+} from "lucide-react";
 import { useRouter } from "next/navigation";
-import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 import { moveImagesToRecycleBin } from "@/lib/actions/recycle-bin";
 import { AnnotationExportSheet } from "@/components/annotate/annotation-export-sheet";
 import { EditProjectDialog } from "@/components/dashboard/project-action-dialogs";
@@ -11,11 +28,14 @@ import { BatchAiAnnotateDialog } from "@/components/projects/batch-ai-annotate-d
 import { DatasetImportBanner } from "@/components/projects/dataset-import-banner";
 import {
   useDatasetImportActions,
-  useDatasetImportRun,
+  useDatasetImportRun
 } from "@/components/projects/dataset-import-provider";
 import { ImageCard } from "@/components/projects/image-card";
 import { useProjectUploadQueue } from "@/components/projects/image-upload-provider";
-import { ImageTransferDialog, RenameImageDialog } from "@/components/projects/image-action-dialogs";
+import {
+  ImageTransferDialog,
+  RenameImageDialog
+} from "@/components/projects/image-action-dialogs";
 import { ImportDatasetDialog } from "@/components/projects/import-dataset-dialog";
 import { LabelFilterMenu } from "@/components/projects/label-filter-menu";
 import {
@@ -33,7 +53,7 @@ import {
   DialogDescription,
   DialogFooter,
   DialogHeader,
-  DialogTitle,
+  DialogTitle
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
@@ -55,31 +75,34 @@ import {
   countImagesByLabel,
   matchesLabelFilter,
   parseLabelFilter,
-  toggleLabelFilter,
+  toggleLabelFilter
 } from "@/lib/image-label-filter";
 import type {
   AnnotationJobProgress,
   AnnotationLabel,
-  ImageAiState,
+  ImageAiState
 } from "@/lib/types/annotations";
 import type { Project, ProjectImage } from "@/lib/types/projects";
 
 const imageStatusFilters = {
   all: "All",
   annotated: "Annotated",
-  unannotated: "Unannotated",
+  unannotated: "Unannotated"
 } as const;
 
 const imageSortOptions = {
   added: { label: "Date Added", defaultDirection: "ascending" },
   name: { label: "Name", defaultDirection: "ascending" },
-  status: { label: "Status", defaultDirection: "ascending" },
-} as const satisfies Record<string, { label: string; defaultDirection: SortDirection }>;
+  status: { label: "Status", defaultDirection: "ascending" }
+} as const satisfies Record<
+  string,
+  { label: string; defaultDirection: SortDirection }
+>;
 
 const imageFilterOptions = {
   all: "All",
   selected: "Selected",
-  ai: "AI suggestions",
+  ai: "AI suggestions"
 } as const;
 
 type ImageStatusFilter = keyof typeof imageStatusFilters;
@@ -101,10 +124,14 @@ const QUERY_DEFAULTS = {
   status: "all",
   labels: "",
   sort: "added",
-  dir: "",
+  dir: ""
 };
 
-function optionOr<T extends string>(options: Record<T, unknown>, value: string, fallback: NoInfer<T>): T {
+function optionOr<T extends string>(
+  options: Record<T, unknown>,
+  value: string,
+  fallback: NoInfer<T>
+): T {
   return Object.hasOwn(options, value) ? (value as T) : fallback;
 }
 
@@ -123,7 +150,7 @@ export function ProjectDetailClient({
   projects,
   labels,
   initialJob,
-  initialAiStates,
+  initialAiStates
 }: ProjectDetailClientProps) {
   const router = useRouter();
   const [selectedImageIds, setSelectedImageIds] = useState<string[]>([]);
@@ -140,7 +167,9 @@ export function ProjectDetailClient({
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<ProjectImage | null>(null);
-  const [transferMode, setTransferMode] = useState<"copy" | "move" | null>(null);
+  const [transferMode, setTransferMode] = useState<"copy" | "move" | null>(
+    null
+  );
   const [transferImageIds, setTransferImageIds] = useState<string[]>([]);
   const [exportImages, setExportImages] = useState<ProjectImage[] | null>(null);
   const [deleteTargets, setDeleteTargets] = useState<ProjectImage[]>([]);
@@ -159,13 +188,15 @@ export function ProjectDetailClient({
         ? {
             ...serverProject,
             name: savedProject.saved.name,
-            description: savedProject.saved.description,
+            description: savedProject.saved.description
           }
         : serverProject,
-    [savedProject, serverProject],
+    [savedProject, serverProject]
   );
   // Applied as soon as an action succeeds; the refresh then confirms them.
-  const [removedIds, setRemovedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [removedIds, setRemovedIds] = useState<ReadonlySet<string>>(
+    () => new Set()
+  );
   const [renames, setRenames] = useState<
     ReadonlyMap<string, { from: string; to: string }>
   >(() => new Map());
@@ -178,7 +209,10 @@ export function ProjectDetailClient({
   const projectImages = useMemo(() => {
     if (!importedImages?.length) return serverImages;
     const serverIds = new Set(serverImages.map((image) => image.id));
-    return [...serverImages, ...importedImages.filter((image) => !serverIds.has(image.id))];
+    return [
+      ...serverImages,
+      ...importedImages.filter((image) => !serverIds.has(image.id))
+    ];
   }, [importedImages, serverImages]);
 
   const images = useMemo(
@@ -191,7 +225,7 @@ export function ProjectDetailClient({
           ? [{ ...image, fileName: rename.to }]
           : [image];
       }),
-    [projectImages, removedIds, renames],
+    [projectImages, removedIds, renames]
   );
 
   const refresh = useCallback(() => {
@@ -209,17 +243,28 @@ export function ProjectDetailClient({
       lastUploadRefresh.current = Date.now();
       refresh();
     };
-    const delay = lastUploadRefresh.current + UPLOAD_REFRESH_INTERVAL_MS - Date.now();
+    const delay =
+      lastUploadRefresh.current + UPLOAD_REFRESH_INTERVAL_MS - Date.now();
     if (delay <= 0) run();
     else uploadRefreshTimer.current = setTimeout(run, delay);
   }, [refresh]);
-  useEffect(() => () => {
-    if (uploadRefreshTimer.current !== null) clearTimeout(uploadRefreshTimer.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (uploadRefreshTimer.current !== null)
+        clearTimeout(uploadRefreshTimer.current);
+    },
+    []
+  );
   // The queue outlives this page; only completions while it is mounted refresh.
   // Not subscribed to its snapshot: that changes every frame during a batch.
-  const uploadQueue = useProjectUploadQueue(serverProject.id, serverProject.name);
-  useEffect(() => uploadQueue.onComplete(refreshAfterUpload), [uploadQueue, refreshAfterUpload]);
+  const uploadQueue = useProjectUploadQueue(
+    serverProject.id,
+    serverProject.name
+  );
+  useEffect(
+    () => uploadQueue.onComplete(refreshAfterUpload),
+    [uploadQueue, refreshAfterUpload]
+  );
 
   // Refresh once labels are resolved (the Label filter needs any new ones)
   // and once the run ends. Only transitions seen here count, so returning to
@@ -229,7 +274,10 @@ export function ProjectDetailClient({
   useEffect(() => {
     const previous = seenImportStatus.current;
     seenImportStatus.current = importStatus;
-    if ((previous === "resolving_labels" || previous === "importing") && importStatus !== previous) {
+    if (
+      (previous === "resolving_labels" || previous === "importing") &&
+      importStatus !== previous
+    ) {
       refresh();
     }
   }, [importStatus, refresh]);
@@ -239,31 +287,34 @@ export function ProjectDetailClient({
     states: aiStates,
     isActive: isAiJobActive,
     start: startAiJob,
-    cancel: cancelAiJob,
+    cancel: cancelAiJob
   } = useAnnotationJob({
     initialJob,
     initialStates: initialAiStates,
-    onFinished: refresh,
+    onFinished: refresh
   });
 
   const imageIds = useMemo(() => images.map((image) => image.id), [images]);
   const reviewImageIds = useMemo(
     () => imageIds.filter((id) => (aiStates[id]?.pendingSuggestions ?? 0) > 0),
-    [aiStates, imageIds],
+    [aiStates, imageIds]
   );
   const failedImageIds = useMemo(
     () => imageIds.filter((id) => aiStates[id]?.status === "failed"),
-    [aiStates, imageIds],
+    [aiStates, imageIds]
   );
   const reviewHref = reviewImageIds[0]
     ? `/projects/${project.id}/annotate/${reviewImageIds[0]}`
     : null;
-  const selectedIdSet = useMemo(() => new Set(selectedImageIds), [selectedImageIds]);
+  const selectedIdSet = useMemo(
+    () => new Set(selectedImageIds),
+    [selectedImageIds]
+  );
   const labelIds = useMemo(() => labels.map((label) => label.id), [labels]);
   // Ids of labels that no longer exist are ignored, not stripped from the URL.
   const labelSelection = useMemo(
     () => parseLabelFilter(query.labels, labelIds),
-    [labelIds, query.labels],
+    [labelIds, query.labels]
   );
   const labelCounts = useMemo(() => countImagesByLabel(images), [images]);
 
@@ -272,7 +323,9 @@ export function ProjectDetailClient({
     const status = imageStatusFilters[statusFilter];
     const selectedLabels = new Set(labelSelection);
     // Images arrive oldest first (`created_at`), so their index is the upload order.
-    const uploadOrder = new Map(images.map((image, index) => [image.id, index]));
+    const uploadOrder = new Map(
+      images.map((image, index) => [image.id, index])
+    );
 
     return images
       .filter((image) =>
@@ -323,13 +376,13 @@ export function ProjectDetailClient({
   function toggleSortDirection() {
     const next = reverseSortDirection(sortDirection);
     setQuery({
-      dir: next === imageSortOptions[sortBy].defaultDirection ? "" : next,
+      dir: next === imageSortOptions[sortBy].defaultDirection ? "" : next
     });
   }
 
   const visibleSelectedCount = visibleImages.reduce(
     (count, image) => count + (selectedIdSet.has(image.id) ? 1 : 0),
-    0,
+    0
   );
   const allVisibleSelected =
     visibleImages.length > 0 && visibleSelectedCount === visibleImages.length;
@@ -337,14 +390,14 @@ export function ProjectDetailClient({
   /** Adds every image the search and filters show; other selections stay. */
   function selectVisible() {
     setSelectedImageIds((currentIds) => [
-      ...new Set([...currentIds, ...visibleImages.map((image) => image.id)]),
+      ...new Set([...currentIds, ...visibleImages.map((image) => image.id)])
     ]);
   }
 
   function deselectVisible() {
     const visibleIds = new Set(visibleImages.map((image) => image.id));
     setSelectedImageIds((currentIds) =>
-      currentIds.filter((id) => !visibleIds.has(id)),
+      currentIds.filter((id) => !visibleIds.has(id))
     );
   }
 
@@ -352,26 +405,41 @@ export function ProjectDetailClient({
     const hiddenIds = new Set(ids);
     setRemovedIds((current) => new Set([...current, ...ids]));
     setSelectedImageIds((currentIds) =>
-      currentIds.filter((id) => !hiddenIds.has(id)),
+      currentIds.filter((id) => !hiddenIds.has(id))
     );
   }, []);
 
   // Stable callbacks, so a memoised card re-renders only when its own props change.
-  const handleSelectionChange = useCallback((imageId: string, isSelected: boolean) => {
-    setSelectedImageIds((currentIds) =>
-      isSelected
-        ? [...currentIds, imageId]
-        : currentIds.filter((id) => id !== imageId)
-    );
-  }, []);
+  const handleSelectionChange = useCallback(
+    (imageId: string, isSelected: boolean) => {
+      setSelectedImageIds((currentIds) =>
+        isSelected
+          ? [...currentIds, imageId]
+          : currentIds.filter((id) => id !== imageId)
+      );
+    },
+    []
+  );
 
-  const openTransfer = useCallback((mode: "copy" | "move", targetImages: ProjectImage[]) => {
-    setTransferImageIds(targetImages.map((image) => image.id));
-    setTransferMode(mode);
-  }, []);
-  const openMove = useCallback((image: ProjectImage) => openTransfer("move", [image]), [openTransfer]);
-  const openAdd = useCallback((image: ProjectImage) => openTransfer("copy", [image]), [openTransfer]);
-  const openExport = useCallback((image: ProjectImage) => setExportImages([image]), []);
+  const openTransfer = useCallback(
+    (mode: "copy" | "move", targetImages: ProjectImage[]) => {
+      setTransferImageIds(targetImages.map((image) => image.id));
+      setTransferMode(mode);
+    },
+    []
+  );
+  const openMove = useCallback(
+    (image: ProjectImage) => openTransfer("move", [image]),
+    [openTransfer]
+  );
+  const openAdd = useCallback(
+    (image: ProjectImage) => openTransfer("copy", [image]),
+    [openTransfer]
+  );
+  const openExport = useCallback(
+    (image: ProjectImage) => setExportImages([image]),
+    []
+  );
   const openDelete = useCallback((image: ProjectImage) => {
     setDeleteError(null);
     setDeleteTargets([image]);
@@ -395,7 +463,9 @@ export function ProjectDetailClient({
       router.refresh();
     } catch (error) {
       setDeleteError(
-        error instanceof Error ? error.message : "Could not move the images to the Recycle Bin.",
+        error instanceof Error
+          ? error.message
+          : "Could not move the images to the Recycle Bin."
       );
     } finally {
       setIsDeleting(false);
@@ -469,7 +539,10 @@ export function ProjectDetailClient({
         />
       ) : null}
 
-      <UploadBanner store={uploadQueue} onViewDetails={() => setIsUploadOpen(true)} />
+      <UploadBanner
+        store={uploadQueue}
+        onViewDetails={() => setIsUploadOpen(true)}
+      />
 
       {aiJob ? (
         <AiJobBanner
@@ -512,11 +585,13 @@ export function ProjectDetailClient({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {(Object.keys(imageFilterOptions) as ImageFilterOption[]).map((option) => (
-                  <SelectItem key={option} value={option}>
-                    {imageFilterOptions[option]}
-                  </SelectItem>
-                ))}
+                {(Object.keys(imageFilterOptions) as ImageFilterOption[]).map(
+                  (option) => (
+                    <SelectItem key={option} value={option}>
+                      {imageFilterOptions[option]}
+                    </SelectItem>
+                  )
+                )}
               </SelectContent>
             </Select>
           </div>
@@ -532,11 +607,13 @@ export function ProjectDetailClient({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {(Object.keys(imageStatusFilters) as ImageStatusFilter[]).map((option) => (
-                  <SelectItem key={option} value={option}>
-                    {imageStatusFilters[option]}
-                  </SelectItem>
-                ))}
+                {(Object.keys(imageStatusFilters) as ImageStatusFilter[]).map(
+                  (option) => (
+                    <SelectItem key={option} value={option}>
+                      {imageStatusFilters[option]}
+                    </SelectItem>
+                  )
+                )}
               </SelectContent>
             </Select>
           </div>
@@ -556,17 +633,21 @@ export function ProjectDetailClient({
             <span className="text-muted-foreground">Sort By:</span>
             <Select
               value={sortBy}
-              onValueChange={(value) => handleSortChange(value as ImageSortOption)}
+              onValueChange={(value) =>
+                handleSortChange(value as ImageSortOption)
+              }
             >
               <SelectTrigger className="w-[140px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {(Object.keys(imageSortOptions) as ImageSortOption[]).map((option) => (
-                  <SelectItem key={option} value={option}>
-                    {imageSortOptions[option].label}
-                  </SelectItem>
-                ))}
+                {(Object.keys(imageSortOptions) as ImageSortOption[]).map(
+                  (option) => (
+                    <SelectItem key={option} value={option}>
+                      {imageSortOptions[option].label}
+                    </SelectItem>
+                  )
+                )}
               </SelectContent>
             </Select>
           </div>
@@ -635,17 +716,84 @@ export function ProjectDetailClient({
 
       {selectedImages.length > 0 ? (
         <div className="fixed bottom-5 left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-2 rounded-xl border bg-background/95 p-2 shadow-xl backdrop-blur">
-          <label className="flex items-center gap-2 px-2 text-sm text-muted-foreground"><Checkbox checked onCheckedChange={(checked) => { if (!checked) setSelectedImageIds([]); }} />{numberFormatter.format(selectedImages.length)} Selected</label>
+          <label className="flex items-center gap-2 px-2 text-sm text-muted-foreground">
+            <Checkbox
+              checked
+              onCheckedChange={(checked) => {
+                if (!checked) setSelectedImageIds([]);
+              }}
+            />
+            {numberFormatter.format(selectedImages.length)} Selected
+          </label>
           {allVisibleSelected || visibleImages.length === 0 ? (
-            <Button type="button" variant="ghost" size="sm" onClick={() => setSelectedImageIds([])}>Clear</Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setSelectedImageIds([])}
+            >
+              Clear
+            </Button>
           ) : (
-            <Button type="button" variant="ghost" size="sm" onClick={selectVisible}>Select all {numberFormatter.format(visibleImages.length)}</Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={selectVisible}
+            >
+              Select all {numberFormatter.format(visibleImages.length)}
+            </Button>
           )}
-          <Button type="button" size="sm" className="bg-violet-600 text-white hover:bg-violet-700" disabled={isAiJobActive} onClick={() => setIsAiOpen(true)}><WandSparkles className="size-4" />AI Annotate</Button>
-          <Button type="button" variant="outline" size="sm" onClick={() => openTransfer("move", selectedImages)}><FolderInput className="size-4" />Move to...</Button>
-          <Button type="button" variant="outline" size="sm" onClick={() => openTransfer("copy", selectedImages)}><CopyPlus className="size-4" />Add to...</Button>
-          <Button type="button" variant="outline" size="sm" onClick={() => setExportImages(selectedImages)}><Download className="size-4" />Export</Button>
-          <Button type="button" variant="outline" size="sm" className="border-destructive text-destructive hover:text-destructive" onClick={() => { setDeleteError(null); setDeleteTargets(selectedImages); }}><Trash2 className="size-4" />Delete</Button>
+          <Button
+            type="button"
+            size="sm"
+            className="bg-violet-600 text-white hover:bg-violet-700"
+            disabled={isAiJobActive}
+            onClick={() => setIsAiOpen(true)}
+          >
+            <WandSparkles className="size-4" />
+            AI Annotate
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => openTransfer("move", selectedImages)}
+          >
+            <FolderInput className="size-4" />
+            Move to...
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => openTransfer("copy", selectedImages)}
+          >
+            <CopyPlus className="size-4" />
+            Add to...
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setExportImages(selectedImages)}
+          >
+            <Download className="size-4" />
+            Export
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="border-destructive text-destructive hover:text-destructive"
+            onClick={() => {
+              setDeleteError(null);
+              setDeleteTargets(selectedImages);
+            }}
+          >
+            <Trash2 className="size-4" />
+            Delete
+          </Button>
         </div>
       ) : null}
 
@@ -686,17 +834,25 @@ export function ProjectDetailClient({
         image={renameTarget}
         projectId={project.id}
         open={renameTarget !== null}
-        onOpenChange={(open) => { if (!open) setRenameTarget(null); }}
+        onOpenChange={(open) => {
+          if (!open) setRenameTarget(null);
+        }}
         onRenamed={(imageId, fileName) => {
-          const from = projectImages.find((image) => image.id === imageId)?.fileName;
+          const from = projectImages.find(
+            (image) => image.id === imageId
+          )?.fileName;
           if (from === undefined) return;
-          setRenames((current) => new Map(current).set(imageId, { from, to: fileName }));
+          setRenames((current) =>
+            new Map(current).set(imageId, { from, to: fileName })
+          );
         }}
       />
 
       <ImageTransferDialog
         open={transferMode !== null}
-        onOpenChange={(open) => { if (!open) setTransferMode(null); }}
+        onOpenChange={(open) => {
+          if (!open) setTransferMode(null);
+        }}
         mode={transferMode ?? "copy"}
         sourceProject={project}
         projects={projects}
@@ -711,7 +867,9 @@ export function ProjectDetailClient({
         <AnnotationExportSheet
           key={exportImages.map((image) => image.id).join(",")}
           open
-          onOpenChange={(open) => { if (!open) setExportImages(null); }}
+          onOpenChange={(open) => {
+            if (!open) setExportImages(null);
+          }}
           projectId={project.id}
           projectName={project.name}
           images={exportImages}
