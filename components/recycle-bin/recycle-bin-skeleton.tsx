@@ -1,11 +1,35 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { Loader2 } from "lucide-react";
 
 const ROWS = [0, 1, 2];
 
 /** The Recycle Bin's shape (tabs, toolbar, project rows) while it loads. */
 export function RecycleBinSkeleton() {
   return (
-    <div className="space-y-4" aria-busy="true" aria-label="Loading the Recycle Bin">
+    <div
+      className="space-y-4"
+      aria-busy="true"
+      aria-label="Loading the Recycle Bin"
+    >
+      {/* Recycle Bin loading indicator */}
+      <div
+        role="status"
+        aria-live="polite"
+        className="flex items-center gap-3 rounded-lg border border-[#D8E9FF] bg-[#F7FAFF] px-4 py-3"
+      >
+        <Loader2
+          className="size-5 shrink-0 animate-spin text-primary"
+          aria-hidden="true"
+        />
+
+        <div className="space-y-0.5">
+          <p className="text-md font-medium">Loading...</p>
+
+          <p className="text-sm text-muted-foreground">
+            Fetching your deleted projects and images. Please wait.
+          </p>
+        </div>
+      </div>
       <div className="space-y-5">
         <div className="flex border-b">
           <div className="px-5 pb-2.5 pt-1.5">

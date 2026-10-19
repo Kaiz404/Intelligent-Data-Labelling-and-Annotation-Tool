@@ -1,12 +1,13 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Loader2 } from "lucide-react";
 import {
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeader,
-  TableRow,
+  TableRow
 } from "@/components/ui/table";
 
 const METRICS = ["Total Images", "Annotated", "Unannotated"];
@@ -16,6 +17,25 @@ const ROWS = [0, 1, 2];
 export function DashboardSkeleton() {
   return (
     <div className="space-y-6" aria-busy="true" aria-label="Loading dashboard">
+      {/* Dashboard loading indicator */}
+      <div
+        role="status"
+        aria-live="polite"
+        className="flex items-center gap-3 rounded-lg border border-[#D8E9FF] bg-[#F7FAFF] px-4 py-3"
+      >
+        <Loader2
+          className="size-5 shrink-0 animate-spin text-primary"
+          aria-hidden="true"
+        />
+
+        <div className="space-y-0.5">
+          <p className="text-md font-medium">Loading dashboard...</p>
+
+          <p className="text-sm text-muted-foreground">
+            Fetching your dashboard statistics and recent projects. Please wait.
+          </p>
+        </div>
+      </div>
       <div className="grid gap-4 md:grid-cols-3">
         {METRICS.map((label, index) => (
           <Card key={label}>
@@ -35,7 +55,9 @@ export function DashboardSkeleton() {
 
       <Card className="overflow-hidden shadow-sm">
         <CardHeader className="flex flex-row items-center justify-between space-y-0 border-b py-4">
-          <CardTitle className="text-lg font-semibold">Recent Projects</CardTitle>
+          <CardTitle className="text-lg font-semibold">
+            Recent Projects
+          </CardTitle>
           <Skeleton className="h-9 w-32 rounded-md" />
         </CardHeader>
         <CardContent className="p-0">
@@ -45,7 +67,9 @@ export function DashboardSkeleton() {
                 <TableHead>Project Name</TableHead>
                 <TableHead className="w-30 text-center">Images</TableHead>
                 <TableHead className="w-70">Progress</TableHead>
-                <TableHead className="w-50 text-center">Last Modified</TableHead>
+                <TableHead className="w-50 text-center">
+                  Last Modified
+                </TableHead>
                 <TableHead className="w-12" />
               </TableRow>
             </TableHeader>
@@ -58,10 +82,18 @@ export function DashboardSkeleton() {
                       <Skeleton className="h-4 w-36" />
                     </div>
                   </TableCell>
-                  <TableCell><Skeleton className="mx-auto h-4 w-6" /></TableCell>
-                  <TableCell><Skeleton className="h-2 w-full" /></TableCell>
-                  <TableCell><Skeleton className="mx-auto h-4 w-20" /></TableCell>
-                  <TableCell><Skeleton className="size-8 rounded-md" /></TableCell>
+                  <TableCell>
+                    <Skeleton className="mx-auto h-4 w-6" />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className="h-2 w-full" />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className="mx-auto h-4 w-20" />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className="size-8 rounded-md" />
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>

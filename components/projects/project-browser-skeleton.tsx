@@ -1,5 +1,6 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Loader2 } from "lucide-react";
 
 const CARDS = [0, 1, 2, 3];
 
@@ -7,6 +8,25 @@ const CARDS = [0, 1, 2, 3];
 export function ProjectBrowserSkeleton() {
   return (
     <div className="space-y-6" aria-busy="true" aria-label="Loading projects">
+      {/* Loading feedback */}
+      <div
+        role="status"
+        aria-live="polite"
+        className="flex items-center gap-3 rounded-lg border border-[#D8E9FF] bg-[#F7FAFF] px-4 py-3"
+      >
+        <Loader2
+          className="size-5 shrink-0 animate-spin text-primary"
+          aria-hidden="true"
+        />
+
+        <div className="space-y-0.5">
+          <p className="text-md font-medium">Loading your projects...</p>
+
+          <p className="text-sm text-muted-foreground">
+            Fetching all your projects. Please wait.
+          </p>
+        </div>
+      </div>
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
         <Skeleton className="h-9 flex-1 rounded-md" />
         <div className="flex flex-wrap items-center gap-2">
