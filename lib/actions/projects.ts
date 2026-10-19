@@ -6,7 +6,6 @@ import { copyImageObject, deleteImageObject } from "@/lib/uploads/s3-server";
 import type { BoundingBox } from "@/lib/types/annotations";
 import type { Project, ToggleProjectStarResult } from "@/lib/types/projects";
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 
 export async function createProject(formData: FormData) {
   const name = (formData.get("name") as string)?.trim();
@@ -42,7 +41,7 @@ export async function createProject(formData: FormData) {
 
   revalidatePath("/dashboard");
   revalidatePath("/projects");
-  redirect(`/projects/${data.id}`);
+  return { projectId: data.id };
 }
 
 /**
