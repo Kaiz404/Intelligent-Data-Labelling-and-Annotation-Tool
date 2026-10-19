@@ -30,7 +30,7 @@ export const ImageStrip = memo(function ImageStrip({
   reviewImageIds,
   annotatedImageIds,
   onSelect,
-  onPrefetch,
+  onPrefetch
 }: ImageStripProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const activeIndex = images.findIndex((image) => image.id === activeImageId);
@@ -47,7 +47,8 @@ export const ImageStrip = memo(function ImageStrip({
         : target.right > bounds.right
           ? target.right - bounds.right
           : 0;
-    if (overflow !== 0) scroller.scrollBy({ left: overflow, behavior: "smooth" });
+    if (overflow !== 0)
+      scroller.scrollBy({ left: overflow, behavior: "smooth" });
   }, [activeImageId]);
 
   const selectAt = (index: number) => {
@@ -57,10 +58,20 @@ export const ImageStrip = memo(function ImageStrip({
 
   return (
     <div className="flex items-center gap-2 rounded-xl border bg-card p-3 shadow-sm">
-      <Button type="button" variant="ghost" size="icon" onClick={() => selectAt(activeIndex - 1)} disabled={activeIndex <= 0} aria-label="Previous image">
-        <ChevronLeft className="size-4" />
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        onClick={() => selectAt(activeIndex - 1)}
+        disabled={activeIndex <= 0}
+        aria-label="Previous image"
+      >
+        <ChevronLeft className="size-5" />
       </Button>
-      <div ref={scrollerRef} className="grid min-w-0 flex-1 auto-cols-[110px] grid-flow-col gap-3 overflow-x-auto py-1">
+      <div
+        ref={scrollerRef}
+        className="grid min-w-0 flex-1 auto-cols-[110px] grid-flow-col gap-3 overflow-x-auto py-1"
+      >
         {images.map((image) => {
           const isActive = image.id === activeImageId;
           const isAnnotated = annotatedImageIds.has(image.id);
@@ -77,15 +88,23 @@ export const ImageStrip = memo(function ImageStrip({
             >
               <span
                 className={cn(
-                  "relative block h-16 overflow-hidden rounded-md border bg-muted transition",
-                  isActive ? "border-primary ring-2 ring-primary/20" : "hover:border-primary/50",
+                  "relative block h-20 overflow-hidden rounded-md border bg-muted transition",
+                  isActive
+                    ? "border-primary ring-2 ring-primary/20"
+                    : "hover:border-primary/50"
                 )}
                 style={{ backgroundColor: thumbhashColor(image.thumbhash) }}
               >
                 {image.url ? (
                   // Signed S3 URLs are not configured for next/image optimisation.
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={image.url} alt="" loading="lazy" decoding="async" className="size-full object-cover" />
+                  <img
+                    src={image.url}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                    className="size-full object-cover"
+                  />
                 ) : null}
                 {isAnnotated ? (
                   <span
@@ -102,13 +121,25 @@ export const ImageStrip = memo(function ImageStrip({
                   />
                 ) : null}
               </span>
-              <span className="mt-1 block truncate text-[10px]">{image.fileName}</span>
+              <span
+                className="mt-1 block truncate text-xs"
+                title={image.fileName}
+              >
+                {image.fileName}
+              </span>
             </button>
           );
         })}
       </div>
-      <Button type="button" variant="ghost" size="icon" onClick={() => selectAt(activeIndex + 1)} disabled={activeIndex >= images.length - 1} aria-label="Next image">
-        <ChevronRight className="size-4" />
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        onClick={() => selectAt(activeIndex + 1)}
+        disabled={activeIndex >= images.length - 1}
+        aria-label="Next image"
+      >
+        <ChevronRight className="size-5" />
       </Button>
     </div>
   );
