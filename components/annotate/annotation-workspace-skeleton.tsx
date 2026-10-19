@@ -1,6 +1,7 @@
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Loader2 } from "lucide-react";
 
 const STRIP_PLACEHOLDERS = Array.from({ length: 8 }, (_, index) => index);
 
@@ -16,8 +17,33 @@ export function AnnotationWorkspaceSkeleton() {
         <Separator orientation="vertical" className="mr-2 h-4" />
         <Skeleton className="h-4 w-60" />
       </header>
-      <div className="flex-1 p-4 md:p-6" aria-busy="true" aria-label="Loading workspace">
+      <div
+        className="flex-1 p-4 md:p-6"
+        aria-busy="true"
+        aria-label="Loading workspace"
+      >
         <div className="flex flex-col gap-4">
+          {/* Annotation workspace loading indicator */}
+          <div
+            role="status"
+            aria-live="polite"
+            className="flex items-center gap-3 rounded-lg border border-[#D8E9FF] bg-[#F7FAFF] px-4 py-3"
+          >
+            <Loader2
+              className="size-5 shrink-0 animate-spin text-primary"
+              aria-hidden="true"
+            />
+
+            <div className="space-y-0.5">
+              <p className="text-md font-medium">
+                Loading annotation workspace...
+              </p>
+
+              <p className="text-sm text-muted-foreground">
+                Preparing your images and annotation tools. Please wait.
+              </p>
+            </div>
+          </div>
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               <Skeleton className="size-9 rounded-md" />
