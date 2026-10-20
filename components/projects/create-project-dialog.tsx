@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
 import { CheckCircle2, Loader2 } from "lucide-react";
 import { createProject } from "@/lib/actions/projects";
 import { Button } from "@/components/ui/button";
@@ -28,8 +27,6 @@ export function CreateProjectDialog({
   open,
   onOpenChange
 }: CreateProjectDialogProps) {
-  const router = useRouter();
-  const pathname = usePathname();
   const formRef = useRef<HTMLFormElement>(null);
 
   const [status, setStatus] = useState<CreationStatus>("idle");
@@ -37,13 +34,24 @@ export function CreateProjectDialog({
 
   const isSubmitting = status !== "idle";
 
-  // Reset the dialog when navigation completes.
+  // Reset the dialog if the browser restores this page
+  // from its back/forward cache.
   useEffect(() => {
-    formRef.current?.reset();
-    setStatus("idle");
-    setError(null);
-    onOpenChange(false);
-  }, [pathname, onOpenChange]);
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (!event.persisted) return;
+
+      formRef.current?.reset();
+      setStatus("idle");
+      setError(null);
+      onOpenChange(false);
+    };
+
+    window.addEventListener("pageshow", handlePageShow);
+
+    return () => {
+      window.removeEventListener("pageshow", handlePageShow);
+    };
+  }, [onOpenChange]);
 
   function handleOpenChange(nextOpen: boolean) {
     // Prevent closing during creation or navigation.
@@ -71,9 +79,9 @@ export function CreateProjectDialog({
       // Stage 1: Save the project.
       const result = await createProject(formData);
 
-      // Stage 2: Project saved. Navigate to its page.
+      // Stage 2: Keep feedback visible while opening the new page.
       setStatus("opening");
-      router.push(`/projects/${result.projectId}`);
+      window.location.assign(`/projects/${result.projectId}`);
     } catch (err) {
       console.error("Failed to create project:", err);
       setError("Could not create your project. Please try again.");
@@ -85,6 +93,7 @@ export function CreateProjectDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         className="sm:max-w-md"
+        showCloseButton={!isSubmitting}
         onEscapeKeyDown={(event) => {
           if (isSubmitting) event.preventDefault();
         }}

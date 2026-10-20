@@ -9,7 +9,7 @@ import {
   Layers,
   MoreVertical,
   SquarePen,
-  Trash2,
+  Trash2
 } from "lucide-react";
 import { memo, useState } from "react";
 import { ThumbhashImage } from "@/components/thumbhash-preview";
@@ -21,7 +21,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
+  DropdownMenuTrigger
 } from "@/components/ui/dropdown-menu";
 import { formatRelativeTime } from "@/lib/format";
 import type { RecentAnnotatedImage } from "@/lib/types/recent-annotations";
@@ -51,7 +51,7 @@ export const RecentAnnotationCard = memo(function RecentAnnotationCard({
   onMove,
   onAdd,
   onExport,
-  onDelete,
+  onDelete
 }: RecentAnnotationCardProps) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const href = workspaceHref(image);
@@ -60,7 +60,7 @@ export const RecentAnnotationCard = memo(function RecentAnnotationCard({
     <div
       className={cn(
         "group relative rounded-xl border bg-card p-2.5 text-card-foreground shadow-sm transition-colors hover:border-primary/40",
-        isSelected && "border-primary/50 bg-primary/5 ring-1 ring-primary/20",
+        isSelected && "border-primary/50 bg-primary/5 ring-1 ring-primary/20"
       )}
     >
       <div className="aspect-[16/10] overflow-hidden rounded-lg bg-muted">
@@ -106,12 +106,21 @@ export const RecentAnnotationCard = memo(function RecentAnnotationCard({
         </p>
       </div>
 
-      <label className="absolute left-3.5 top-3.5 z-10 flex cursor-pointer p-1">
+      <label
+        className={cn(
+          "absolute left-3.5 top-3.5 z-10 flex cursor-pointer rounded-md p-1 transition-opacity duration-150",
+          isSelected
+            ? "opacity-100"
+            : "opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+        )}
+      >
         <Checkbox
           checked={isSelected}
-          onCheckedChange={(checked) => onSelectionChange(image.id, checked === true)}
+          onCheckedChange={(checked) =>
+            onSelectionChange(image.id, checked === true)
+          }
           aria-label={`Select ${image.fileName}`}
-          className="bg-background shadow-sm"
+          className="bg-background shadow-sm size-5"
         />
       </label>
 
@@ -122,8 +131,10 @@ export const RecentAnnotationCard = memo(function RecentAnnotationCard({
             variant="ghost"
             size="icon"
             className={cn(
-              "absolute right-3.5 top-3.5 z-10 size-7 text-foreground/70 hover:bg-background/80",
-              isMenuOpen && "bg-background/80",
+              "absolute right-3.5 top-3.5 z-10 size-6 shadow-sm transition-all duration-150",
+              "opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100",
+              "group-hover:bg-background hover:bg-background",
+              isMenuOpen && "bg-background opacity-100 md:opacity-100"
             )}
             aria-label={`Actions for ${image.fileName}`}
           >
