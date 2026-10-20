@@ -8,7 +8,7 @@ import {
   Route,
   Search,
   Trash2,
-  X,
+  X
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
@@ -17,20 +17,20 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState,
+  useState
 } from "react";
 import {
   AnnotationExportSheet,
-  fetchExportData,
+  fetchExportData
 } from "@/components/annotate/annotation-export-sheet";
 import {
   ImageTransferDialog,
-  type ImageTransferSource,
+  type ImageTransferSource
 } from "@/components/projects/image-action-dialogs";
 import {
   reverseSortDirection,
   SortOrderButton,
-  type SortDirection,
+  type SortDirection
 } from "@/components/projects/sort-order-button";
 import { RecentAnnotationCard } from "@/components/recent-annotations/recent-annotation-card";
 import { Button } from "@/components/ui/button";
@@ -41,7 +41,7 @@ import {
   DialogDescription,
   DialogFooter,
   DialogHeader,
-  DialogTitle,
+  DialogTitle
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
@@ -49,13 +49,12 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
+  SelectValue
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import {
   Tooltip,
   TooltipContent,
-  TooltipTrigger,
+  TooltipTrigger
 } from "@/components/ui/tooltip";
 import { useNow } from "@/hooks/use-now";
 import { useQueryParams } from "@/hooks/use-query-params";
@@ -63,17 +62,26 @@ import { moveImagesToRecycleBin } from "@/lib/actions/recycle-bin";
 import type { AnnotationLabel } from "@/lib/types/annotations";
 import type { Project, ProjectImage } from "@/lib/types/projects";
 import type { RecentAnnotatedImage } from "@/lib/types/recent-annotations";
+import { numberFormatter } from "@/lib/format";
 
 const ALL_PROJECTS = "all";
 
 /** `dir` is empty while the sort's default direction applies. */
-const QUERY_DEFAULTS = { q: "", project: ALL_PROJECTS, sort: "lastAnnotated", dir: "" };
+const QUERY_DEFAULTS = {
+  q: "",
+  project: ALL_PROJECTS,
+  sort: "lastAnnotated",
+  dir: ""
+};
 
 const sortOptions = {
   lastAnnotated: { label: "Last Annotated", defaultDirection: "descending" },
   name: { label: "Name", defaultDirection: "ascending" },
-  annotationCount: { label: "Annotations", defaultDirection: "descending" },
-} as const satisfies Record<string, { label: string; defaultDirection: SortDirection }>;
+  annotationCount: { label: "Annotations", defaultDirection: "descending" }
+} as const satisfies Record<
+  string,
+  { label: string; defaultDirection: SortDirection }
+>;
 
 type SortOption = keyof typeof sortOptions;
 
@@ -96,7 +104,7 @@ function groupByProject(images: RecentAnnotatedImage[]): ProjectGroup[] {
     const group = groups.get(image.projectId) ?? {
       projectId: image.projectId,
       projectName: image.projectName,
-      images: [],
+      images: []
     };
     group.images.push(image);
     groups.set(image.projectId, group);
@@ -122,7 +130,7 @@ export function RecentAnnotationsClient({
   projects,
   limit,
   isCapped,
-  serverNow,
+  serverNow
 }: RecentAnnotationsClientProps) {
   const router = useRouter();
   const now = useNow(serverNow);
@@ -138,10 +146,12 @@ export function RecentAnnotationsClient({
       ? query.dir
       : sortOptions[sortBy].defaultDirection;
   // Moved or deleted images leave at once; the refresh then confirms it.
-  const [removedIds, setRemovedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [removedIds, setRemovedIds] = useState<ReadonlySet<string>>(
+    () => new Set()
+  );
   const images = useMemo(
     () => serverImages.filter((image) => !removedIds.has(image.id)),
-    [removedIds, serverImages],
+    [removedIds, serverImages]
   );
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -156,7 +166,9 @@ export function RecentAnnotationsClient({
   const [exportState, setExportState] = useState<ExportState | null>(null);
   const [isExportLoading, setIsExportLoading] = useState(false);
 
-  const [deleteTargets, setDeleteTargets] = useState<RecentAnnotatedImage[]>([]);
+  const [deleteTargets, setDeleteTargets] = useState<RecentAnnotatedImage[]>(
+    []
+  );
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -169,33 +181,37 @@ export function RecentAnnotationsClient({
       groupByProject(images)
         .map(({ projectId, projectName }) => ({ projectId, projectName }))
         .sort((a, b) => a.projectName.localeCompare(b.projectName)),
-    [images],
+    [images]
   );
   // A filtered project can disappear after a move/delete; fall back to all.
   const activeProjectFilter = projectOptions.some(
-    (option) => option.projectId === projectFilter,
+    (option) => option.projectId === projectFilter
   )
     ? projectFilter
     : ALL_PROJECTS;
 
   const visibleImages = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
-    const byLastAnnotated = (a: RecentAnnotatedImage, b: RecentAnnotatedImage) =>
-      Date.parse(a.lastAnnotatedAt) - Date.parse(b.lastAnnotatedAt);
+    const byLastAnnotated = (
+      a: RecentAnnotatedImage,
+      b: RecentAnnotatedImage
+    ) => Date.parse(a.lastAnnotatedAt) - Date.parse(b.lastAnnotatedAt);
 
     return images
-      .filter((image) => image.fileName.toLowerCase().includes(normalizedSearch))
+      .filter((image) =>
+        image.fileName.toLowerCase().includes(normalizedSearch)
+      )
       .filter(
         (image) =>
           activeProjectFilter === ALL_PROJECTS ||
-          image.projectId === activeProjectFilter,
+          image.projectId === activeProjectFilter
       )
       .sort((a, b) => {
         let comparison = 0;
         if (sortBy === "name") {
           comparison = a.fileName.localeCompare(b.fileName, undefined, {
             numeric: true,
-            sensitivity: "base",
+            sensitivity: "base"
           });
         } else if (sortBy === "annotationCount") {
           comparison = a.annotationCount - b.annotationCount;
@@ -211,12 +227,38 @@ export function RecentAnnotationsClient({
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const selectedImages = useMemo(
     () => images.filter((image) => selectedIdSet.has(image.id)),
-    [images, selectedIdSet],
+    [images, selectedIdSet]
   );
+
+  const visibleSelectedCount = visibleImages.reduce(
+    (count, image) => count + (selectedIdSet.has(image.id) ? 1 : 0),
+    0
+  );
+
+  const allVisibleSelected =
+    visibleImages.length > 0 && visibleSelectedCount === visibleImages.length;
+
+  /** Adds all visible images without removing existing selections. */
+  function selectVisible() {
+    setSelectedIds((currentIds) => [
+      ...new Set([...currentIds, ...visibleImages.map((image) => image.id)])
+    ]);
+  }
+
+  /** Deselects visible images while preserving hidden selections. */
+  function deselectVisible() {
+    const visibleIds = new Set(visibleImages.map((image) => image.id));
+
+    setSelectedIds((currentIds) =>
+      currentIds.filter((id) => !visibleIds.has(id))
+    );
+  }
+
   const selectedProjectCount = new Set(
-    selectedImages.map((image) => image.projectId),
+    selectedImages.map((image) => image.projectId)
   ).size;
-  const hasFilters = search.trim() !== "" || activeProjectFilter !== ALL_PROJECTS;
+  const hasFilters =
+    search.trim() !== "" || activeProjectFilter !== ALL_PROJECTS;
 
   function handleSortChange(next: SortOption) {
     // Radix Select reports "" when it unmounts during navigation.
@@ -226,7 +268,9 @@ export function RecentAnnotationsClient({
 
   function toggleSortDirection() {
     const next = reverseSortDirection(sortDirection);
-    setQuery({ dir: next === sortOptions[sortBy].defaultDirection ? "" : next });
+    setQuery({
+      dir: next === sortOptions[sortBy].defaultDirection ? "" : next
+    });
   }
 
   function clearFilters() {
@@ -235,38 +279,55 @@ export function RecentAnnotationsClient({
   }
 
   // Stable callbacks, so a memoised card re-renders only when its own props change.
-  const handleSelectionChange = useCallback((imageId: string, isSelected: boolean) => {
-    setSelectedIds((current) =>
-      isSelected
-        ? current.includes(imageId) ? current : [...current, imageId]
-        : current.filter((id) => id !== imageId),
-    );
-  }, []);
+  const handleSelectionChange = useCallback(
+    (imageId: string, isSelected: boolean) => {
+      setSelectedIds((current) =>
+        isSelected
+          ? current.includes(imageId)
+            ? current
+            : [...current, imageId]
+          : current.filter((id) => id !== imageId)
+      );
+    },
+    []
+  );
 
   const deselect = useCallback((imageIds: string[]) => {
     setSelectedIds((current) => current.filter((id) => !imageIds.includes(id)));
   }, []);
 
-  const hide = useCallback((imageIds: string[]) => {
-    setRemovedIds((current) => new Set([...current, ...imageIds]));
-    deselect(imageIds);
-  }, [deselect]);
+  const hide = useCallback(
+    (imageIds: string[]) => {
+      setRemovedIds((current) => new Set([...current, ...imageIds]));
+      deselect(imageIds);
+    },
+    [deselect]
+  );
 
-  const openTransfer = useCallback((mode: "copy" | "move", targets: RecentAnnotatedImage[]) => {
-    if (targets.length === 0) return;
-    setActionError(null);
-    setTransfer({
-      mode,
-      imageIds: targets.map((image) => image.id),
-      sources: groupByProject(targets).map((group) => ({
-        projectId: group.projectId,
-        imageIds: group.images.map((image) => image.id),
-      })),
-    });
-    setIsTransferOpen(true);
-  }, []);
-  const openMove = useCallback((image: RecentAnnotatedImage) => openTransfer("move", [image]), [openTransfer]);
-  const openAdd = useCallback((image: RecentAnnotatedImage) => openTransfer("copy", [image]), [openTransfer]);
+  const openTransfer = useCallback(
+    (mode: "copy" | "move", targets: RecentAnnotatedImage[]) => {
+      if (targets.length === 0) return;
+      setActionError(null);
+      setTransfer({
+        mode,
+        imageIds: targets.map((image) => image.id),
+        sources: groupByProject(targets).map((group) => ({
+          projectId: group.projectId,
+          imageIds: group.images.map((image) => image.id)
+        }))
+      });
+      setIsTransferOpen(true);
+    },
+    []
+  );
+  const openMove = useCallback(
+    (image: RecentAnnotatedImage) => openTransfer("move", [image]),
+    [openTransfer]
+  );
+  const openAdd = useCallback(
+    (image: RecentAnnotatedImage) => openTransfer("copy", [image]),
+    [openTransfer]
+  );
 
   async function openExport(targets: RecentAnnotatedImage[]) {
     const [first] = targets;
@@ -282,7 +343,9 @@ export function RecentAnnotationsClient({
       // Fresh signed URLs, saved annotations, and the project's label list.
       const data = await fetchExportData(first.projectId);
       const targetIds = new Set(targets.map((image) => image.id));
-      const exportImages = data.images.filter((image) => targetIds.has(image.id));
+      const exportImages = data.images.filter((image) =>
+        targetIds.has(image.id)
+      );
       if (exportImages.length === 0) {
         throw new Error("The selected images no longer exist.");
       }
@@ -290,7 +353,7 @@ export function RecentAnnotationsClient({
         projectId: data.project.id,
         projectName: data.project.name,
         images: exportImages,
-        labels: data.labels,
+        labels: data.labels
       });
     } catch (cause) {
       setActionError(errorMessage(cause, "Could not prepare the export."));
@@ -306,7 +369,7 @@ export function RecentAnnotationsClient({
   });
   const exportImage = useCallback(
     (image: RecentAnnotatedImage) => void openExportRef.current([image]),
-    [],
+    []
   );
 
   const openDelete = useCallback((targets: RecentAnnotatedImage[]) => {
@@ -315,7 +378,10 @@ export function RecentAnnotationsClient({
     setDeleteError(null);
     setDeleteTargets(targets);
   }, []);
-  const deleteImage = useCallback((image: RecentAnnotatedImage) => openDelete([image]), [openDelete]);
+  const deleteImage = useCallback(
+    (image: RecentAnnotatedImage) => openDelete([image]),
+    [openDelete]
+  );
 
   async function handleDelete() {
     if (deleteTargets.length === 0 || isDeleting) return;
@@ -336,15 +402,18 @@ export function RecentAnnotationsClient({
       setDeleteTargets([]);
       refresh();
     } catch (cause) {
-      const message = errorMessage(cause, "Could not move the images to the Recycle Bin.");
+      const message = errorMessage(
+        cause,
+        "Could not move the images to the Recycle Bin."
+      );
       if (deleted.length > 0) {
         // Keep the remaining images in the dialog so the user can retry them.
         setDeleteError(
-          `${deleted.length} of ${deleteTargets.length} images were moved to the Recycle Bin before an error: ${message}`,
+          `${deleted.length} of ${deleteTargets.length} images were moved to the Recycle Bin before an error: ${message}`
         );
         hide(deleted);
         setDeleteTargets((current) =>
-          current.filter((image) => !deleted.includes(image.id)),
+          current.filter((image) => !deleted.includes(image.id))
         );
         refresh();
       } else {
@@ -355,7 +424,9 @@ export function RecentAnnotationsClient({
     }
   }
 
-  const deleteProjectCount = new Set(deleteTargets.map((image) => image.projectId)).size;
+  const deleteProjectCount = new Set(
+    deleteTargets.map((image) => image.projectId)
+  ).size;
   const deleteSubject =
     deleteTargets.length === 1
       ? `“${deleteTargets[0].fileName}”`
@@ -388,7 +459,9 @@ export function RecentAnnotationsClient({
   }
 
   return (
-    <div className={selectedImages.length > 0 ? "space-y-4 pb-20" : "space-y-4"}>
+    <div
+      className={selectedImages.length > 0 ? "space-y-4 pb-20" : "space-y-4"}
+    >
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -467,6 +540,28 @@ export function RecentAnnotationsClient({
         </div>
       ) : null}
 
+      {visibleImages.length > 0 && (
+        <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
+          <label className="flex cursor-pointer items-center gap-2">
+            <Checkbox
+              checked={allVisibleSelected}
+              onCheckedChange={(checked) => {
+                if (checked === true) selectVisible();
+                else deselectVisible();
+              }}
+              aria-label="Select all shown images"
+            />
+            Select all
+          </label>
+
+          <span>
+            {visibleImages.length === images.length
+              ? `${numberFormatter.format(images.length)} images`
+              : `${numberFormatter.format(visibleImages.length)} of ${numberFormatter.format(images.length)} images`}
+          </span>
+        </div>
+      )}
+
       {visibleImages.length === 0 ? (
         <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed py-16 text-center text-muted-foreground">
           <p>No images match your filters.</p>
@@ -501,7 +596,7 @@ export function RecentAnnotationsClient({
 
       {selectedImages.length > 0 ? (
         <div className="fixed bottom-5 left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-2 rounded-xl border bg-background/95 p-2 shadow-xl backdrop-blur">
-          <label className="flex cursor-pointer items-center gap-2 px-2 text-sm text-muted-foreground">
+          <label className="flex items-center gap-2 px-2 text-sm text-muted-foreground">
             <Checkbox
               checked
               onCheckedChange={(checked) => {
@@ -509,9 +604,29 @@ export function RecentAnnotationsClient({
               }}
               aria-label="Clear selection"
             />
-            {selectedImages.length} Selected
+            {numberFormatter.format(selectedImages.length)} Selected
           </label>
-          <Separator orientation="vertical" className="hidden h-6 sm:block" />
+
+          {allVisibleSelected || visibleImages.length === 0 ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setSelectedIds([])}
+            >
+              Clear
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={selectVisible}
+            >
+              Select all {numberFormatter.format(visibleImages.length)}
+            </Button>
+          )}
+
           <Button
             type="button"
             variant="outline"
@@ -552,7 +667,9 @@ export function RecentAnnotationsClient({
                   </Button>
                 </span>
               </TooltipTrigger>
-              <TooltipContent>Select images from one project to export</TooltipContent>
+              <TooltipContent>
+                Select images from one project to export
+              </TooltipContent>
             </Tooltip>
           )}
           <Button
