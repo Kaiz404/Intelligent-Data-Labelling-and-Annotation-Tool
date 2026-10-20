@@ -821,7 +821,7 @@ export function ProjectDetailClient({
         open={isAiOpen}
         onOpenChange={setIsAiOpen}
         labels={labels}
-        imageIds={imageIds}
+        images={images}
         selectedImageIds={selectedImageIds}
         aiStates={aiStates}
         onStart={async (input) => {

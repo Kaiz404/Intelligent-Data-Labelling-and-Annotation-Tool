@@ -194,7 +194,7 @@ test("upload and AI project actions retain their own state and callbacks", async
   ui.click("AI Annotate");
   const ai = ui.find((node) => node.type === "BatchAiAnnotateDialog");
   assert.equal(ai.props.open, true);
-  assert.deepEqual(ai.props.imageIds, ["cat-1"]);
+  assert.deepEqual(ai.props.images.map((image) => image.id), ["cat-1"]);
   await ai.props.onStart({ labels: ["Cat"] });
   assert.deepEqual(ui.aiStarts, [{ projectId: "project-id", labels: ["Cat"] }]);
   assert.equal(ui.refreshCount(), 2);

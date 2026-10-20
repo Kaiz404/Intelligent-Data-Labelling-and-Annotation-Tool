@@ -15,18 +15,22 @@ import {
   DialogTitle
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import {
+  type BatchScope,
+  defaultBatchScope,
+  resolveBatchScopes
+} from "@/lib/annotations/batch-scopes";
 import { MAX_JOB_IMAGES } from "@/lib/annotations/job-config";
 import type { AnnotationLabel, ImageAiState } from "@/lib/types/annotations";
+import type { ProjectImage } from "@/lib/types/projects";
 import { cn } from "@/lib/utils";
-
-type Scope = "selected" | "new" | "all";
 
 type BatchAiAnnotateDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   labels: AnnotationLabel[];
-  /** All project image IDs, in grid order. */
-  imageIds: string[];
+  /** All project images, in grid order. */
+  images: Pick<ProjectImage, "id" | "status">[];
   selectedImageIds: string[];
   aiStates: Record<string, ImageAiState>;
   onStart: (input: {
@@ -35,10 +39,6 @@ type BatchAiAnnotateDialogProps = {
     confidence: number;
   }) => Promise<void>;
 };
-
-function hasBeenProcessed(state: ImageAiState | undefined) {
-  return state?.status === "succeeded" || state?.pendingSuggestions;
-}
 
 export function BatchAiAnnotateDialog({
   open,
@@ -67,39 +67,35 @@ export function BatchAiAnnotateDialog({
 function BatchAiAnnotateForm({
   onOpenChange,
   labels,
-  imageIds,
+  images,
   selectedImageIds,
   aiStates,
   onStart
 }: Omit<BatchAiAnnotateDialogProps, "open">) {
-  const scopes = useMemo(() => {
-    const selected = imageIds.filter((id) => selectedImageIds.includes(id));
-    const fresh = imageIds.filter((id) => !hasBeenProcessed(aiStates[id]));
-    return {
-      selected: {
-        ids: selected,
-        title: "Selected images",
-        hint: "Only the images you ticked in the grid."
-      },
-      new: {
-        ids: fresh,
-        title: "Images not yet AI-annotated",
-        hint: "Skips images that already have AI results."
-      },
-      all: {
-        ids: imageIds,
-        title: "Entire project",
-        hint: "Every image in this project."
-      }
-    } satisfies Record<Scope, { ids: string[]; title: string; hint: string }>;
-  }, [aiStates, imageIds, selectedImageIds]);
+  const scopeIds = useMemo(
+    () => resolveBatchScopes(images, selectedImageIds, aiStates),
+    [aiStates, images, selectedImageIds]
+  );
+  const scopes = {
+    selected: {
+      ids: scopeIds.selected,
+      title: "Selected images",
+      hint: "Only the images you ticked in the grid."
+    },
+    unannotated: {
+      ids: scopeIds.unannotated,
+      title: "Unannotated images",
+      hint: "Skips images with saved boxes or AI suggestions to review."
+    },
+    all: {
+      ids: scopeIds.all,
+      title: "Entire project",
+      hint: "Every image in this project."
+    }
+  } satisfies Record<BatchScope, { ids: string[]; title: string; hint: string }>;
 
-  const [scope, setScope] = useState<Scope>(() =>
-    scopes.selected.ids.length > 0
-      ? "selected"
-      : scopes.new.ids.length > 0
-        ? "new"
-        : "all"
+  const [scope, setScope] = useState<BatchScope>(() =>
+    defaultBatchScope(scopeIds)
   );
   const [selectedLabelIds, setSelectedLabelIds] = useState<Set<string>>(
     () => new Set(labels.map((label) => label.id))
@@ -143,7 +139,7 @@ function BatchAiAnnotateForm({
         <div className="space-y-2">
           <Label>Images</Label>
           <div role="radiogroup" className="grid gap-2">
-            {(Object.keys(scopes) as Scope[]).map((key) => {
+            {(Object.keys(scopes) as BatchScope[]).map((key) => {
               const option = scopes[key];
               const disabled = option.ids.length === 0;
               const checked = scope === key;
