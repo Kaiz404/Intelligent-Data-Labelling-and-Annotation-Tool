@@ -18,6 +18,7 @@ type RecentProjectsTableProps = {
   projects: Project[];
   copyDestinations?: Project[];
 };
+type SavedProjectDetails = Pick<Project, "name" | "description" | "updated_at">;
 type ProjectAction = "edit" | "duplicate" | "copy" | "delete" | null;
 
 export function RecentProjectsTable({
@@ -26,8 +27,15 @@ export function RecentProjectsTable({
 }: RecentProjectsTableProps) {
   // Hidden as soon as they reach the Recycle Bin, before the refresh lands.
   const [removedIds, setRemovedIds] = useState<ReadonlySet<string>>(() => new Set());
-  const projects = allProjects.filter((project) => !removedIds.has(project.id));
-  const copyDestinations = allDestinations.filter((project) => !removedIds.has(project.id));
+  // Show a successful edit immediately instead of waiting for router.refresh.
+  // Spreading over the list row keeps its counts, activity, and cover metadata.
+  const [savedProjects, setSavedProjects] = useState<ReadonlyMap<string, SavedProjectDetails>>(() => new Map());
+  const mergeSaved = (project: Project) => {
+    const saved = savedProjects.get(project.id);
+    return saved ? { ...project, ...saved } : project;
+  };
+  const projects = allProjects.filter((project) => !removedIds.has(project.id)).map(mergeSaved);
+  const copyDestinations = allDestinations.filter((project) => !removedIds.has(project.id)).map(mergeSaved);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [action, setAction] = useState<ProjectAction>(null);
@@ -51,6 +59,21 @@ export function RecentProjectsTable({
     } finally {
       setExportingProjectId(null);
     }
+  };
+
+  const applySavedProject = (saved: Project) => {
+    setSavedProjects((current) => {
+      const next = new Map(current);
+      next.set(saved.id, {
+        name: saved.name,
+        description: saved.description,
+        updated_at: saved.updated_at,
+      });
+      return next;
+    });
+    setSelectedProject((current) =>
+      current?.id === saved.id ? { ...current, ...saved } : current,
+    );
   };
 
   return (
@@ -105,7 +128,7 @@ export function RecentProjectsTable({
       </Card>
 
       <CreateProjectDialog open={isCreateOpen} onOpenChange={setIsCreateOpen} />
-      <EditProjectDialog project={selectedProject} open={action === "edit"} onOpenChange={(open) => !open && setAction(null)} />
+      <EditProjectDialog project={selectedProject} open={action === "edit"} onOpenChange={(open) => !open && setAction(null)} onSaved={applySavedProject} />
       <DuplicateProjectDialog project={selectedProject} open={action === "duplicate"} onOpenChange={(open) => !open && setAction(null)} />
       <CopyImagesDialog project={selectedProject} projects={copyDestinations} open={action === "copy"} onOpenChange={(open) => !open && setAction(null)} />
       <DeleteProjectDialog project={selectedProject} open={action === "delete"} onOpenChange={(open) => !open && setAction(null)} onDeleted={(id) => setRemovedIds((current) => new Set(current).add(id))} />

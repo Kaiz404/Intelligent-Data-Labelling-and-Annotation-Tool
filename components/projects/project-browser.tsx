@@ -56,6 +56,8 @@ type ProjectBrowserProps = {
   projects: Project[];
 };
 
+type SavedProjectDetails = Pick<Project, "name" | "description" | "updated_at">;
+
 export function ProjectBrowser({ projects: allProjects }: ProjectBrowserProps) {
   const [query, setQuery] = useQueryParams(QUERY_DEFAULTS);
   const sortBy: SortOption = Object.hasOwn(sortOptions, query.sort)
@@ -69,9 +71,19 @@ export function ProjectBrowser({ projects: allProjects }: ProjectBrowserProps) {
   const [search, setSearch] = useState(query.q);
   // Hidden as soon as they reach the Recycle Bin, before the refresh lands.
   const [removedIds, setRemovedIds] = useState<ReadonlySet<string>>(() => new Set());
+  // Server actions return the saved row before router.refresh() finishes. Keep
+  // that row visible immediately, while preserving list-only counts and cover.
+  const [savedProjects, setSavedProjects] = useState<ReadonlyMap<string, SavedProjectDetails>>(
+    () => new Map(),
+  );
   const liveProjects = useMemo(
-    () => allProjects.filter((project) => !removedIds.has(project.id)),
-    [allProjects, removedIds],
+    () => allProjects
+      .filter((project) => !removedIds.has(project.id))
+      .map((project) => {
+        const saved = savedProjects.get(project.id);
+        return saved ? { ...project, ...saved } : project;
+      }),
+    [allProjects, removedIds, savedProjects],
   );
   // Stars flip at once; the action's revalidation then confirms them, and a
   // failed action rolls them back when its transition ends.
@@ -148,6 +160,21 @@ export function ProjectBrowser({ projects: allProjects }: ProjectBrowserProps) {
     setSelectedProject(project);
     setAction(nextAction);
     setActionError(null);
+  }
+
+  function applySavedProject(saved: Project) {
+    setSavedProjects((current) => {
+      const next = new Map(current);
+      next.set(saved.id, {
+        name: saved.name,
+        description: saved.description,
+        updated_at: saved.updated_at,
+      });
+      return next;
+    });
+    setSelectedProject((current) =>
+      current?.id === saved.id ? { ...current, ...saved } : current,
+    );
   }
 
   async function openExport(project: Project) {
@@ -261,7 +288,7 @@ export function ProjectBrowser({ projects: allProjects }: ProjectBrowserProps) {
       )}
 
       <CreateProjectDialog open={isCreateOpen} onOpenChange={setIsCreateOpen} />
-      <EditProjectDialog project={selectedProject} open={action === "edit"} onOpenChange={(open) => !open && setAction(null)} />
+      <EditProjectDialog project={selectedProject} open={action === "edit"} onOpenChange={(open) => !open && setAction(null)} onSaved={applySavedProject} />
       <DuplicateProjectDialog project={selectedProject} open={action === "duplicate"} onOpenChange={(open) => !open && setAction(null)} />
       <CopyImagesDialog project={selectedProject} projects={projects} open={action === "copy"} onOpenChange={(open) => !open && setAction(null)} />
       <DeleteProjectDialog project={selectedProject} open={action === "delete"} onOpenChange={(open) => !open && setAction(null)} onDeleted={(id) => setRemovedIds((current) => new Set(current).add(id))} />
