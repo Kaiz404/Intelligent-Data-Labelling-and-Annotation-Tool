@@ -892,7 +892,7 @@ export function AnnotationSidePanel({
             value={selectedBox?.labelId ?? ""}
             disabled={!selectedBox}
             onValueChange={(labelId) => {
-              if (!selectedBox) return;
+              if (!selectedBox || !labelId) return;
               onSelectLabel(labelId);
               onUpdateBox(selectedBox.id, { labelId });
             }}

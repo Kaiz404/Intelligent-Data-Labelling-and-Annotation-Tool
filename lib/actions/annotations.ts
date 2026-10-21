@@ -44,7 +44,30 @@ function validateBoxes(value: unknown): BoundingBox[] {
   });
 }
 
+export type SaveAnnotationsResult =
+  | { ok: true; savedAt: string }
+  | { ok: false; error: string };
+
+/**
+ * Failures are returned as `{ ok: false, error }`, not thrown: production
+ * builds replace a thrown server-action message with a generic React error.
+ */
 export async function saveImageAnnotations(
+  projectId: string,
+  imageId: string,
+  boxesInput: BoundingBox[],
+): Promise<SaveAnnotationsResult> {
+  try {
+    return { ok: true, ...(await writeAnnotations(projectId, imageId, boxesInput)) };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Could not save annotations.",
+    };
+  }
+}
+
+async function writeAnnotations(
   projectId: string,
   imageId: string,
   boxesInput: BoundingBox[],

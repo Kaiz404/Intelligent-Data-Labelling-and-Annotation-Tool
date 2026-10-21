@@ -97,9 +97,25 @@ function sameSuggestions(current: unknown, next: AnnotationSuggestion[]) {
  * suggestions still awaiting a decision on each job item (accepted and
  * rejected ones are dropped). An empty list clears the item from review.
  * Each write is a compare-and-swap on `updated_at`, so a worker clearing the
- * item between our read and write is never overwritten.
+ * item between our read and write is never overwritten. Failures are
+ * returned, not thrown: production builds hide thrown server-action messages.
  */
 export async function resolveSuggestions(
+  projectId: string,
+  resolutionsInput: SuggestionResolution[],
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    await writeResolutions(projectId, resolutionsInput);
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Could not save AI review.",
+    };
+  }
+}
+
+async function writeResolutions(
   projectId: string,
   resolutionsInput: SuggestionResolution[],
 ) {

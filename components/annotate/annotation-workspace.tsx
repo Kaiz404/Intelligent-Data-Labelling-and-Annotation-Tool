@@ -350,8 +350,13 @@ export function AnnotationWorkspace({
           const saved = plan.boxes
             ? await saveImageAnnotations(project.id, imageId, plan.boxes)
             : null;
+          if (saved && !saved.ok) throw new Error(saved.error);
           if (plan.resolutions.length > 0) {
-            await resolveSuggestions(project.id, plan.resolutions);
+            const resolved = await resolveSuggestions(
+              project.id,
+              plan.resolutions
+            );
+            if (!resolved.ok) throw new Error(resolved.error);
           }
           return saved;
         });

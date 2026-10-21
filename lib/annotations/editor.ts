@@ -81,11 +81,21 @@ export type SavePlan = {
   clearsReview: boolean;
 };
 
-/** `boxes` defaults to the saved boxes; pass a local draft to restore it (it then saves). */
+/**
+ * `boxes` defaults to the saved boxes; pass a local draft to restore it (it
+ * then saves). A draft box that lost its label (the server rejects those, so
+ * the draft could never save) gets its saved copy back, or is dropped.
+ */
 export function openEditor(
   savedBoxes: BoundingBox[],
-  boxes: BoundingBox[] = savedBoxes,
+  draft: BoundingBox[] = savedBoxes,
 ): ImageEditor {
+  const savedById = new Map(savedBoxes.map((box) => [box.id, box]));
+  const boxes = draft.flatMap((box) => {
+    if (box.labelId) return [box];
+    const saved = savedById.get(box.id);
+    return saved ? [saved] : [];
+  });
   return {
     present: { boxes, meta: {} },
     past: [],
@@ -429,7 +439,8 @@ export function updateBox(
 ): Edit {
   return (present) => {
     const target = present.boxes.find((box) => box.id === boxId);
-    if (!target) return present;
+    // Every box keeps a label: an empty one could never be saved.
+    if (!target || patch.labelId === "") return present;
     const updated = { ...target, ...patch };
     if (!present.meta[boxId] && sameBox(updated, target)) return present;
     return {
@@ -451,7 +462,7 @@ export function addBox(box: BoundingBox): Edit {
 export function relabelSuggestion(boxId: string, labelId: string): Edit {
   return (present) => {
     const target = present.boxes.find((box) => box.id === boxId);
-    if (!target || target.labelId === labelId) return present;
+    if (!target || !labelId || target.labelId === labelId) return present;
     return {
       boxes: present.boxes.map((box) =>
         box.id === boxId ? { ...box, labelId } : box,

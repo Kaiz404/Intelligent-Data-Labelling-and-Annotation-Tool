@@ -482,7 +482,7 @@ function SuggestionClassField({
         onValueChange={(value) => {
           if (value === CREATE_LABEL_VALUE) {
             setIsCreating(true);
-          } else {
+          } else if (value) {
             onChangeLabel(suggestion.id, value);
           }
         }}

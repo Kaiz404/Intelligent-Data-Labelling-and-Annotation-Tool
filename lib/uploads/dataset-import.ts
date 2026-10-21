@@ -141,7 +141,8 @@ export async function runDatasetImport({ projectId, plan, provider, onChange }: 
             id: `box-${crypto.randomUUID()}`, labelId: labelIds.get(box.categoryId)!,
             x: box.x, y: box.y, width: box.width, height: box.height,
           }));
-          await saveImageAnnotations(projectId, result.imageId, boxes);
+          const saved = await saveImageAnnotations(projectId, result.imageId, boxes);
+          if (!saved.ok) throw new Error(saved.error);
           setImage(index, {
             ...base, ...uploaded, status: "succeeded", uploadProgress: 100,
             thumbhash: result.thumbhash ?? null, boxes,
