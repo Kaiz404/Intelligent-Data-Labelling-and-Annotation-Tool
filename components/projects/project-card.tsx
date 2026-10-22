@@ -25,7 +25,12 @@ import {
   DropdownMenuTrigger
 } from "@/components/ui/dropdown-menu";
 import { Progress } from "@/components/ui/progress";
+import { rememberProjectPreview } from "@/lib/projects/preview-cache";
 import { cn } from "@/lib/utils";
+
+function openProject(project: Project) {
+  rememberProjectPreview(project);
+}
 
 export type ProjectCardAction = "edit" | "duplicate" | "copy" | "delete";
 
@@ -54,6 +59,7 @@ export function ProjectCard({
         <div className="flex items-start justify-between gap-3">
           <Link
             href={`/projects/${project.id}`}
+            onClick={() => openProject(project)}
             className="block size-16 shrink-0 overflow-hidden rounded-lg bg-muted"
             aria-label={`Open ${project.name}`}
           >
@@ -136,7 +142,11 @@ export function ProjectCard({
           </div>
         </div>
 
-        <Link href={`/projects/${project.id}`} className="mt-3 block space-y-1">
+        <Link
+          href={`/projects/${project.id}`}
+          onClick={() => openProject(project)}
+          className="mt-3 block space-y-1"
+        >
           <h3 className="font-semibold hover:text-primary">{project.name}</h3>
           <p className="line-clamp-2 min-h-10 text-sm leading-relaxed text-muted-foreground">
             {project.description || "No project description."}

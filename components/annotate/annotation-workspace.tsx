@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { usePathname, useRouter } from "next/navigation";
+import { useParams, usePathname, useRouter } from "next/navigation";
 import {
   startTransition,
   useCallback,
@@ -80,6 +80,10 @@ import type {
   ImageAiState
 } from "@/lib/types/annotations";
 import type { Project, ProjectImage } from "@/lib/types/projects";
+import {
+  annotateImageIdFromParams,
+  annotateImageIdFromPath,
+} from "@/lib/annotations/annotate-path";
 import { cn } from "@/lib/utils";
 
 const AnnotationCanvas = dynamic(
@@ -193,6 +197,8 @@ type AnnotationWorkspaceProps = {
   labels: AnnotationLabel[];
   latestJob: AnnotationJobProgress | null;
   aiStates: Record<string, ImageAiState>;
+  /** First paint before the URL segment is available in `useParams`. */
+  initialImageId?: string | null;
 };
 
 /**
@@ -207,9 +213,11 @@ export function AnnotationWorkspace({
   images,
   labels: serverLabels,
   latestJob,
-  aiStates: serverAiStates
+  aiStates: serverAiStates,
+  initialImageId = null,
 }: AnnotationWorkspaceProps) {
   const router = useRouter();
+  const params = useParams();
   const pathname = usePathname();
   const hydrated = useHydrated();
   const [cache] = useState(() =>
@@ -221,11 +229,15 @@ export function AnnotationWorkspace({
   );
   const [suggestionsRetryKey, setSuggestionsRetryKey] = useState(0);
 
-  const routeImageId = pathname.split("/").pop();
-  const activeIndex = Math.max(
-    0,
-    images.findIndex((image) => image.id === routeImageId)
-  );
+  // `useParams` does not update after `history.pushState`; pathname does.
+  const routeImageId =
+    annotateImageIdFromPath(pathname) ??
+    annotateImageIdFromParams(params) ??
+    initialImageId;
+  const matchedIndex = routeImageId
+    ? images.findIndex((image) => image.id === routeImageId)
+    : -1;
+  const activeIndex = matchedIndex >= 0 ? matchedIndex : 0;
   const activeImage = images[activeIndex];
   const activeImageId = activeImage.id;
 

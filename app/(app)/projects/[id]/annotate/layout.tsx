@@ -1,8 +1,8 @@
-import { AnnotationWorkspace } from "@/components/annotate/annotation-workspace";
-import { loadAnnotationWorkspace } from "@/lib/annotations/workspace";
+import { AnnotationWorkspaceRoot } from "@/components/annotate/annotation-workspace-root";
+import { loadProjectDetailShell } from "@/lib/projects";
 import { isUuid } from "@/lib/ids";
 import { connection } from "next/server";
-import { notFound, redirect } from "next/navigation";
+import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
 
 /**
@@ -28,18 +28,17 @@ export default async function AnnotateLayout({
     notFound();
   }
 
-  const workspace = await loadAnnotationWorkspace(id);
-
-  if (!workspace) {
+  const shell = await loadProjectDetailShell(id);
+  if (!shell) {
     notFound();
-  }
-  if (workspace.images.length === 0) {
-    redirect(`/projects/${id}`);
   }
 
   return (
     <>
-      <AnnotationWorkspace {...workspace} />
+      <AnnotationWorkspaceRoot
+        project={shell.project}
+        loadWorkspaceOnClient
+      />
       {children}
     </>
   );

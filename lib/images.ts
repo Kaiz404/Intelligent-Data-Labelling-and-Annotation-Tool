@@ -66,6 +66,56 @@ async function toProjectImage(
   };
 }
 
+export type ProjectImagesSlice = {
+  images: ProjectImage[];
+  total: number;
+};
+
+/** One image of a project, or null when it is missing or not the user's. */
+export async function fetchProjectImage(
+  projectId: string,
+  imageId: string,
+): Promise<ProjectImage | null> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("images")
+    .select(IMAGE_COLUMNS)
+    .eq("project_id", projectId)
+    .eq("id", imageId)
+    .maybeSingle<ImageRow>();
+  if (error) {
+    throw new Error(`Could not load the image: ${error.message}`);
+  }
+  if (!data) return null;
+  return toProjectImage(data, projectId);
+}
+
+/** One page of a project's images, oldest upload first. */
+export async function fetchProjectImagesSlice(
+  projectId: string,
+  offset: number,
+  limit: number,
+): Promise<ProjectImagesSlice> {
+  const supabase = await createClient();
+  const safeOffset = Math.max(0, offset);
+  const safeLimit = Math.min(Math.max(1, limit), 200);
+  const { data, error, count } = await supabase
+    .from("images")
+    .select(IMAGE_COLUMNS, { count: "exact" })
+    .eq("project_id", projectId)
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true })
+    .range(safeOffset, safeOffset + safeLimit - 1);
+  if (error) {
+    throw new Error(`Could not load project images: ${error.message}`);
+  }
+  const rows = (data ?? []) as ImageRow[];
+  const images = await Promise.all(
+    rows.map((row) => toProjectImage(row, projectId)),
+  );
+  return { images, total: count ?? images.length };
+}
+
 /** Every image of a project, oldest upload first, paged past the PostgREST row cap. */
 export async function fetchProjectImages(
   projectId: string,

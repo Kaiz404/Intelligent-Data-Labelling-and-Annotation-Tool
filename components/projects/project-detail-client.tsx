@@ -31,6 +31,8 @@ import {
   useDatasetImportRun
 } from "@/components/projects/dataset-import-provider";
 import { ImageCard } from "@/components/projects/image-card";
+import { ProjectImageGridSkeleton } from "@/components/projects/project-image-grid-skeleton";
+import { StreamingLoadBanner } from "@/components/ui/streaming-load-banner";
 import { useProjectUploadQueue } from "@/components/projects/image-upload-provider";
 import {
   ImageTransferDialog,
@@ -69,7 +71,9 @@ import {
   TooltipTrigger
 } from "@/components/ui/tooltip";
 import { useAnnotationJob } from "@/hooks/use-annotation-job";
+import { useProjectWorkspaceLoader } from "@/hooks/use-project-workspace-loader";
 import { useQueryParams } from "@/hooks/use-query-params";
+import { readProjectPreview } from "@/lib/projects/preview-cache";
 import { numberFormatter } from "@/lib/format";
 import {
   countImagesByLabel,
@@ -137,21 +141,42 @@ function optionOr<T extends string>(
 
 type ProjectDetailClientProps = {
   project: Project;
-  images: ProjectImage[];
   projects: Project[];
-  labels: AnnotationLabel[];
-  initialJob: AnnotationJobProgress | null;
-  initialAiStates: Record<string, ImageAiState>;
+  images?: ProjectImage[];
+  labels?: AnnotationLabel[];
+  initialJob?: AnnotationJobProgress | null;
+  initialAiStates?: Record<string, ImageAiState>;
+  /** Fetch labels and images on the client so the shell can render immediately. */
+  loadWorkspaceOnClient?: boolean;
 };
 
 export function ProjectDetailClient({
   project: serverProject,
-  images: serverImages,
+  images: serverImagesProp = [],
   projects,
-  labels,
-  initialJob,
-  initialAiStates
+  labels: serverLabelsProp = [],
+  initialJob: serverInitialJob = null,
+  initialAiStates: serverInitialAiStates = {},
+  loadWorkspaceOnClient = false,
 }: ProjectDetailClientProps) {
+  const workspaceLoader = useProjectWorkspaceLoader(
+    serverProject.id,
+    loadWorkspaceOnClient,
+  );
+  const serverImages = loadWorkspaceOnClient
+    ? workspaceLoader.images
+    : serverImagesProp;
+  const labels = loadWorkspaceOnClient ? workspaceLoader.labels : serverLabelsProp;
+  const initialJob = loadWorkspaceOnClient
+    ? workspaceLoader.initialJob
+    : serverInitialJob;
+  const initialAiStates = loadWorkspaceOnClient
+    ? workspaceLoader.initialAiStates
+    : serverInitialAiStates;
+  const imagesLoading = loadWorkspaceOnClient && workspaceLoader.imagesLoading;
+  const workspaceError = loadWorkspaceOnClient ? workspaceLoader.error : null;
+
+  const preview = readProjectPreview(serverProject.id);
   const router = useRouter();
   const [selectedImageIds, setSelectedImageIds] = useState<string[]>([]);
   const [query, setQuery] = useQueryParams(QUERY_DEFAULTS);
@@ -182,17 +207,25 @@ export function ProjectDetailClient({
     base: Project;
     saved: Project;
   } | null>(null);
-  const project = useMemo(
-    () =>
+  const project = useMemo(() => {
+    const base =
       savedProject?.base === serverProject
         ? {
             ...serverProject,
             name: savedProject.saved.name,
-            description: savedProject.saved.description
+            description: savedProject.saved.description,
           }
-        : serverProject,
-    [savedProject, serverProject]
-  );
+        : serverProject;
+    if (!preview || preview.id !== base.id) return base;
+    return {
+      ...base,
+      name: base.name || preview.name,
+      description: base.description ?? preview.description,
+      image_count: base.image_count ?? preview.image_count,
+      annotated_count: base.annotated_count ?? preview.annotated_count,
+      last_activity_at: base.last_activity_at ?? preview.last_activity_at,
+    };
+  }, [preview, savedProject, serverProject]);
   // Applied as soon as an action succeeds; the refresh then confirms them.
   const [removedIds, setRemovedIds] = useState<ReadonlySet<string>>(
     () => new Set()
@@ -474,8 +507,42 @@ export function ProjectDetailClient({
 
   const selectedImages = images.filter((image) => selectedIdSet.has(image.id));
 
+  const expectedImageCount = project.image_count ?? images.length;
+  const skeletonCardCount = imagesLoading
+    ? Math.min(
+        Math.max(
+          expectedImageCount - images.length,
+          visibleImages.length === 0 ? expectedImageCount || 8 : 4,
+        ),
+        8,
+      )
+    : 0;
+  const imageCountLabel =
+    imagesLoading && images.length < expectedImageCount
+      ? images.length === 0
+        ? `Loading ${numberFormatter.format(expectedImageCount)} images…`
+        : `${numberFormatter.format(images.length)} of ${numberFormatter.format(expectedImageCount)} images`
+      : visibleImages.length === images.length
+        ? `${numberFormatter.format(images.length)} images`
+        : `${numberFormatter.format(visibleImages.length)} of ${numberFormatter.format(images.length)} images`;
+
   return (
     <div className="space-y-6">
+      {workspaceError ? (
+        <p className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          {workspaceError}
+        </p>
+      ) : null}
+      {imagesLoading ? (
+        <StreamingLoadBanner
+          title={
+            images.length === 0
+              ? "Loading project images…"
+              : `Loading images (${numberFormatter.format(images.length)} of ${numberFormatter.format(expectedImageCount)} loaded)`
+          }
+          description="Your filters and actions are ready. Thumbnails will appear as they arrive."
+        />
+      ) : null}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
@@ -522,7 +589,7 @@ export function ProjectDetailClient({
           </Button>
           <Button
             onClick={() => setIsAiOpen(true)}
-            disabled={images.length === 0 || isAiJobActive}
+            disabled={imagesLoading || images.length === 0 || isAiJobActive}
             className="bg-violet-600 text-white hover:bg-violet-700"
           >
             <WandSparkles className="size-4" />
@@ -659,14 +726,14 @@ export function ProjectDetailClient({
         </div>
       </div>
 
-      {images.length === 0 ? (
+      {!imagesLoading && images.length === 0 ? (
         <div
           key="empty-images"
           className="rounded-lg border border-dashed py-16 text-center text-muted-foreground"
         >
           No images have been uploaded to this project yet.
         </div>
-      ) : visibleImages.length === 0 ? (
+      ) : !imagesLoading && visibleImages.length === 0 ? (
         <div
           key="no-filter-results"
           className="rounded-lg border border-dashed py-16 text-center text-muted-foreground"
@@ -687,11 +754,7 @@ export function ProjectDetailClient({
               />
               Select all
             </label>
-            <span>
-              {visibleImages.length === images.length
-                ? `${numberFormatter.format(images.length)} images`
-                : `${numberFormatter.format(visibleImages.length)} of ${numberFormatter.format(images.length)} images`}
-            </span>
+            <span>{imageCountLabel}</span>
           </div>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {visibleImages.map((image) => (
@@ -699,6 +762,8 @@ export function ProjectDetailClient({
                 key={image.id}
                 image={image}
                 projectId={project.id}
+                projectName={project.name}
+                reveal
                 isSelected={selectedIdSet.has(image.id)}
                 selectionMode={selectedImageIds.length > 0}
                 aiState={aiStates[image.id]}
@@ -711,6 +776,9 @@ export function ProjectDetailClient({
               />
             ))}
           </div>
+          {skeletonCardCount > 0 ? (
+            <ProjectImageGridSkeleton count={skeletonCardCount} />
+          ) : null}
         </div>
       )}
 

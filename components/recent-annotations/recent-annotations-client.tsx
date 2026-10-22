@@ -32,7 +32,9 @@ import {
   SortOrderButton,
   type SortDirection
 } from "@/components/projects/sort-order-button";
+import { ProjectImageGridSkeleton } from "@/components/projects/project-image-grid-skeleton";
 import { RecentAnnotationCard } from "@/components/recent-annotations/recent-annotation-card";
+import { StreamingLoadBanner } from "@/components/ui/streaming-load-banner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -117,22 +119,79 @@ function errorMessage(cause: unknown, fallback: string) {
 }
 
 type RecentAnnotationsClientProps = {
-  images: RecentAnnotatedImage[];
   /** Every owned project, as Move/Add destinations. */
   projects: Project[];
-  limit: number;
-  isCapped: boolean;
-  serverNow: number;
+  images?: RecentAnnotatedImage[];
+  limit?: number;
+  isCapped?: boolean;
+  serverNow?: number;
+  /** Load the image grid on the client so filters and search render immediately. */
+  loadOnClient?: boolean;
 };
 
 export function RecentAnnotationsClient({
-  images: serverImages,
+  images: serverImagesProp = [],
   projects,
-  limit,
-  isCapped,
-  serverNow
+  limit: serverLimit = 0,
+  isCapped: serverIsCapped = false,
+  serverNow = Date.now(),
+  loadOnClient = false,
 }: RecentAnnotationsClientProps) {
   const router = useRouter();
+  const [clientPayload, setClientPayload] = useState<{
+    images: RecentAnnotatedImage[];
+    limit: number;
+    isCapped: boolean;
+  } | null>(null);
+  const [clientError, setClientError] = useState<string | null>(null);
+  const [imagesLoading, setImagesLoading] = useState(loadOnClient);
+
+  useEffect(() => {
+    if (!loadOnClient) return;
+    let cancelled = false;
+    setImagesLoading(true);
+    setClientError(null);
+    void fetch("/api/annotate/recent", { cache: "no-store" })
+      .then(async (response) => {
+        const body = (await response.json()) as {
+          images?: RecentAnnotatedImage[];
+          limit?: number;
+          isCapped?: boolean;
+          error?: string;
+        };
+        if (!response.ok) {
+          throw new Error(body.error ?? "Could not load recent annotations.");
+        }
+        return body;
+      })
+      .then((payload) => {
+        if (cancelled) return;
+        setClientPayload({
+          images: payload.images ?? [],
+          limit: payload.limit ?? 0,
+          isCapped: payload.isCapped ?? false,
+        });
+        setImagesLoading(false);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setClientError(errorMessage(error, "Could not load recent annotations."));
+        setImagesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadOnClient]);
+
+  const serverImages = useMemo(
+    () =>
+      loadOnClient ? (clientPayload?.images ?? []) : serverImagesProp,
+    [clientPayload?.images, loadOnClient, serverImagesProp],
+  );
+  const limit = loadOnClient ? (clientPayload?.limit ?? serverLimit) : serverLimit;
+  const isCapped = loadOnClient
+    ? (clientPayload?.isCapped ?? serverIsCapped)
+    : serverIsCapped;
   const now = useNow(serverNow);
   const [query, setQuery] = useQueryParams(QUERY_DEFAULTS);
   // Typed text updates at once; the URL only keeps it for revisits.
@@ -438,26 +497,6 @@ export function RecentAnnotationsClient({
         ? `from ${deleteTargets[0].projectName}`
         : "";
 
-  if (images.length === 0) {
-    return (
-      <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed px-6 py-16 text-center">
-        <div className="flex size-11 items-center justify-center rounded-full bg-primary/10 text-primary">
-          <Route className="size-5" aria-hidden="true" />
-        </div>
-        <div className="space-y-1">
-          <p className="font-medium">No annotated images yet</p>
-          <p className="max-w-sm text-sm text-muted-foreground">
-            Open a project and annotate an image. Your latest work across all
-            projects will show up here.
-          </p>
-        </div>
-        <Button asChild className="mt-2">
-          <Link href="/projects">Go to Projects</Link>
-        </Button>
-      </div>
-    );
-  }
-
   return (
     <div
       className={selectedImages.length > 0 ? "space-y-4 pb-20" : "space-y-4"}
@@ -526,6 +565,12 @@ export function RecentAnnotationsClient({
         </p>
       ) : null}
 
+      {clientError ? (
+        <p className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          {clientError}
+        </p>
+      ) : null}
+
       {actionError ? (
         <div className="flex items-start justify-between gap-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
           <p>{actionError}</p>
@@ -562,20 +607,46 @@ export function RecentAnnotationsClient({
         </div>
       )}
 
-      {visibleImages.length === 0 ? (
-        <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed py-16 text-center text-muted-foreground">
-          <p>No images match your filters.</p>
-          {hasFilters ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={clearFilters}
-            >
-              Clear filters
-            </Button>
-          ) : null}
+      {imagesLoading ? (
+        <div className="space-y-4" aria-busy="true" aria-label="Loading recent images">
+          <StreamingLoadBanner
+            title="Loading recent images…"
+            description="Search and filters are ready. Cards will appear as they load."
+          />
+          <ProjectImageGridSkeleton count={8} />
         </div>
+      ) : visibleImages.length === 0 ? (
+        images.length === 0 && !hasFilters ? (
+          <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed px-6 py-16 text-center">
+            <div className="flex size-11 items-center justify-center rounded-full bg-primary/10 text-primary">
+              <Route className="size-5" aria-hidden="true" />
+            </div>
+            <div className="space-y-1">
+              <p className="font-medium">No annotated images yet</p>
+              <p className="max-w-sm text-sm text-muted-foreground">
+                Open a project and annotate an image. Your latest work across all
+                projects will show up here.
+              </p>
+            </div>
+            <Button asChild className="mt-2">
+              <Link href="/projects">Go to Projects</Link>
+            </Button>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed py-16 text-center text-muted-foreground">
+            <p>No images match your filters.</p>
+            {hasFilters ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={clearFilters}
+              >
+                Clear filters
+              </Button>
+            ) : null}
+          </div>
+        )
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {visibleImages.map((image) => (
@@ -583,6 +654,7 @@ export function RecentAnnotationsClient({
               key={image.id}
               image={image}
               now={now}
+              reveal={loadOnClient}
               isSelected={selectedIdSet.has(image.id)}
               onSelectionChange={handleSelectionChange}
               onMove={openMove}

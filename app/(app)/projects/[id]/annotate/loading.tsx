@@ -1,5 +1,5 @@
-import { AnnotationWorkspaceSkeleton } from "@/components/annotate/annotation-workspace-skeleton";
+import { AnnotationWorkspaceRouteLoading } from "@/components/annotate/annotation-workspace-route-loading";
 
 export default function AnnotateLoading() {
-  return <AnnotationWorkspaceSkeleton />;
+  return <AnnotationWorkspaceRouteLoading />;
 }

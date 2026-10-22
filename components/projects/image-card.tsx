@@ -27,11 +27,15 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { rememberProjectPreview } from "@/lib/projects/preview-cache";
 import { cn } from "@/lib/utils";
 
 type ImageCardProps = {
   image: ProjectImage;
   projectId: string;
+  projectName?: string;
+  /** Fade in when the card first mounts (progressive project image loads). */
+  reveal?: boolean;
   isSelected: boolean;
   /** Keep the checkbox visible on every card while any image is selected. */
   selectionMode?: boolean;
@@ -73,6 +77,8 @@ function AiStateBadge({ state }: { state: ImageAiState }) {
 export const ImageCard = memo(function ImageCard({
   image,
   projectId,
+  projectName,
+  reveal = false,
   isSelected,
   selectionMode = false,
   aiState,
@@ -85,13 +91,32 @@ export const ImageCard = memo(function ImageCard({
 }: ImageCardProps) {
   const annotateHref = `/projects/${projectId}/annotate/${image.id}`;
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const seedWorkspacePreview = () => {
+    if (!projectName) return;
+    rememberProjectPreview({
+      id: projectId,
+      name: projectName,
+      description: null,
+      starred: false,
+      created_at: "",
+      updated_at: "",
+      user_id: null,
+    });
+  };
 
   return (
-    <Card className={cn("group overflow-hidden shadow-sm", isSelected && "border-primary ring-1 ring-primary/20")}>
+    <Card
+      className={cn(
+        "group overflow-hidden shadow-sm",
+        reveal && "animate-in fade-in-0 duration-300",
+        isSelected && "border-primary ring-1 ring-primary/20",
+      )}
+    >
       <div className="relative aspect-[4/3] bg-muted">
         <Link
           href={annotateHref}
           prefetch={false}
+          onClick={seedWorkspacePreview}
           className="absolute inset-0 z-0"
           aria-label={`Annotate ${image.fileName}`}
         >
@@ -123,6 +148,7 @@ export const ImageCard = memo(function ImageCard({
         <Link
           href={annotateHref}
           prefetch={false}
+          onClick={seedWorkspacePreview}
           className="block truncate text-sm font-medium hover:underline"
         >
           {image.fileName}

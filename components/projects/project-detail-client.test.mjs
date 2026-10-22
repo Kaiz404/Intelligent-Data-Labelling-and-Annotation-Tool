@@ -65,6 +65,20 @@ function setup({ query: queryPatch = {} } = {}) {
     "react/jsx-runtime": { jsx, jsxs: jsx },
     "next/navigation": { useRouter: () => router },
     "@/hooks/use-query-params": { useQueryParams: () => [query, (value) => queryWrites.push(value)] },
+    "@/hooks/use-project-workspace-loader": {
+      useProjectWorkspaceLoader() {
+        return {
+          status: "idle",
+          error: null,
+          labels: [],
+          images: [],
+          initialJob: null,
+          initialAiStates: {},
+          imagesLoading: false,
+        };
+      },
+    },
+    "@/lib/projects/preview-cache": { readProjectPreview: () => undefined },
     "@/hooks/use-annotation-job": { useAnnotationJob(options) {
       aiOptions = options;
       return { job: null, states: {}, isActive: false, start: async (value) => aiStarts.push(value), cancel() {} };

@@ -24,6 +24,7 @@ import {
   DropdownMenuTrigger
 } from "@/components/ui/dropdown-menu";
 import { formatRelativeTime } from "@/lib/format";
+import { rememberProjectPreview } from "@/lib/projects/preview-cache";
 import type { RecentAnnotatedImage } from "@/lib/types/recent-annotations";
 import { cn } from "@/lib/utils";
 
@@ -34,6 +35,7 @@ function workspaceHref(image: RecentAnnotatedImage) {
 type RecentAnnotationCardProps = {
   image: RecentAnnotatedImage;
   now: number;
+  reveal?: boolean;
   isSelected: boolean;
   onSelectionChange: (imageId: string, isSelected: boolean) => void;
   onMove: (image: RecentAnnotatedImage) => void;
@@ -46,6 +48,7 @@ type RecentAnnotationCardProps = {
 export const RecentAnnotationCard = memo(function RecentAnnotationCard({
   image,
   now,
+  reveal = false,
   isSelected,
   onSelectionChange,
   onMove,
@@ -60,7 +63,8 @@ export const RecentAnnotationCard = memo(function RecentAnnotationCard({
     <div
       className={cn(
         "group relative rounded-xl border bg-card p-2.5 text-card-foreground shadow-sm transition-colors hover:border-primary/40",
-        isSelected && "border-primary/50 bg-primary/5 ring-1 ring-primary/20"
+        reveal && "animate-in fade-in-0 duration-300",
+        isSelected && "border-primary/50 bg-primary/5 ring-1 ring-primary/20",
       )}
     >
       <div className="aspect-[16/10] overflow-hidden rounded-lg bg-muted">
@@ -83,6 +87,17 @@ export const RecentAnnotationCard = memo(function RecentAnnotationCard({
         <Link
           href={href}
           prefetch={false}
+          onClick={() =>
+            rememberProjectPreview({
+              id: image.projectId,
+              name: image.projectName,
+              description: null,
+              starred: false,
+              created_at: "",
+              updated_at: "",
+              user_id: null,
+            })
+          }
           className="block truncate text-sm font-medium outline-none after:absolute after:inset-0 after:rounded-xl focus-visible:after:ring-[3px] focus-visible:after:ring-ring/50"
           title={image.fileName}
         >

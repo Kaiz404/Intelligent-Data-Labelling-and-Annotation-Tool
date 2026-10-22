@@ -99,6 +99,44 @@ export const loadProjectThumbnails = cache(async (limit: number) => {
  * A project's export data, or null when it is missing or not the user's (RLS
  * returns nothing, so every query runs in parallel with the project lookup).
  */
+export type ProjectDetailShell = {
+  project: Project;
+  projects: Project[];
+};
+
+/**
+ * Metadata for the project detail shell: the open project (with list counts),
+ * every project as a Move/Add destination, and the edit-dialog thumbnail URL.
+ */
+export async function loadProjectDetailShell(
+  projectId: string,
+): Promise<ProjectDetailShell | null> {
+  const supabase = await createClient();
+  const [projectResult, { projects }, thumbnailUrl] = await Promise.all([
+    supabase.from("projects").select("*").eq("id", projectId).maybeSingle(),
+    loadProjectSummaries(),
+    createProjectThumbnailReadUrl(projectId),
+  ]);
+  if (projectResult.error) {
+    throw new Error(`Could not load the project: ${projectResult.error.message}`);
+  }
+  if (!projectResult.data) return null;
+
+  const summary = projects.find((project) => project.id === projectId);
+  const project: Project = {
+    ...(projectResult.data as Project),
+    image_count: summary?.image_count,
+    annotated_count: summary?.annotated_count,
+    last_activity_at: summary?.last_activity_at,
+    thumbnailUrl,
+  };
+
+  return {
+    project,
+    projects: projects.toSorted((a, b) => a.name.localeCompare(b.name)),
+  };
+}
+
 export async function loadProjectExport(
   projectId: string,
 ): Promise<ProjectExportData | null> {

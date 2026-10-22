@@ -1,36 +1,27 @@
 import { AppHeader } from "@/components/app-shell/app-header";
 import { RecentAnnotationsClient } from "@/components/recent-annotations/recent-annotations-client";
-import { RecentAnnotationsSkeleton } from "@/components/recent-annotations/recent-annotations-skeleton";
-import { fetchRecentlyAnnotatedImages } from "@/lib/images";
 import { loadProjectSummaries } from "@/lib/projects";
 import { connection } from "next/server";
 import { Suspense } from "react";
 
-async function RecentAnnotationsContent() {
+async function RecentAnnotationsShell() {
   await connection();
-  let loaded;
+  let projects;
   try {
-    // Every owned project is a Move/Add destination, shown with its image count.
-    loaded = await Promise.all([
-      fetchRecentlyAnnotatedImages(),
-      loadProjectSummaries(),
-    ]);
-  } catch (cause) {
+    ({ projects } = await loadProjectSummaries());
+  } catch {
     return (
       <p className="text-sm text-destructive">
-        {cause instanceof Error ? cause.message : "Could not load recent annotations."}
+        Failed to load projects. If you recently updated the schema, run the
+        latest Supabase migration.
       </p>
     );
   }
 
-  const [recent, { projects }] = loaded;
   return (
     <RecentAnnotationsClient
-      images={recent.images}
       projects={projects.toSorted((a, b) => a.name.localeCompare(b.name))}
-      limit={recent.limit}
-      isCapped={recent.isCapped}
-      serverNow={Date.now()}
+      loadOnClient
     />
   );
 }
@@ -48,8 +39,8 @@ export default function AnnotatePage() {
             View and manage your latest annotated images across all projects
           </p>
         </div>
-        <Suspense fallback={<RecentAnnotationsSkeleton />}>
-          <RecentAnnotationsContent />
+        <Suspense fallback={null}>
+          <RecentAnnotationsShell />
         </Suspense>
       </div>
     </>

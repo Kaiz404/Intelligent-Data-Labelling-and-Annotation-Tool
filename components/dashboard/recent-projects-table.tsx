@@ -12,6 +12,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { relativeTimeFromDate, toPercent } from "@/lib/format";
+import { rememberProjectPreview } from "@/lib/projects/preview-cache";
 import type { Project, ProjectExportData } from "@/lib/types/projects";
 
 type RecentProjectsTableProps = {
@@ -96,7 +97,11 @@ export function RecentProjectsTable({
                   return (
                     <TableRow className="hover:bg-muted/40" key={project.id}>
                       <TableCell>
-                        <Link href={`/projects/${project.id}`} className="flex items-center gap-3">
+                        <Link
+                          href={`/projects/${project.id}`}
+                          onClick={() => rememberProjectPreview(project)}
+                          className="flex items-center gap-3"
+                        >
                           <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10"><Folder className="size-5 text-primary" /></span>
                           <div className="min-w-0"><p className="font-medium hover:text-primary">{project.name}</p>{project.description ? <p className="max-w-[320px] truncate text-xs text-muted-foreground">{project.description}</p> : null}</div>
                         </Link>

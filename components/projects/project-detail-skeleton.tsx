@@ -1,8 +1,6 @@
 import { AppHeader } from "@/components/app-shell/app-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Loader2 } from "lucide-react";
-
 const CARDS = [0, 1, 2, 3, 4, 5, 6, 7];
 const FILTERS = [
   { label: "Filter By:", width: "w-[120px]" },
@@ -27,25 +25,6 @@ export function ProjectDetailSkeleton() {
         aria-label="Loading project"
       >
         <div className="space-y-6">
-          {/* Project loading indicator */}
-          <div
-            role="status"
-            aria-live="polite"
-            className="flex items-center gap-3 rounded-lg border border-[#D8E9FF] bg-[#F7FAFF] px-4 py-3"
-          >
-            <Loader2
-              className="size-5 shrink-0 animate-spin text-primary"
-              aria-hidden="true"
-            />
-
-            <div className="space-y-0.5">
-              <p className="text-md font-medium">Loading project...</p>
-
-              <p className="text-sm text-muted-foreground">
-                Fetching your project details. Please wait.
-              </p>
-            </div>
-          </div>
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex h-8 items-center gap-2">
               <Skeleton className="h-7 w-48" />
