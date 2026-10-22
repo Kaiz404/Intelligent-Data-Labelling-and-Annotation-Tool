@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import {
   annotationJobErrorResponse,
   fetchPendingSuggestions,
@@ -15,6 +16,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string; imageId: string }> },
 ) {
   try {
+    await connection();
     const { id, imageId } = await params;
     await requireSignedIn();
     const suggestionSets = await fetchPendingSuggestions(id, imageId);

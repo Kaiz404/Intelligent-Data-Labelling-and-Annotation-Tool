@@ -82,6 +82,7 @@ export const RecentAnnotationCard = memo(function RecentAnnotationCard({
         {/* Stretched link: the whole card opens the workspace. */}
         <Link
           href={href}
+          prefetch={false}
           className="block truncate text-sm font-medium outline-none after:absolute after:inset-0 after:rounded-xl focus-visible:after:ring-[3px] focus-visible:after:ring-ring/50"
           title={image.fileName}
         >
@@ -143,7 +144,7 @@ export const RecentAnnotationCard = memo(function RecentAnnotationCard({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-48">
           <DropdownMenuItem asChild>
-            <Link href={href}>
+            <Link href={href} prefetch={false}>
               <SquarePen />
               Open in workspace
             </Link>

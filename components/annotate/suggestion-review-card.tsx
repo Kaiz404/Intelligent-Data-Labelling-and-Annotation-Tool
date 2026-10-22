@@ -67,7 +67,7 @@ const primaryButtonClass =
 /**
  * Review card for AI suggestions (dashed boxes): step through detections,
  * relabel or delete one, then add or discard the rest. Keeps the cross-image
- * review queue ("Add & review next"). Placement and the minimised/dismissed
+ * review queue ("Add all & review next"). Placement and the minimised/dismissed
  * state are up to the parent; minimised, it renders as a slim row.
  */
 export function SuggestionReviewCard({
@@ -100,6 +100,14 @@ export function SuggestionReviewCard({
     focusAfterToggleRef.current = false;
     (collapsed ? expandButtonRef.current : sectionRef.current)?.focus();
   }, [collapsed]);
+
+  const firstSuggestionId = suggestions[0]?.id ?? null;
+  useEffect(() => {
+    if (collapsed || !firstSuggestionId) return;
+    if (!suggestions.some((suggestion) => suggestion.id === selectedBoxId)) {
+      onSelect(firstSuggestionId);
+    }
+  }, [collapsed, firstSuggestionId, onSelect, selectedBoxId, suggestions]);
 
   const toggle = (next: boolean) => {
     focusAfterToggleRef.current = true;
@@ -335,7 +343,7 @@ export function SuggestionReviewCard({
           >
             {isSaving
               ? "Saving..."
-              : `Add & review next (${otherImagesToReview} more)`}
+              : `Add all & review next (${otherImagesToReview} more)`}
             <ArrowRight aria-hidden />
           </Button>
         ) : null}

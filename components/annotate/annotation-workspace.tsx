@@ -18,7 +18,6 @@ import { preload } from "react-dom";
 import { CheckCircle2, Download, Keyboard } from "lucide-react";
 import { AppHeader } from "@/components/app-shell/app-header";
 import { AiAnnotateDialog } from "@/components/annotate/ai-annotate-dialog";
-import { AiJobStatusChip } from "@/components/annotate/ai-job-status-chip";
 import { AnnotationExportSheet } from "@/components/annotate/annotation-export-sheet";
 import type { BoxRect } from "@/components/annotate/annotation-canvas";
 import { AnnotationSidePanel } from "@/components/annotate/annotation-side-panel";
@@ -37,7 +36,10 @@ import { useSerialQueue } from "@/hooks/use-serial-queue";
 import { saveImageAnnotations } from "@/lib/actions/annotations";
 import { saveImageThumbhash } from "@/lib/actions/images";
 import { createLabel, deleteLabel, renameLabel } from "@/lib/actions/labels";
-import { resolveSuggestions } from "@/lib/actions/suggestions";
+import {
+  loadPendingImageSuggestions,
+  resolveSuggestions,
+} from "@/lib/actions/suggestions";
 import {
   acceptAllSuggestions,
   acceptedBoxes,
@@ -210,7 +212,14 @@ export function AnnotationWorkspace({
   const router = useRouter();
   const pathname = usePathname();
   const hydrated = useHydrated();
-  const [cache] = useState(() => createWorkspaceCache(project.id));
+  const [cache] = useState(() =>
+    createWorkspaceCache(async (imageId) => {
+      const result = await loadPendingImageSuggestions(project.id, imageId);
+      if (!result.ok) throw new Error(result.error);
+      return result.suggestionSets;
+    })
+  );
+  const [suggestionsRetryKey, setSuggestionsRetryKey] = useState(0);
 
   const routeImageId = pathname.split("/").pop();
   const activeIndex = Math.max(
@@ -293,6 +302,9 @@ export function AnnotationWorkspace({
   const [aiAnnotateOpen, setAiAnnotateOpen] = useState(false);
   const [aiAnnotateScope, setAiAnnotateScope] =
     useState<AiAnnotateScope>("current");
+  const [aiAnnotateDialogMode, setAiAnnotateDialogMode] = useState<
+    "setup" | "progress"
+  >("setup");
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   // Only while "Add & review next" saves and switches images; routine
   // auto-saves must not disable the review card.
@@ -343,8 +355,18 @@ export function AnnotationWorkspace({
   const persist = useCallback(
     async (imageId: string, plan: SavePlan) => {
       const version = aiStateVersion(latest.current.aiStates[imageId]);
+      const editor = latest.current.sessions[imageId];
+      if (!editor) return false;
+
+      const rollback = {
+        savedBoxes: editor.savedBoxes,
+        serverSets: editor.serverSets,
+      };
+
       window.clearTimeout(retryTimersRef.current.get(imageId));
       retryTimersRef.current.delete(imageId);
+      editImage(imageId, { type: "saved", plan });
+
       try {
         const result = await runSave(async () => {
           const saved = plan.boxes
@@ -360,7 +382,6 @@ export function AnnotationWorkspace({
           }
           return saved;
         });
-        editImage(imageId, { type: "saved", plan });
         saveFailuresRef.current.delete(imageId);
         setSaveStatus((current) => ({
           ...current,
@@ -377,8 +398,11 @@ export function AnnotationWorkspace({
         }
         return true;
       } catch (error) {
-        // Usually the network: retry with backoff (a retry saves whatever is
-        // unsaved by then). An edit or the Save button also retries.
+        editImage(imageId, {
+          type: "restoreSaveBaseline",
+          savedBoxes: rollback.savedBoxes,
+          serverSets: rollback.serverSets
+        });
         const failures = (saveFailuresRef.current.get(imageId) ?? 0) + 1;
         saveFailuresRef.current.set(imageId, failures);
         setSaveStatus((current) => ({
@@ -412,7 +436,7 @@ export function AnnotationWorkspace({
     (imageId: string, options?: { force?: boolean }) => {
       const editor = latest.current.sessions[imageId];
       const plan = editor ? planSave(editor, options) : null;
-      if (plan) return persist(imageId, plan);
+      if (plan) void persist(imageId, plan);
       // Nothing left to save (e.g. undone back to the saved copy): an
       // earlier failure no longer matters.
       if (saveFailuresRef.current.has(imageId)) {
@@ -466,11 +490,12 @@ export function AnnotationWorkspace({
     initialStates: serverAiStates,
     onFinished: syncWithServer
   });
-  // The footer chip follows a run that was active during this visit until
+  // The toolbar status follows a run that was active during this visit until
   // it is dismissed.
   const [chipJobId, setChipJobId] = useState(
     latestJob && isRunActive(latestJob) ? latestJob.id : null
   );
+  const [jobImageIds, setJobImageIds] = useState<string[] | null>(null);
   if (job && isJobActive && job.id !== chipJobId) setChipJobId(job.id);
   const chipJob = job && job.id === chipJobId ? job : null;
 
@@ -601,13 +626,14 @@ export function AnnotationWorkspace({
   useEffect(() => {
     if (!hasSession || !activeNeedsReview) return;
     const imageId = activeImageId;
+    const labelIds = new Set(latest.current.labels.map((label) => label.id));
     cache.loadSuggestions(imageId, activeAiVersion).then(
       (sets) => {
         setSuggestionsError(null);
         editImage(imageId, {
           type: "syncSuggestions",
           sets,
-          labelIds: new Set(latest.current.labels.map((label) => label.id))
+          labelIds
         });
         // Nothing left on the server (e.g. reviewed in another tab).
         if (!hasServerSuggestions(sets)) {
@@ -617,14 +643,22 @@ export function AnnotationWorkspace({
           }));
         }
       },
-      (error: unknown) =>
+      (error: unknown) => {
+        // Unblock the review UI (local single-image suggestions, etc.) without
+        // dropping boxes already on the canvas.
+        editImage(imageId, {
+          type: "syncSuggestions",
+          sets: [],
+          labelIds
+        });
         setSuggestionsError({
           imageId,
           message:
             error instanceof Error
               ? error.message
               : "Could not load AI suggestions."
-        })
+        });
+      }
     );
   }, [
     activeAiVersion,
@@ -632,7 +666,8 @@ export function AnnotationWorkspace({
     activeNeedsReview,
     cache,
     editImage,
-    hasSession
+    hasSession,
+    suggestionsRetryKey
   ]);
 
   /** Gets an image ready to open: its bytes and, if up for review, its suggestions. */
@@ -919,15 +954,13 @@ export function AnnotationWorkspace({
   }, []);
 
   /** Save button: rewrites this image, and saves any other image with unsaved changes. */
-  const handleSave = useCallback(async () => {
+  const handleSave = useCallback(() => {
     const others = Object.keys(latest.current.sessions).filter(
       (imageId) => imageId !== activeImageId
     );
-    const results = await Promise.all([
-      saveNow(activeImageId, { force: true }),
-      ...others.map((imageId) => saveNow(imageId))
-    ]);
-    if (results.every(Boolean)) flashSaved();
+    saveNow(activeImageId, { force: true });
+    for (const imageId of others) saveNow(imageId);
+    flashSaved();
   }, [activeImageId, flashSaved, saveNow]);
 
   /**
@@ -944,9 +977,9 @@ export function AnnotationWorkspace({
       };
       const editor = acceptAll ? editorReducer(session, action) : session;
       if (acceptAll) editImage(imageId, action);
-      startAdvancingReview(async () => {
+      startAdvancingReview(() => {
         const plan = planSave(editor, { force: !nextReviewImageId });
-        if (plan && !(await persist(imageId, plan))) return;
+        if (plan) void persist(imageId, plan);
         if (nextReviewImageId) openImage(nextReviewImageId);
         else flashSaved();
       });
@@ -963,9 +996,49 @@ export function AnnotationWorkspace({
   );
 
   const handleStartJob = useCallback(
-    (input: { imageIds: string[]; labelIds: string[]; confidence: number }) =>
-      startJob({ projectId: project.id, ...input }),
+    async (input: {
+      imageIds: string[];
+      labelIds: string[];
+      confidence: number;
+    }) => {
+      await startJob({ projectId: project.id, ...input });
+      setJobImageIds(input.imageIds);
+      setAiAnnotateDialogMode("progress");
+    },
     [project.id, startJob]
+  );
+
+  const dismissBulkJob = useCallback(() => {
+    setChipJobId(null);
+    setJobImageIds(null);
+    setAiAnnotateDialogMode("setup");
+  }, []);
+
+  const bulkJobStatus = useMemo(
+    () =>
+      chipJob
+        ? {
+            job: chipJob,
+            isActive: isJobActive,
+            imageIds: jobImageIds ?? [],
+            aiStates,
+            onCancel: cancelJob,
+            onDismiss: dismissBulkJob,
+            onReviewImage: (imageId: string) => {
+              selectImage(imageId);
+              setAiAnnotateOpen(false);
+            },
+          }
+        : null,
+    [
+      aiStates,
+      cancelJob,
+      chipJob,
+      dismissBulkJob,
+      isJobActive,
+      jobImageIds,
+      selectImage,
+    ]
   );
 
   const handleCanvasImageSize = useCallback(
@@ -1121,10 +1194,10 @@ export function AnnotationWorkspace({
     ? status.failures <= SAVE_RETRY_LIMIT
       ? "Auto-save failed · retrying"
       : "Auto-save failed"
-    : isSaving
-      ? "Saving…"
-      : hasUnsavedChanges
-        ? "Unsaved changes"
+    : hasUnsavedChanges
+      ? "Unsaved changes"
+      : isSaving
+        ? "Syncing…"
         : "Auto-save: On";
 
   // Full screen: the canvas grows to fill the viewport left after the
@@ -1136,7 +1209,8 @@ export function AnnotationWorkspace({
   // Hidden until this image's suggestions have loaded, so it never shows
   // "nothing to review" for an image that is up for review.
   const reviewCardView: ReviewCardView = session?.reviewCard ?? "expanded";
-  const awaitingSuggestions = activeNeedsReview && !session?.serverSets;
+  const awaitingSuggestions =
+    activeNeedsReview && session?.serverSets == null;
   const showReviewCard =
     Boolean(session) &&
     !awaitingSuggestions &&
@@ -1211,9 +1285,19 @@ export function AnnotationWorkspace({
             onResetView={() => setFitToken((value) => value + 1)}
             onToggleFullscreen={toggleFullscreen}
             onAiAnnotate={(scope) => {
+              setAiAnnotateDialogMode("setup");
               setAiAnnotateScope(scope);
               setAiAnnotateOpen(true);
             }}
+            onOpenJobProgress={() => {
+              setAiAnnotateDialogMode("progress");
+              setAiAnnotateOpen(true);
+            }}
+            aiJobStatus={
+              chipJob
+                ? { job: chipJob, isActive: isJobActive }
+                : null
+            }
           />
 
           <AiAnnotateDialog
@@ -1227,6 +1311,9 @@ export function AnnotationWorkspace({
             onCreateLabel={handleCreateLabel}
             onDetected={handleAiDetected}
             onStartJob={handleStartJob}
+            bulkJob={
+              aiAnnotateDialogMode === "progress" ? bulkJobStatus : null
+            }
           />
 
           <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_290px] xl:items-start">
@@ -1282,11 +1369,11 @@ export function AnnotationWorkspace({
                 <Button
                   type="button"
                   onClick={handleSave}
-                  disabled={isSaving || !session}
+                  disabled={!session}
                   className="rounded-lg"
                 >
                   {saveFlash ? <CheckCircle2 className="size-4" /> : null}
-                  {isSaving ? "Saving..." : saveFlash ? "Saved" : "Save"}
+                  {saveFlash ? "Saved" : "Save"}
                 </Button>
                 <Button
                   type="button"
@@ -1298,9 +1385,24 @@ export function AnnotationWorkspace({
                 </Button>
               </div>
               {notice ? (
-                <p className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                  {notice}
-                </p>
+                <div className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                  <p>{notice}</p>
+                  {suggestionsError?.imageId === activeImageId ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="mt-2 h-7 border-destructive/30 bg-background text-destructive hover:bg-destructive/5 hover:text-destructive"
+                      onClick={() => {
+                        cache.forgetSuggestions(activeImageId, activeAiVersion);
+                        setSuggestionsError(null);
+                        setSuggestionsRetryKey((key) => key + 1);
+                      }}
+                    >
+                      Retry loading suggestions
+                    </Button>
+                  ) : null}
+                </div>
               ) : null}
               <div className="relative flex flex-col gap-4">
                 {isXl && reviewCard ? (
@@ -1347,9 +1449,11 @@ export function AnnotationWorkspace({
                     "size-2 rounded-full",
                     status?.error
                       ? "bg-destructive"
-                      : isSaving || hasUnsavedChanges
+                      : hasUnsavedChanges
                         ? "bg-amber-500"
-                        : "bg-emerald-500"
+                        : isSaving
+                          ? "bg-sky-500"
+                          : "bg-emerald-500"
                   )}
                 />
                 {saveState}
@@ -1363,14 +1467,6 @@ export function AnnotationWorkspace({
               </span>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
-              {chipJob ? (
-                <AiJobStatusChip
-                  job={chipJob}
-                  isActive={isJobActive}
-                  onCancel={cancelJob}
-                  onDismiss={() => setChipJobId(null)}
-                />
-              ) : null}
               <Button
                 type="button"
                 variant="ghost"

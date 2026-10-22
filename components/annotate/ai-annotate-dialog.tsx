@@ -31,6 +31,11 @@ import {
 } from "@/components/ui/select";
 import { MAX_JOB_IMAGES } from "@/lib/annotations/job-config";
 import { thumbhashColor } from "@/lib/image-placeholder";
+import {
+  AiAnnotateJobProgress,
+  bulkJobDialogTitle,
+  type BulkJobStatus,
+} from "@/components/annotate/ai-annotate-job-progress";
 import type {
   AnnotationLabel,
   AnnotationSuggestion
@@ -60,6 +65,8 @@ type AiAnnotateDialogProps = {
     labelIds: string[];
     confidence: number;
   }) => Promise<void>;
+  /** When set, the dialog shows bulk-run progress instead of the setup form. */
+  bulkJob?: BulkJobStatus | null;
 };
 
 const MODEL_ID = "roboflow-zero-shot";
@@ -78,6 +85,9 @@ const SCOPE_OPTIONS: Array<{ value: Scope; title: string; hint: string }> = [
 ];
 
 function formatConfidence(value: number) {
+  if (value < 0.01) {
+    return String(value);
+  }
   return String(Math.round(value * 100) / 100);
 }
 
@@ -111,7 +121,8 @@ export function AiAnnotateDialog({
   initialScope = "current",
   onCreateLabel,
   onDetected,
-  onStartJob
+  onStartJob,
+  bulkJob = null
 }: AiAnnotateDialogProps) {
   const [scope, setScope] = useState<Scope>(initialScope);
   const [selectedImageIds, setSelectedImageIds] = useState<Set<string>>(
@@ -138,7 +149,7 @@ export function AiAnnotateDialog({
   const [wasOpen, setWasOpen] = useState(open);
   if (open !== wasOpen) {
     setWasOpen(open);
-    if (open) {
+    if (open && !bulkJob) {
       setScope(initialScope);
       setSelectedImageIds(new Set([currentImageId]));
       setAnchorIndex(null);
@@ -326,7 +337,6 @@ export function AiAnnotateDialog({
 
   async function runRange() {
     await onStartJob({ imageIds: rangeImageIds, labelIds, confidence });
-    onOpenChange(false);
   }
 
   async function handleRun() {
@@ -366,11 +376,14 @@ export function AiAnnotateDialog({
       ? "Label with AI"
       : `Label ${plural(rangeCount, "image")} with AI`;
 
+  const progressTitle = bulkJobDialogTitle(bulkJob);
+
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg"
         onEscapeKeyDown={(event) => {
+          if (bulkJob) return;
           // Escape leaves the inline "Add Class" input before the dialog.
           if (isAddingClass) {
             event.preventDefault();
@@ -381,14 +394,28 @@ export function AiAnnotateDialog({
         }}
       >
         <DialogHeader>
-          <DialogTitle>Annotation Assist</DialogTitle>
+          <DialogTitle>
+            {progressTitle ?? "Annotation Assist"}
+          </DialogTitle>
           <DialogDescription>
-            {scope === "current"
-              ? "Use AI to detect and label objects in this image."
-              : "Use AI to detect and label objects across multiple images."}
+            {bulkJob
+              ? bulkJob.isActive
+                ? "Detections run in the background. Open an image when it has suggestions to review."
+                : "Review suggestions on each image, or start another run."
+              : scope === "current"
+                ? "Use AI to detect and label objects in this image."
+                : "Use AI to detect and label objects across multiple images."}
           </DialogDescription>
         </DialogHeader>
 
+        {bulkJob ? (
+          <AiAnnotateJobProgress
+            bulkJob={bulkJob}
+            images={images}
+            onClose={() => onOpenChange(false)}
+          />
+        ) : (
+        <>
         <div className="min-w-0 space-y-5">
           <div className="flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-primary dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-300">
             <Info className="mt-px size-3.5 shrink-0" aria-hidden />
@@ -618,7 +645,7 @@ export function AiAnnotateDialog({
                 type="range"
                 min={0}
                 max={1}
-                step={0.05}
+                step={0.001}
                 value={confidence}
                 disabled={isRunning}
                 aria-label="Confidence threshold"
@@ -642,7 +669,7 @@ export function AiAnnotateDialog({
                 inputMode="decimal"
                 min={0}
                 max={1}
-                step={0.05}
+                step={0.001}
                 value={confidenceDraft}
                 disabled={isRunning}
                 aria-invalid={parseConfidence(confidenceDraft) === null}
@@ -802,6 +829,8 @@ export function AiAnnotateDialog({
               : runLabel}
           </Button>
         </DialogFooter>
+        </>
+        )}
       </DialogContent>
     </Dialog>
   );

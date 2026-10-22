@@ -50,7 +50,7 @@ export function AiJobBanner({
           </div>
           {reviewHref ? (
             <Button asChild size="sm" variant="outline">
-              <Link href={reviewHref}>
+              <Link href={reviewHref} prefetch={false}>
                 Review {reviewImageCount} ready
                 <ArrowRight className="size-4" />
               </Link>
@@ -114,7 +114,7 @@ export function AiJobBanner({
           size="sm"
           className="bg-violet-600 text-white hover:bg-violet-700"
         >
-          <Link href={reviewHref}>
+          <Link href={reviewHref} prefetch={false}>
             Review suggestions
             <ArrowRight className="size-4" />
           </Link>

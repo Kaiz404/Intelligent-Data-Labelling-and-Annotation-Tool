@@ -1,13 +1,33 @@
 import { AnnotationWorkspace } from "@/components/annotate/annotation-workspace";
-import { AnnotationWorkspaceSkeleton } from "@/components/annotate/annotation-workspace-skeleton";
 import { loadAnnotationWorkspace } from "@/lib/annotations/workspace";
+import { isUuid } from "@/lib/ids";
 import { connection } from "next/server";
 import { notFound, redirect } from "next/navigation";
-import { Suspense, type ReactNode } from "react";
+import type { ReactNode } from "react";
 
-async function Workspace({ params }: { params: Promise<{ id: string }> }) {
+/**
+ * The annotation workspace is a layout so it survives image switches: it
+ * loads a project once, then shows whichever image the URL names (see the
+ * [imageId] page) without rendering anything else again.
+ *
+ * `connection()` runs on the layout itself (not only inside Suspense) so
+ * Cache Components does not serve a stale static 404 before auth and params
+ * are available on a cold dev navigation.
+ */
+export default async function AnnotateLayout({
+  children,
+  params,
+}: {
+  children: ReactNode;
+  params: Promise<{ id: string }>;
+}) {
   const { id } = await params;
   await connection();
+
+  if (!isUuid(id)) {
+    notFound();
+  }
+
   const workspace = await loadAnnotationWorkspace(id);
 
   if (!workspace) {
@@ -17,26 +37,9 @@ async function Workspace({ params }: { params: Promise<{ id: string }> }) {
     redirect(`/projects/${id}`);
   }
 
-  return <AnnotationWorkspace {...workspace} />;
-}
-
-/**
- * The annotation workspace is a layout so it survives image switches: it
- * loads a project once, then shows whichever image the URL names (see the
- * [imageId] page) without rendering anything else again.
- */
-export default function AnnotateLayout({
-  children,
-  params,
-}: {
-  children: ReactNode;
-  params: Promise<{ id: string }>;
-}) {
   return (
     <>
-      <Suspense fallback={<AnnotationWorkspaceSkeleton />}>
-        <Workspace params={params} />
-      </Suspense>
+      <AnnotationWorkspace {...workspace} />
       {children}
     </>
   );

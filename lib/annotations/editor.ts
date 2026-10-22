@@ -69,6 +69,12 @@ export type EditorAction =
     }
   /** A save went through: the server now holds what the plan wrote. */
   | { type: "saved"; plan: SavePlan }
+  /** Reverts an optimistic save after the server rejected or failed it. */
+  | {
+      type: "restoreSaveBaseline";
+      savedBoxes: BoundingBox[];
+      serverSets: ImageSuggestionSet[] | null;
+    }
   | { type: "setReviewCard"; view: ReviewCardView };
 
 /** What a save must write; see `planSave`. */
@@ -287,6 +293,12 @@ function reduce(state: ImageEditor, action: EditorAction): ImageEditor {
         ...state,
         savedBoxes: action.plan.boxes ?? state.savedBoxes,
         serverSets: applyResolutions(state.serverSets, action.plan.resolutions),
+      };
+    case "restoreSaveBaseline":
+      return {
+        ...state,
+        savedBoxes: action.savedBoxes,
+        serverSets: action.serverSets,
       };
     case "setReviewCard":
       return state.reviewCard === action.view

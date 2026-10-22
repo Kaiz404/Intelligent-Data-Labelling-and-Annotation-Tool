@@ -5,7 +5,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { AnnotationLabel } from "@/lib/types/annotations";
 
-export const DEFAULT_AI_CONFIDENCE = 0.4;
+/** Default AI Annotate threshold: 20% (0.2 on the 0..1 scale). */
+export const DEFAULT_AI_CONFIDENCE = 0.2;
 
 type AiLabelOptionsProps = {
   labels: AnnotationLabel[];
@@ -90,7 +91,7 @@ export function AiLabelOptions({
           type="number"
           min={0}
           max={1}
-          step={0.05}
+          step={0.001}
           value={confidence}
           onChange={(event) => onConfidenceChange(Number(event.target.value))}
         />

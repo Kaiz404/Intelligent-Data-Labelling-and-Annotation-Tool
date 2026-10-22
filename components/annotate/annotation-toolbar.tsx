@@ -1,11 +1,11 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight, Hand, ImageIcon, Images, Maximize, Minimize, Minus, MousePointer2, Plus, Redo2, Square, Trash2, Undo2, WandSparkles } from "lucide-react";
+import { ChevronLeft, ChevronRight, Hand, Maximize, Minimize, Minus, MousePointer2, Plus, Redo2, Square, Trash2, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import type { AnnotationTool } from "@/lib/types/annotations";
+import { AiAnnotateToolbarButton } from "@/components/annotate/ai-annotate-toolbar-button";
+import type { AnnotationJobProgress, AnnotationTool } from "@/lib/types/annotations";
 import { cn } from "@/lib/utils";
 
 /** Which images an AI Annotate run should cover when the dialog opens. */
@@ -32,6 +32,12 @@ type AnnotationToolbarProps = {
   onResetView: () => void;
   onToggleFullscreen: () => void;
   onAiAnnotate: (scope: AiAnnotateScope) => void;
+  /** When set, replaces the idle AI Annotate label with live bulk-run progress. */
+  aiJobStatus?: {
+    job: AnnotationJobProgress;
+    isActive: boolean;
+  } | null;
+  onOpenJobProgress: () => void;
 };
 
 function ToolButton({ label, shortcut, active, disabled, onClick, children }: {
@@ -56,7 +62,7 @@ function ToolButton({ label, shortcut, active, disabled, onClick, children }: {
   );
 }
 
-export function AnnotationToolbar({ imageIndex, imageCount, tool, zoom, canUndo, canRedo, canDelete, isFullscreen, onPrev, onNext, onToolChange, onUndo, onRedo, onDelete, onZoomOut, onZoomIn, onResetView, onToggleFullscreen, onAiAnnotate }: AnnotationToolbarProps) {
+export function AnnotationToolbar({ imageIndex, imageCount, tool, zoom, canUndo, canRedo, canDelete, isFullscreen, onPrev, onNext, onToolChange, onUndo, onRedo, onDelete, onZoomOut, onZoomIn, onResetView, onToggleFullscreen, onAiAnnotate, aiJobStatus, onOpenJobProgress }: AnnotationToolbarProps) {
   const fullscreenLabel = isFullscreen ? "Exit full screen" : "Full screen";
   return (
     <div className="flex flex-wrap items-center justify-between gap-4">
@@ -89,19 +95,11 @@ export function AnnotationToolbar({ imageIndex, imageCount, tool, zoom, canUndo,
           </TooltipTrigger>
           <TooltipContent>{fullscreenLabel}</TooltipContent>
         </Tooltip>
-        <div className="flex h-9 items-stretch overflow-hidden rounded-lg bg-violet-600 text-white shadow-sm">
-          <Button type="button" onClick={() => onAiAnnotate("current")} className="h-9 gap-1.5 rounded-none bg-transparent px-3 text-sm text-white shadow-none hover:bg-violet-700"><WandSparkles className="size-4" />AI Annotate</Button>
-          {/* Non-modal so the AI Annotate dialog can take focus as this menu closes. */}
-          <DropdownMenu modal={false}>
-            <DropdownMenuTrigger asChild>
-              <Button type="button" aria-label="AI Annotate options" className="h-9 w-8 rounded-none border-l border-white/25 bg-transparent px-0 text-white shadow-none hover:bg-violet-700 data-[state=open]:bg-violet-700"><ChevronDown className="size-4" /></Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-max min-w-60">
-              <DropdownMenuItem className="whitespace-nowrap" onSelect={() => onAiAnnotate("current")}><ImageIcon />Annotate this image</DropdownMenuItem>
-              <DropdownMenuItem className="whitespace-nowrap" onSelect={() => onAiAnnotate("range")}><Images />Annotate multiple images…</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
+        <AiAnnotateToolbarButton
+          onAiAnnotate={onAiAnnotate}
+          onOpenJobProgress={onOpenJobProgress}
+          jobStatus={aiJobStatus}
+        />
       </div>
     </div>
   );

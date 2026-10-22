@@ -16,7 +16,7 @@ export function getRoboflowConfig() {
   const apiUrl = process.env.ROBOFLOW_API_URL;
   const workspace = process.env.ROBOFLOW_WORKSPACE;
   const workflowId = process.env.ROBOFLOW_WORKFLOW_ID;
-  const confidence = Number(process.env.ROBOFLOW_CONFIDENCE ?? "0.4");
+  const confidence = Number(process.env.ROBOFLOW_CONFIDENCE ?? "0.2");
 
   if (!apiKey || !apiUrl || !workspace || !workflowId) {
     throw new RoboflowError(
@@ -30,6 +30,6 @@ export function getRoboflowConfig() {
     apiUrl,
     workspace,
     workflowId,
-    defaultConfidence: Number.isFinite(confidence) ? confidence : 0.4,
+    defaultConfidence: Number.isFinite(confidence) ? confidence : 0.2,
   };
 }

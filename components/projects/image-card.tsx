@@ -89,7 +89,12 @@ export const ImageCard = memo(function ImageCard({
   return (
     <Card className={cn("group overflow-hidden shadow-sm", isSelected && "border-primary ring-1 ring-primary/20")}>
       <div className="relative aspect-[4/3] bg-muted">
-        <Link href={annotateHref} className="absolute inset-0 z-0" aria-label={`Annotate ${image.fileName}`}>
+        <Link
+          href={annotateHref}
+          prefetch={false}
+          className="absolute inset-0 z-0"
+          aria-label={`Annotate ${image.fileName}`}
+        >
           {image.url ? (
             <ThumbhashImage src={image.url} alt={image.fileName} thumbhash={image.thumbhash} className="size-full" />
           ) : (
@@ -115,7 +120,13 @@ export const ImageCard = memo(function ImageCard({
         </DropdownMenu>
       </div>
       <CardContent className="space-y-2 p-3">
-        <Link href={annotateHref} className="block truncate text-sm font-medium hover:underline">{image.fileName}</Link>
+        <Link
+          href={annotateHref}
+          prefetch={false}
+          className="block truncate text-sm font-medium hover:underline"
+        >
+          {image.fileName}
+        </Link>
         <div className="flex flex-wrap gap-1.5">
           <Badge variant="outline" className={cn("text-xs", statusClass(image.status))}>{image.status}</Badge>
           {aiState ? <AiStateBadge state={aiState} /> : null}
