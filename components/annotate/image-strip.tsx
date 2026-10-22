@@ -49,7 +49,7 @@ export const ImageStrip = memo(function ImageStrip({
           : 0;
     if (overflow !== 0)
       scroller.scrollBy({ left: overflow, behavior: "smooth" });
-  }, [activeImageId]);
+  }, [activeImageId, activeIndex]);
 
   const selectAt = (index: number) => {
     const image = images[index];

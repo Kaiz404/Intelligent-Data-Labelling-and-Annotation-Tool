@@ -79,3 +79,10 @@ test("switching the open image keeps the loaded workspace and fetches nothing", 
   assert.equal(loader.result.status, "ready");
   assert.deepEqual(loader.result.images.map((image) => image.id), ["image-a", "image-b"]);
 });
+
+test("an image opened from a deep link ends up in project order", async () => {
+  const loader = setup();
+  await loader.render("image-b");
+  assert.equal(loader.result.status, "ready");
+  assert.deepEqual(loader.result.images.map((image) => image.id), ["image-a", "image-b"]);
+});

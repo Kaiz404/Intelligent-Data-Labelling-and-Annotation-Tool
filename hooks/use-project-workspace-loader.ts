@@ -95,6 +95,9 @@ export function useProjectWorkspaceLoader(
         setInitialAiStates(meta.aiStates);
         setStatus("loading-images");
 
+        // The priority image is shown first so its canvas can paint, then
+        // moves to its place in project order once its page arrives.
+        let provisionalId: string | null = null;
         const seen = new Set<string>();
         const append = (batch: ProjectImage[]) => {
           const fresh = batch.filter((image) => {
@@ -102,9 +105,17 @@ export function useProjectWorkspaceLoader(
             seen.add(image.id);
             return true;
           });
-          if (fresh.length > 0) {
-            setImages((current) => [...current, ...fresh]);
-          }
+          if (fresh.length === 0) return;
+          const placedId = fresh.some((image) => image.id === provisionalId)
+            ? provisionalId
+            : null;
+          if (placedId) provisionalId = null;
+          setImages((current) => [
+            ...(placedId
+              ? current.filter((image) => image.id !== placedId)
+              : current),
+            ...fresh,
+          ]);
         };
 
         if (priorityImageId) {
@@ -117,7 +128,10 @@ export function useProjectWorkspaceLoader(
             const priority = await readJson<{ image: ProjectImage | null }>(
               priorityResponse,
             );
-            if (priority.image) append([priority.image]);
+            if (priority.image) {
+              provisionalId = priority.image.id;
+              setImages([priority.image]);
+            }
           }
         }
 
