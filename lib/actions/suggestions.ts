@@ -1,11 +1,7 @@
 "use server";
 
-import { fetchPendingSuggestions } from "@/lib/annotations/jobs";
 import { createClient } from "@/lib/supabase/server";
-import type {
-  AnnotationSuggestion,
-  ImageSuggestionSet,
-} from "@/lib/types/annotations";
+import type { AnnotationSuggestion } from "@/lib/types/annotations";
 
 type SuggestionResolution = { itemId: string; remaining: AnnotationSuggestion[] };
 
@@ -94,40 +90,6 @@ function sameSuggestions(current: unknown, next: AnnotationSuggestion[]) {
     const stored = current[index] as Record<string, unknown> | null;
     return !!stored && fields.every((field) => stored[field] === suggestion[field]);
   });
-}
-
-/**
- * Pending bulk-AI suggestions for one image. Used by the annotation workspace
- * so loads are not queued behind saves (unlike other mutations here).
- */
-export async function loadPendingImageSuggestions(
-  projectId: string,
-  imageId: string,
-): Promise<
-  { ok: true; suggestionSets: ImageSuggestionSet[] } | { ok: false; error: string }
-> {
-  if (!projectId || !imageId) {
-    return { ok: false, error: "Project and image are required." };
-  }
-  try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-      return { ok: false, error: "You must be signed in." };
-    }
-    const suggestionSets = await fetchPendingSuggestions(projectId, imageId);
-    return { ok: true, suggestionSets };
-  } catch (error) {
-    return {
-      ok: false,
-      error:
-        error instanceof Error
-          ? error.message
-          : "Could not load AI suggestions.",
-    };
-  }
 }
 
 /**

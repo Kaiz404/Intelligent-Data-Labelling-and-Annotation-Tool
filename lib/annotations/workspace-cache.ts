@@ -4,10 +4,12 @@ import type { ImageSuggestionSet } from "@/lib/types/annotations";
  * Client-side cache behind instant image switching in the annotation
  * workspace (one per workspace instance): pending AI suggestions per image,
  * and warmed image bytes for images the user is likely to open next.
+ *
+ * Suggestions load through a GET route, not a server action: Next runs
+ * server actions one at a time in the router's queue, where an image switch
+ * (`history.pushState`) can leave a load that never settles.
  */
-export function createWorkspaceCache(
-  loadSuggestionSets: (imageId: string) => Promise<ImageSuggestionSet[]>,
-) {
+export function createWorkspaceCache(projectId: string) {
   const suggestions = new Map<string, Promise<ImageSuggestionSet[]>>();
   const warmed = new Set<string>();
   // Keeps warming images reachable until their bytes have arrived.
@@ -23,15 +25,28 @@ export function createWorkspaceCache(
       const key = `${imageId}@${version}`;
       let entry = suggestions.get(key);
       if (!entry) {
-        entry = loadSuggestionSets(imageId);
+        entry = fetch(`/api/projects/${projectId}/images/${imageId}/suggestions`, {
+          cache: "no-store",
+        }).then(async (response) => {
+          const body = (await response.json().catch(() => null)) as
+            | { suggestionSets?: ImageSuggestionSet[]; error?: string }
+            | null;
+          if (!response.ok || !body?.suggestionSets) {
+            throw new Error(body?.error ?? "Could not load AI suggestions.");
+          }
+          return body.suggestionSets;
+        });
         suggestions.set(key, entry);
         entry.catch(() => suggestions.delete(key));
       }
       return entry;
     },
 
-    forgetSuggestions(imageId: string, version: string) {
-      suggestions.delete(`${imageId}@${version}`);
+    /** Drops every cached version of an image's suggestions. */
+    forgetSuggestions(imageId: string) {
+      for (const key of suggestions.keys()) {
+        if (key.startsWith(`${imageId}@`)) suggestions.delete(key);
+      }
     },
 
     /** Starts downloading an image into the browser cache (once per URL). */

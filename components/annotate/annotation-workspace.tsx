@@ -36,10 +36,7 @@ import { useSerialQueue } from "@/hooks/use-serial-queue";
 import { saveImageAnnotations } from "@/lib/actions/annotations";
 import { saveImageThumbhash } from "@/lib/actions/images";
 import { createLabel, deleteLabel, renameLabel } from "@/lib/actions/labels";
-import {
-  loadPendingImageSuggestions,
-  resolveSuggestions,
-} from "@/lib/actions/suggestions";
+import { resolveSuggestions } from "@/lib/actions/suggestions";
 import {
   acceptAllSuggestions,
   acceptedBoxes,
@@ -146,9 +143,16 @@ function isRunActive(job: AnnotationJobProgress | null) {
   return job?.status === "queued" || job?.status === "running";
 }
 
-/** An image's AI state as a cache version: a newer AI result changes it. */
+/**
+ * An image's AI state as a cache version. Two runs can end on the same
+ * version, so a new run also clears what was keyed by it (see `aiRunStarted`).
+ */
 function aiStateVersion(state: ImageAiState | undefined) {
   return state ? `${state.status}:${state.pendingSuggestions}` : "none";
+}
+
+function isAiRunning(state: ImageAiState | undefined) {
+  return state?.status === "queued" || state?.status === "running";
 }
 
 /**
@@ -220,13 +224,7 @@ export function AnnotationWorkspace({
   const params = useParams();
   const pathname = usePathname();
   const hydrated = useHydrated();
-  const [cache] = useState(() =>
-    createWorkspaceCache(async (imageId) => {
-      const result = await loadPendingImageSuggestions(project.id, imageId);
-      if (!result.ok) throw new Error(result.error);
-      return result.suggestionSets;
-    })
-  );
+  const [cache] = useState(() => createWorkspaceCache(project.id));
   const [suggestionsRetryKey, setSuggestionsRetryKey] = useState(0);
 
   // `useParams` does not update after `history.pushState`; pathname does.
@@ -269,7 +267,12 @@ export function AnnotationWorkspace({
     {} as EditorSessions
   );
   const session = sessions[activeImageId];
-  if (hydrated && !session) {
+  // Opened in a layout effect (still before paint), not during render: image
+  // switches render in a transition, and React discards a dispatch made while
+  // rendering when it interrupts that render, losing the session along with
+  // anything already applied to it, such as its loaded AI suggestions.
+  useLayoutEffect(() => {
+    if (!hydrated || session) return;
     dispatch({
       type: "open",
       imageId: activeImageId,
@@ -278,7 +281,7 @@ export function AnnotationWorkspace({
         loadUnsavedDraft(project.id, activeImageId) ?? undefined
       )
     });
-  }
+  }, [activeImage.annotations, activeImageId, hydrated, project.id, session]);
   const present = session?.present;
   const boxes = present?.boxes ?? NO_BOXES;
 
@@ -514,6 +517,24 @@ export function AnnotationWorkspace({
   useLayoutEffect(() => {
     latest.current = { sessions, activeImageId, aiStates, labels, isSaving };
   });
+
+  // An image starting a new AI run makes its earlier review and cached
+  // suggestions stale, even if the run ends on the same version.
+  const aiRunStarted = useRef(aiStates);
+  useEffect(() => {
+    const previous = aiRunStarted.current;
+    aiRunStarted.current = aiStates;
+    const restarted = Object.keys(aiStates).filter(
+      (imageId) => isAiRunning(aiStates[imageId]) && !isAiRunning(previous[imageId])
+    );
+    if (restarted.length === 0) return;
+    for (const imageId of restarted) cache.forgetSuggestions(imageId);
+    setReviewed((current) => {
+      const next = { ...current };
+      for (const imageId of restarted) delete next[imageId];
+      return next;
+    });
+  }, [aiStates, cache]);
 
   const reviewImageIds = useMemo(() => {
     const ids = new Set<string>();
@@ -1406,7 +1427,7 @@ export function AnnotationWorkspace({
                       size="sm"
                       className="mt-2 h-7 border-destructive/30 bg-background text-destructive hover:bg-destructive/5 hover:text-destructive"
                       onClick={() => {
-                        cache.forgetSuggestions(activeImageId, activeAiVersion);
+                        cache.forgetSuggestions(activeImageId);
                         setSuggestionsError(null);
                         setSuggestionsRetryKey((key) => key + 1);
                       }}
